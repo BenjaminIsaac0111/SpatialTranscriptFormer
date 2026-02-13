@@ -1,21 +1,30 @@
-MIT License
+PROPRIETARY SOURCE CODE LICENSE (NON-COMMERCIAL + NEGOTIATED COMMERCIAL)
 
-Copyright (c) 2026 Benjamin Wilson
+Copyright (c) 2026 Benjamin Isaac Wilson. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. PERMITTED USE
+This software and its source code are provided for the following purposes:
+   a. Evaluation: For prospective employers and collaborators to assess the Author's technical expertise.
+   b. Academic Research: For students, researchers, and faculty at academic institutions for the purpose of scientific investigation.
+   c. Non-Profit: For use by registered non-profit organizations in pursuit of their non-commercial missions.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+2. COMMERCIAL USE (NEGOTIATED AGREEMENT REQUIRED)
+Use of this software, its source code, or derivative works by for-profit entities, or for any commercial or revenue-generating purposes, is strictly prohibited without a separate, written license agreement negotiated with and signed by the Author.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Interested parties should contact the Author directly to discuss commercial licensing terms.
+
+1. ATTRIBUTION
+Any publication, presentation, or public report that uses this software or its results must provide clear attribution to the Author (Benjamin Isaac Wilson) and reference this repository.
+
+2. RESTRICTIONS
+Unless explicitly authorized in writing by the Author, the following actions are strictly prohibited:
+   a. Redistribution: You may not redistribute, sell, or publish the source code or any derivative works to third parties.
+   b. Sublicensing: You may not grant sublicenses to others.
+
+3. OWNERSHIP
+All intellectual property rights, including but not limited to copyright, patents, and trade secrets, remain solely with the Author. Core architectural components, original methodologies, and academic attributions are documented in the [IP Statement](docs/IP_STATEMENT.md).
+
+4. NO WARRANTY
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+For inquiries regarding commercial licensing or further collaboration, please contact the Author directly.

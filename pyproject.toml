@@ -37,6 +37,7 @@ stf-download = "spatial_transcript_former.data.download:main"
 stf-split = "spatial_transcript_former.data.splitting:main"
 stf-train = "spatial_transcript_former.train:main"
 stf-predict = "spatial_transcript_former.predict:main"
+stf-extract = "spatial_transcript_former.data.extract_features:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

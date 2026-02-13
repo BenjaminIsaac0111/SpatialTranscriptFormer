@@ -58,7 +58,12 @@ def get_backbone(name, pretrained=True, num_classes=None):
     model = None
 
     if name == 'resnet50':
-        model = models.resnet50(pretrained=pretrained)
+        if pretrained:
+            weights = models.ResNet50_Weights.DEFAULT
+            model = models.resnet50(weights=weights)
+        else:
+            model = models.resnet50(weights=None)
+            
         feature_dim = model.fc.in_features
         if num_classes is not None:
             model.fc = nn.Linear(feature_dim, num_classes)
@@ -77,8 +82,37 @@ def get_backbone(name, pretrained=True, num_classes=None):
         feature_dim = model.num_features
         
         if pretrained:
-            print("To use pretrained CTransPath, please load weights manually using `model.load_state_dict()`.")
-            print("Weights typical path: 'ctranspath.pth'")
+            try:
+                from huggingface_hub import hf_hub_download
+                from safetensors.torch import load_file
+                print(f"Downloading CTransPath weights (safetensors) from Hugging Face...")
+                weights_path = hf_hub_download(repo_id="1aurent/swin_tiny_patch4_window7_224.CTransPath", filename="model.safetensors")
+                state_dict = load_file(weights_path)
+                
+                # CTransPath (timm) vs transformers key mapping
+                # The 1aurent mirror structure requires index shifting for downsample layers
+                new_state_dict = {}
+                for k, v in state_dict.items():
+                    nk = k.replace('swin.', '').replace('encoder.', '')
+                    nk = nk.replace('embeddings.patch_embeddings.', 'patch_embed.')
+                    
+                    # Shift downsample layers: ckpt.layers.i.downsample -> timm.layers.i+1.downsample
+                    if 'downsample' in nk and 'layers.' in nk:
+                        try:
+                            parts = nk.split('.')
+                            layer_idx = int(parts[1])
+                            parts[1] = str(layer_idx + 1)
+                            nk = '.'.join(parts)
+                        except (ValueError, IndexError):
+                            pass
+                    
+                    new_state_dict[nk] = v
+                
+                msg = model.load_state_dict(new_state_dict, strict=False)
+                print(f"CTransPath weights loaded. Missing: {len(msg.missing_keys)}, Unexpected: {len(msg.unexpected_keys)}")
+            except Exception as e:
+                print(f"Warning: Could not load pretrained CTransPath weights: {e}")
+                print("Proceeding with random initialization.")
 
     elif name == 'uni':
         # Dropped as per user request (no access)
@@ -197,7 +231,12 @@ def get_backbone(name, pretrained=True, num_classes=None):
             raise e
 
     elif name == 'vit_b_16':
-        model = models.vit_b_16(pretrained=pretrained)
+        if pretrained:
+            weights = models.ViT_B_16_Weights.DEFAULT
+            model = models.vit_b_16(weights=weights)
+        else:
+            model = models.vit_b_16(weights=None)
+            
         feature_dim = model.heads.head.in_features
         if num_classes is not None:
             model.heads.head = nn.Linear(feature_dim, num_classes)

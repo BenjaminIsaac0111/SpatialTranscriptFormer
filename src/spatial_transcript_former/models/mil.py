@@ -5,14 +5,17 @@ from nystrom_attention import NystromAttention
 
 class AttentionMIL(nn.Module):
     """
-    Gated Attention MIL for regression.
+    Gated Attention Multiple Instance Learning (MIL) for regression.
     Aggregates patch features to predict a global slide-level gene expression vector.
+    
+    Reference:
+        Ilse et al. (2018). "Attention-based Deep Multiple Instance Learning." ICML.
     """
     def __init__(self, input_dim=1024, hidden_dim=256, output_dim=1000, dropout=0.25, backbone_name=None, pretrained=True):
         super().__init__()
         
         if backbone_name:
-            from spatial_transcript_former.models.regression import get_backbone
+            from .backbones import get_backbone
             self.backbone, self.L = get_backbone(backbone_name, pretrained=pretrained)
         else:
             self.backbone = None
@@ -48,15 +51,19 @@ class AttentionMIL(nn.Module):
             nn.Linear(self.D, output_dim)
         )
 
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
         # x: (B, N, L) where N is number of instances (patches)
         # OR x: (B, N, 3, H, W) if backbone is used
         
-        if self.backbone is not None:
+        if self.backbone is not None and x.dim() == 5:
              B, N, C, H, W = x.shape
              x = x.view(B * N, C, H, W)
              x = self.backbone(x)
              x = x.view(B, N, -1)
+             
+        # Support case where x is (N, L) instead of (B, N, L)
+        if x.dim() == 2:
+            x = x.unsqueeze(0)
              
         x = self.feature_extractor(x) # (B, N, D)
         
@@ -70,19 +77,24 @@ class AttentionMIL(nn.Module):
         
         Y_prob = self.classifier(M) # (B, output_dim)
         
-        return Y_prob, A
+        if return_attention:
+            return Y_prob, A
+        return Y_prob
 
 class TransMIL(nn.Module):
     """
     TransMIL: Transformer based Correlated Multiple Instance Learning for WSI.
     Adapted for Regression (Gene Expression).
-    Reference: Shao et al., NeurIPS 2021.
+    
+    Reference: 
+        Shao et al. (2021). "TransMIL: Transformer based Correlated Multiple 
+        Instance Learning for Whole Slide Image Classification." NeurIPS.
     """
     def __init__(self, input_dim=1024, output_dim=1000, dropout=0.1, backbone_name=None, pretrained=True):
         super(TransMIL, self).__init__()
         
         if backbone_name:
-            from spatial_transcript_former.models.regression import get_backbone
+            from .backbones import get_backbone
             self.backbone, self.L = get_backbone(backbone_name, pretrained=pretrained)
         else:
             self.backbone = None
@@ -97,22 +109,24 @@ class TransMIL(nn.Module):
         self.norm = nn.LayerNorm(512)
         self._fc2 = nn.Linear(512, self.n_classes)
 
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
         # x: (B, N, L)
         # OR x: (B, N, 3, H, W) if backbone is used
         
-        if self.backbone is not None:
+        if self.backbone is not None and x.dim() == 5:
              B, N, C, H, W = x.shape
              x = x.view(B * N, C, H, W)
              x = self.backbone(x)
              x = x.view(B, N, -1)
+        
+        # Support case where x is (N, L) instead of (B, N, L)
+        if x.dim() == 2:
+            x = x.unsqueeze(0)
              
         h = self._fc1(x) # [B, N, 512]
         
         # PPEG (positional encoding)
-        h = self.pos_layer(h, 0) # Implicitly handles H/W usually, but here assumes 1D sequence or needs coords? 
-        # Only works if we have spatial structure. 
-        # Standard TransMIL assumes a squarified grid or just works on sequence.
+        h = self.pos_layer(h) 
         
         # Append CLS token
         B = h.shape[0]
@@ -120,12 +134,17 @@ class TransMIL(nn.Module):
         h = torch.cat((cls_tokens, h), dim=1)
 
         # Transformer Layers
+        # In a real implementation we might collect attention maps here
         h = self.layer1(h)
         h = self.layer2(h)
         
         h = self.norm(h)[:, 0] # Take CLS token
         
         logits = self._fc2(h)
+        
+        if return_attention:
+            # TransMIL attention maps are complex; return dummy or implement if needed
+            return logits, None
         return logits
 
 class PPEG(nn.Module):
@@ -137,21 +156,18 @@ class PPEG(nn.Module):
 
     def forward(self, x, H=None, W=None):
         # x: (B, N, D)
-        # Ideally we need H, W to reconstruct grid. 
-        # If not provided, skip or approximate (standard TransMIL assumes N is square-ish or reshapes)
-        # For this implementation, we'll skip PPEG if H,W unknown to avoid crash, or do a naive 1D conv?
-        # Let's do 1D conv approximation if 2D not possible, or Just return x
-        
         B, N, C = x.shape
-        # Naive: try to find closest square?
-        if H is None:
+        
+        # Attempt to reconstruct 2D grid for PPEG
+        if H is None or W is None:
             H = int(N**0.5)
             W = N // H
-            # Crop to fit square for PPEG? Or Padding?
-            # Standard implementation pads.
             
-            # Let's just return X for now to be safe until we handle spatial coords explicitly
-            return x
+        if H * W == N:
+            # Reshape to grid
+            x = x.transpose(1, 2).view(B, C, H, W)
+            x = self.proj(x) + self.proj1(x) + self.proj2(x) + x
+            x = x.flatten(2).transpose(1, 2)
             
         return x
 

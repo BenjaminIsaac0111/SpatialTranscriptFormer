@@ -1,5 +1,6 @@
 import os
 import h5py
+import json
 import torch
 import pandas as pd
 import numpy as np
@@ -338,8 +339,10 @@ class HEST_FeatureDataset(Dataset):
     """
     def __init__(self, feature_path: str, h5ad_path: str, num_genes: int = 1000, 
                  selected_gene_names: Optional[List[str]] = None, n_neighbors: int = 6,
-                 use_global_context: bool = False, global_context_size: int = 256,
-                 whole_slide_mode: bool = False):
+                 use_global_context: bool = False,
+                 global_context_size: int = 256,
+                 whole_slide_mode: bool = False,
+                 augment: bool = False):
         self.feature_path = feature_path
         self.h5ad_path = h5ad_path
         self.num_genes = num_genes
@@ -348,6 +351,7 @@ class HEST_FeatureDataset(Dataset):
         self.use_global_context = use_global_context
         self.global_context_size = global_context_size
         self.whole_slide_mode = whole_slide_mode
+        self.augment = augment
         
         # Load Data
         saved_data = torch.load(self.feature_path, map_location='cpu')
@@ -427,11 +431,35 @@ class HEST_FeatureDataset(Dataset):
         # Get Features
         feats = self.features[combined_idxs]
         
+        # 4. Interaction Augmentations
+        if self.augment and not self.whole_slide_mode:
+            # A. Neighborhood Dropout: Randomly zero out 1-2 neighbors
+            # Index 0 is 'Self', neighbors are 1:n_neighbors+1
+            if self.n_neighbors > 1:
+                # We don't drop 'Self' (index 0)
+                n_to_drop = np.random.randint(0, min(3, self.n_neighbors))
+                if n_to_drop > 0:
+                    drop_idxs = np.random.choice(range(1, self.n_neighbors + 1), size=n_to_drop, replace=False)
+                    # We can "zero out" by replacing with the center patch feature 
+                    # or literally zeros. Replacing with center patch (Self) is often better 
+                    # than zeros as it doesn't break distribution as much.
+                    # Or we just zero them. Let's use zeros for clear signal.
+                    feats[drop_idxs] = 0.0
+
         # Get Relative Coords
         center_coord = self.coords[idx]
         nbr_coords = self.coords[combined_idxs]
         rel_coords = nbr_coords - center_coord # (S, 2)
-        
+
+        if self.augment and not self.whole_slide_mode:
+            # B. Coordinate Jitter: Add small Gaussian noise
+            # Typical HEST coordinates are in pixels (e.g. 0 to 10000)
+            # A jitter of 5-10 pixels is subtle but effective.
+            jitter = torch.randn_like(rel_coords) * 5.0
+            # Don't jitter the center (index 0)
+            jitter[0] = 0.0
+            rel_coords = rel_coords + jitter
+            
         # Get Target (Center Patch Gene Expression)
         target_genes = self.genes[idx]
         
@@ -448,7 +476,9 @@ def get_hest_feature_dataloader(
     n_neighbors: int = 6,
     use_global_context: bool = False,
     global_context_size: int = 256,
-    whole_slide_mode: bool = False
+    whole_slide_mode: bool = False,
+    augment: bool = False,
+    feature_dir: Optional[str] = None
 ):
     """
     Returns a DataLoader.
@@ -458,36 +488,57 @@ def get_hest_feature_dataloader(
     datasets = []
     
     # Check paths
-    features_dir = os.path.join(root_dir, 'he_features')
+    if feature_dir is None:
+        features_dir = os.path.join(root_dir, 'he_features')
+        if not os.path.exists(features_dir):
+            features_dir = root_dir
+    else:
+        features_dir = feature_dir
+        
     st_dir = os.path.join(root_dir, 'st')
-    
-    if not os.path.exists(features_dir):
-        # Try root
-        features_dir = root_dir
         
     common_gene_names = None
     
     valid_datasets = []
     
-    # 1. Determine common genes from the first valid slide
-    print("Determining common gene set from first sample...")
+    # 1. Determine common genes
+    # Check for global_genes.json first (in data dir OR current dir)
+    global_genes_path = os.path.join(root_dir, 'global_genes.json')
+    if not os.path.exists(global_genes_path):
+        global_genes_path = 'global_genes.json' # Check CWD
     
-    for sample_id in ids:
-        pt_path = os.path.join(features_dir, f"{sample_id}.pt")
-        h5ad_path = os.path.join(st_dir, f"{sample_id}.h5ad")
+    if os.path.exists(global_genes_path):
+        print(f"Loading global gene list from {global_genes_path}...")
+        try:
+            with open(global_genes_path, 'r') as f:
+                common_gene_names = json.load(f)
+            # Ensure we only take num_genes
+            if len(common_gene_names) > num_genes:
+                common_gene_names = common_gene_names[:num_genes]
+            print(f"Loaded {len(common_gene_names)} global genes.")
+        except Exception as e:
+            print(f"Error loading global genes: {e}")
+            common_gene_names = None
+            
+    if common_gene_names is None:
+        print("Determining common gene set from first sample...")
         
-        if os.path.exists(pt_path) and os.path.exists(h5ad_path):
-             # Load just to get names
-             try:
-                 saved_data = torch.load(pt_path, map_location='cpu')
-                 barcodes = saved_data['barcodes']
-                 _, _, names = load_gene_expression_matrix(h5ad_path, barcodes, num_genes=num_genes)
-                 common_gene_names = names
-                 print(f"Locked to {len(names)} genes from {sample_id}")
-                 break
-             except Exception as e:
-                 print(f"Error determining genes from {sample_id}: {e}")
-                 continue
+        for sample_id in ids:
+            pt_path = os.path.join(features_dir, f"{sample_id}.pt")
+            h5ad_path = os.path.join(st_dir, f"{sample_id}.h5ad")
+            
+            if os.path.exists(pt_path) and os.path.exists(h5ad_path):
+                 # Load just to get names
+                 try:
+                     saved_data = torch.load(pt_path, map_location='cpu')
+                     barcodes = saved_data['barcodes']
+                     _, _, names = load_gene_expression_matrix(h5ad_path, barcodes, num_genes=num_genes)
+                     common_gene_names = names
+                     print(f"Locked to {len(names)} genes from {sample_id}")
+                     break
+                 except Exception as e:
+                     print(f"Error determining genes from {sample_id}: {e}")
+                     continue
     
     if common_gene_names is None:
         raise ValueError("Could not determine common gene set from any sample.")
@@ -506,7 +557,8 @@ def get_hest_feature_dataloader(
                 n_neighbors=n_neighbors,
                 use_global_context=use_global_context,
                 global_context_size=global_context_size,
-                whole_slide_mode=whole_slide_mode
+                whole_slide_mode=whole_slide_mode,
+                augment=augment
             )
             valid_datasets.append(ds)
             
