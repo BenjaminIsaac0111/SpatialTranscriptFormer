@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spatial-transcript-former"
+version = "0.1.0"
+description = "A transformer-based model for spatial transcriptomics"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas",
+    "h5py",
+    "torch",
+    "torchvision",
+    "numpy",
+    "scikit-learn",
+    "tqdm",
+    "datasets",
+    "pyarrow",
+    "huggingface-hub",
+    "matplotlib",
+    "seaborn",
+    "nystrom-attention",
+    "scipy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+]
+
+[project.scripts]
+stf-download = "spatial_transcript_former.data.download:main"
+stf-split = "spatial_transcript_former.data.splitting:main"
+stf-train = "spatial_transcript_former.train:main"
+stf-predict = "spatial_transcript_former.predict:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["spatial_transcript_former*"]
