@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import h5py
 from torch.utils.data import DataLoader
-from spatial_transcript_former.data.dataset import load_gene_expression_matrix, HEST_FeatureDataset, HEST_Dataset
+from spatial_transcript_former.data.dataset import load_gene_expression_matrix, HEST_FeatureDataset, HEST_Dataset, load_global_genes
 from spatial_transcript_former.models import SpatialTranscriptFormer
 from spatial_transcript_former.predict import plot_spatial_genes, plot_histology_overlay, plot_spatial_pathways
 
@@ -34,7 +34,16 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                 patch_barcodes = f['barcode'][:].flatten()
                 coords = f['coords'][:]
             
-            gene_matrix, mask, gene_names = load_gene_expression_matrix(h5ad_path, patch_barcodes, num_genes=args.num_genes)
+            # Load global genes for consistent alignment
+            try:
+                common_gene_names = load_global_genes(args.data_dir, args.num_genes)
+            except Exception as e:
+                print(f"Warning: Could not load global genes in visualization: {e}")
+                common_gene_names = None
+
+            gene_matrix, mask, gene_names = load_gene_expression_matrix(
+                h5ad_path, patch_barcodes, selected_gene_names=common_gene_names, num_genes=args.num_genes
+            )
             
             preds = []
             pathways_list = []
@@ -45,7 +54,11 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                 if not os.path.exists(feature_path):
                      feature_path = os.path.join(args.data_dir, 'patches', feat_dir_name, f"{sample_id}.pt")
                      
-                ds = HEST_FeatureDataset(feature_path, h5ad_path, num_genes=args.num_genes, n_neighbors=args.n_neighbors, whole_slide_mode=args.whole_slide)
+                ds = HEST_FeatureDataset(
+                    feature_path, h5ad_path, num_genes=args.num_genes, 
+                    selected_gene_names=common_gene_names,
+                    n_neighbors=args.n_neighbors, whole_slide_mode=args.whole_slide
+                )
                 
                 if args.whole_slide:
                     feats, _, _ = ds[0]

@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from spatial_transcript_former.models.regression import HE2RNA, ViT_ST
 from spatial_transcript_former.models.interaction import SpatialTranscriptFormer
-from spatial_transcript_former.data.dataset import get_hest_dataloader, HEST_Dataset, load_gene_expression_matrix
+from spatial_transcript_former.data.dataset import get_hest_dataloader, HEST_Dataset, load_gene_expression_matrix, load_global_genes
 import h5py
 
 def plot_spatial_genes(coords, truth, pred, gene_names, sample_id, save_path=None, cmap='viridis'):
@@ -183,8 +183,15 @@ def main():
         patch_barcodes = f['barcode'][:].flatten()
         coords = f['coords'][:]
         
+    # Load common genes for consistency
+    try:
+        common_gene_names = load_global_genes(args.data_dir, args.num_genes)
+    except Exception as e:
+        print(f"Warning: Could not load global genes, falling back to sample top genes: {e}")
+        common_gene_names = None
+
     gene_matrix, mask, gene_names = load_gene_expression_matrix(
-        h5ad_path, patch_barcodes, num_genes=args.num_genes
+        h5ad_path, patch_barcodes, selected_gene_names=common_gene_names, num_genes=args.num_genes
     )
     
     coord_subset = coords[mask]

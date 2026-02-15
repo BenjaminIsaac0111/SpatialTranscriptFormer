@@ -234,6 +234,42 @@ def load_gene_expression_matrix(h5ad_path: str, patch_barcodes: List[bytes], sel
         return final_subset, valid_patch_mask, selected_names
 
 
+def load_global_genes(root_dir: str, num_genes: int = 1000) -> List[str]:
+    """
+    Load global gene list from global_genes.json.
+    Checks in root_dir and CWD.
+
+    Args:
+        root_dir (str): Root directory to search for global_genes.json.
+        num_genes (int): Number of genes to return.
+
+    Returns:
+        List[str]: List of gene names.
+    
+    Raises:
+        FileNotFoundError: If global_genes.json is not found.
+        RuntimeError: If there's an error reading the file.
+    """
+    global_genes_path = os.path.join(root_dir, 'global_genes.json')
+    if not os.path.exists(global_genes_path):
+        global_genes_path = 'global_genes.json' # Check CWD
+    
+    if os.path.exists(global_genes_path):
+        try:
+            with open(global_genes_path, 'r') as f:
+                genes = json.load(f)
+            if len(genes) > num_genes:
+                genes = genes[:num_genes]
+            print(f"Loaded {len(genes)} global genes from {global_genes_path}")
+            return genes
+        except Exception as e:
+            raise RuntimeError(f"Error loading global genes from {global_genes_path}: {e}")
+    else:
+        raise FileNotFoundError(
+            f"global_genes.json not found in {root_dir} or current directory. "
+            "Please ensure global_genes.json exists to maintain consistent gene representation for the entire data."
+        )
+
 def get_hest_dataloader(
     root_dir: str,
     ids: List[str],
@@ -253,7 +289,7 @@ def get_hest_dataloader(
         patches_dir = root_dir
         st_dir = os.path.join(os.path.dirname(root_dir), 'st')
         
-    common_gene_names = None
+    common_gene_names = load_global_genes(root_dir, num_genes)
     
     for i, sample_id in enumerate(ids):
         h5_path = os.path.join(patches_dir, f"{sample_id}.h5") 
@@ -279,9 +315,6 @@ def get_hest_dataloader(
                      h5ad_path, patch_barcodes, selected_gene_names=common_gene_names, num_genes=num_genes
                  )
                  
-                 if common_gene_names is None:
-                     common_gene_names = selected_names
-                     print(f"Locked to top {num_genes} genes from sample {sample_id}")
                  
                  coords_subset = coords_all[mask]
                  indices_subset = np.where(mask)[0]
@@ -564,51 +597,8 @@ def get_hest_feature_dataloader(
         
     st_dir = os.path.join(root_dir, 'st')
         
-    common_gene_names = None
-    
-    valid_datasets = []
-    
-    # 1. Determine common genes
-    # Check for global_genes.json first (in data dir OR current dir)
-    global_genes_path = os.path.join(root_dir, 'global_genes.json')
-    if not os.path.exists(global_genes_path):
-        global_genes_path = 'global_genes.json' # Check CWD
-    
-    if os.path.exists(global_genes_path):
-        print(f"Loading global gene list from {global_genes_path}...")
-        try:
-            with open(global_genes_path, 'r') as f:
-                common_gene_names = json.load(f)
-            # Ensure we only take num_genes
-            if len(common_gene_names) > num_genes:
-                common_gene_names = common_gene_names[:num_genes]
-            print(f"Loaded {len(common_gene_names)} global genes.")
-        except Exception as e:
-            print(f"Error loading global genes: {e}")
-            common_gene_names = None
-            
-    if common_gene_names is None:
-        print("Determining common gene set from first sample...")
-        
-        for sample_id in ids:
-            pt_path = os.path.join(features_dir, f"{sample_id}.pt")
-            h5ad_path = os.path.join(st_dir, f"{sample_id}.h5ad")
-            
-            if os.path.exists(pt_path) and os.path.exists(h5ad_path):
-                 # Load just to get names
-                 try:
-                     saved_data = torch.load(pt_path, map_location='cpu')
-                     barcodes = saved_data['barcodes']
-                     _, _, names = load_gene_expression_matrix(h5ad_path, barcodes, num_genes=num_genes)
-                     common_gene_names = names
-                     print(f"Locked to {len(names)} genes from {sample_id}")
-                     break
-                 except Exception as e:
-                     print(f"Error determining genes from {sample_id}: {e}")
-                     continue
-    
-    if common_gene_names is None:
-        raise ValueError("Could not determine common gene set from any sample.")
+    # 1. Load common genes
+    common_gene_names = load_global_genes(root_dir, num_genes)
         
     # 2. Create Datasets
     for sample_id in ids:
