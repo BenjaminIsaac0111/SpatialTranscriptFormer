@@ -336,13 +336,26 @@ class HEST_FeatureDataset(Dataset):
     """
     Dataset for Pre-Computed Features.
     Serves (Center + Neighbors + Global Context) features for a single patch.
+    
+    Args:
+        feature_path (str): Path to the .pt file containing features, coords, barcodes.
+        h5ad_path (str): Path to the .h5ad file containing gene expression data.
+        num_genes (int): Number of genes to select/align to.
+        selected_gene_names (Optional[List[str]]): Pre-defined list of gene names for alignment.
+        n_neighbors (int): Number of neighbors to retrieve for each patch.
+        use_global_context (bool): Whether to include global context features.
+        global_context_size (int): Number of patches to sample for global context.
+        whole_slide_mode (bool): If True, __getitem__ returns the whole slide data.
+        augment (bool): Whether to apply data augmentation.
+        log1p (bool): Whether to log1p transform the gene expression counts.
     """
     def __init__(self, feature_path: str, h5ad_path: str, num_genes: int = 1000, 
                  selected_gene_names: Optional[List[str]] = None, n_neighbors: int = 6,
                  use_global_context: bool = False,
                  global_context_size: int = 256,
                  whole_slide_mode: bool = False,
-                 augment: bool = False):
+                 augment: bool = False,
+                 log1p: bool = False):
         self.feature_path = feature_path
         self.h5ad_path = h5ad_path
         self.num_genes = num_genes
@@ -352,8 +365,19 @@ class HEST_FeatureDataset(Dataset):
         self.global_context_size = global_context_size
         self.whole_slide_mode = whole_slide_mode
         self.augment = augment
+        self.log1p = log1p
         
         # Load Data
+        if not self.whole_slide_mode:
+            self._load_data()
+        else:
+            # In whole_slide_mode, we delay loading until __getitem__
+            self.features = None
+            self.coords = None
+            self.genes = None
+            self.kdtree = None
+
+    def _load_data(self):
         saved_data = torch.load(self.feature_path, map_location='cpu')
         features = saved_data['features'] # (N, D)
         coords = saved_data['coords'] # (N, 2)
@@ -363,6 +387,9 @@ class HEST_FeatureDataset(Dataset):
         gene_matrix, mask, selected_names = load_gene_expression_matrix(
             self.h5ad_path, barcodes, selected_gene_names=self.selected_gene_names, num_genes=self.num_genes
         )
+        
+        if self.log1p:
+            gene_matrix = np.log1p(gene_matrix)
         
         if self.selected_gene_names is None:
             self.selected_gene_names = selected_names
@@ -376,7 +403,9 @@ class HEST_FeatureDataset(Dataset):
         
         # Build KDTree for neighbors
         # Use simple KDTree on CPU
-        self.kdtree = KDTree(self.coords.numpy())
+        if not self.whole_slide_mode:
+            self.kdtree = KDTree(self.coords.numpy())
+
         
     def __len__(self):
         if self.whole_slide_mode:
@@ -385,12 +414,34 @@ class HEST_FeatureDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.whole_slide_mode:
-            # Return EVERYTHING (Sample is the whole slide)
-            # idx is ignored because len(ds) == 1?
-            # Wait, ConcatDataset combines them.
-            # If len(ds) == 1, then idx is always 0.
-            # Assuming get_hest_feature_dataloader creates one DS per slide.
-            return self.features, self.genes, self.coords
+            # Strictly load-on-demand to save RAM.
+            # We do NOT cache in self.features.
+            
+            saved_data = torch.load(self.feature_path, map_location='cpu')
+            features = saved_data['features']
+            coords = saved_data['coords']
+            barcodes = saved_data['barcodes']
+            
+            gene_matrix, mask, _ = load_gene_expression_matrix(
+                self.h5ad_path, barcodes, selected_gene_names=self.selected_gene_names, num_genes=self.num_genes
+            )
+            
+            if self.log1p:
+                gene_matrix = np.log1p(gene_matrix)
+
+            mask_bool = np.array(mask, dtype=bool)
+            
+            feats = features[mask_bool]
+            co = coords[mask_bool]
+            g = torch.tensor(gene_matrix, dtype=torch.float32)
+            
+            # Cleanup raw load
+            del saved_data
+            del gene_matrix
+            
+            return feats, g, co
+            
+        # 1. Get Neighbors
             
         # 1. Get Neighbors
         dists, neighbor_idxs = self.kdtree.query(self.coords[idx], k=self.n_neighbors + 1)
@@ -478,12 +529,28 @@ def get_hest_feature_dataloader(
     global_context_size: int = 256,
     whole_slide_mode: bool = False,
     augment: bool = False,
+    log1p: bool = False,
     feature_dir: Optional[str] = None
 ):
     """
     Returns a DataLoader.
     If whole_slide_mode=True, each item is (N_patches, D), (N_patches, G), (N_patches, 2).
     Else, each item is (Sequence, Target, RelCoords).
+    
+    Args:
+        root_dir (str): Root directory.
+        ids (List[str]): List of sample IDs.
+        batch_size (int): Batch size.
+        shuffle (bool): Shuffle.
+        num_workers (int): Workers.
+        num_genes (int): Number of genes.
+        n_neighbors (int): Number of neighbors.
+        use_global_context (bool): Global context.
+        global_context_size (int): Size.
+        whole_slide_mode (bool): Whole slide.
+        augment (bool): Data augmentation.
+        log1p (bool): Log transform targets.
+        feature_dir (Optional[str]): Feature directory.
     """
     datasets = []
     
@@ -558,7 +625,8 @@ def get_hest_feature_dataloader(
                 use_global_context=use_global_context,
                 global_context_size=global_context_size,
                 whole_slide_mode=whole_slide_mode,
-                augment=augment
+                augment=augment,
+                log1p=log1p
             )
             valid_datasets.append(ds)
             
@@ -569,16 +637,43 @@ def get_hest_feature_dataloader(
     
     # If whole_slide_mode is True, we must use batch_size=1 and custom collate
     if whole_slide_mode:
-        if batch_size != 1:
-            print("Warning: forcing batch_size=1 for whole_slide_mode (variable sequence lengths).")
-            batch_size = 1
+        # We now support batch_size > 1 with padding
             
         def collate_fn_ws(batch):
-            # batch is list of (feat, gene, coord)
-            # return batch[0]
-            return batch[0]
+            """
+            Pads sequences to the longest in the batch.
+            Batch items: (feats, genes, coords)
+            feats: (N, D)
+            genes: (N, G)
+            coords: (N, 2)
+            """
+            # Find max length
+            lengths = [item[0].shape[0] for item in batch]
+            max_len = max(lengths)
             
-        loader = DataLoader(concat_ds, batch_size=1, shuffle=shuffle, num_workers=num_workers, collate_fn=collate_fn_ws)
+            # Feature dim
+            d_dim = batch[0][0].shape[1]
+            g_dim = batch[0][1].shape[1]
+            
+            # Prepare padded tensors
+            batch_size = len(batch)
+            padded_feats = torch.zeros(batch_size, max_len, d_dim)
+            padded_genes = torch.zeros(batch_size, max_len, g_dim)
+            padded_coords = torch.zeros(batch_size, max_len, 2)
+            
+            # Create mask (True = Padding)
+            mask = torch.ones(batch_size, max_len, dtype=torch.bool)
+            
+            for i, (f, g, c) in enumerate(batch):
+                l = lengths[i]
+                padded_feats[i, :l, :] = f
+                padded_genes[i, :l, :] = g
+                padded_coords[i, :l, :] = c
+                mask[i, :l] = False # Valid data is False, Padding is True
+                
+            return padded_feats, padded_genes, padded_coords, mask
+            
+        loader = DataLoader(concat_ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, collate_fn=collate_fn_ws)
     else:
         # Standard DataLoader (batching logic applies)
         loader = DataLoader(concat_ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
