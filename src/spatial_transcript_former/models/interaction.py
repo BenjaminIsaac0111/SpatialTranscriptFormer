@@ -492,7 +492,7 @@ class SpatialTranscriptFormer(nn.Module):
         mask = dists > self.mask_radius
         return mask
 
-    def forward(self, x, rel_coords=None):
+    def forward(self, x, rel_coords=None, return_pathways=False):
         """Main inference path.
 
         Args:
@@ -501,9 +501,11 @@ class SpatialTranscriptFormer(nn.Module):
                 - (B, S, 3, H, W): Image neighborhood.
                 - (B, S, D): Pre-computed features.
             rel_coords (torch.Tensor, optional): Spatial relative coordinates.
+            return_pathways (bool): Whether to return pathway activations.
 
         Returns:
             torch.Tensor: Predicted gene counts (B, num_genes).
+            (Optional) torch.Tensor: Pathway activations (B, num_pathways).
         """
         if x.dim() == 5:
             # Neighborhood Mode: Extract features for all patches
@@ -549,27 +551,34 @@ class SpatialTranscriptFormer(nn.Module):
         pathway_activations = self.pathway_activator(out).squeeze(-1)  # (B, num_pathways)
         gene_expression = self.gene_reconstructor(pathway_activations)  # (B, num_genes)
 
+        if return_pathways:
+            return gene_expression, pathway_activations
         return gene_expression
 
-    def forward_dense(self, x):
+    def forward_dense(self, x, mask=None, return_pathways=False):
         """Predicts individualized gene counts for every patch in a slide.
 
         Optimized for dense prediction on whole slide images via global context.
 
         Args:
-            x (torch.Tensor): Precomputed features for N patches (1, N, D).
+            x (torch.Tensor): Precomputed features for N patches (B, N, D).
+            mask (torch.Tensor, optional): Boolean padding mask (B, N) where True = Padding.
+            return_pathways (bool): Whether to return pathway scores.
 
         Returns:
-            torch.Tensor: Contextualized predictions for each patch (1, N, G).
+            torch.Tensor: Contextualized predictions for each patch (B, N, G).
+            (Optional) torch.Tensor: Pathway scores (B, N, P).
         """
         if x.dim() == 2:
             x = x.unsqueeze(0)
+        
+        b = x.shape[0]  # Dynamic batch size
             
         # 1. Project to latent space
         memory = self.image_proj(x)
 
         # 2. Retrieve learnable pathway tokens (global context)
-        pathway_tokens = self.pathway_tokenizer(1) # (1, P, D)
+        pathway_tokens = self.pathway_tokenizer(b) # (B, P, D)
 
         # 3. Perform dense interaction
         # We treat 'memory' (patches) as the target because we want to update THEM.
@@ -577,19 +586,28 @@ class SpatialTranscriptFormer(nn.Module):
         # Structure:
         #   Self-Attention on Patches (Nystrom - Efficient)
         #   Cross-Attention to Pathways (Standard - Efficient since P is small)
-        context_features = self.interaction(tgt=memory, memory=pathway_tokens)
+        
+        # NOTE: 'tgt_key_padding_mask' handles the self-attention on patches (x)
+        # We pass 'mask' (True=Padding) to it.
+        context_features = self.interaction(
+            tgt=memory, 
+            memory=pathway_tokens, 
+            tgt_key_padding_mask=mask
+        )
 
         # 4. Dense prediction head (Pathway Bottleneck enforcement)
         # We must project the updated patch tokens onto the pathway embeddings to see
         # "How much of Pathway K is in Patch N?"
-        # context_features: (1, N, D)
-        # pathway_tokens: (1, P, D)
+        # context_features: (B, N, D)
+        # pathway_tokens: (B, P, D)
         
-        # Calculate scores: (1, N, D) @ (1, D, P) -> (1, N, P)
+        # Calculate scores: (B, N, D) @ (B, D, P) -> (B, N, P)
         # This acts as a dynamic "Pathway Activation" map for every patch
         pathway_scores = torch.matmul(context_features, pathway_tokens.transpose(1, 2))
         
-        # Reconstruct Genes from these scores: (1, N, P) @ (P, G) -> (1, N, G)
+        # Reconstruct Genes from these scores: (B, N, P) @ (P, G) -> (B, N, G)
         # We reuse the same gene_reconstructor used in the single-patch forward pass
         # This ensures biological consistency.
+        if return_pathways:
+            return self.gene_reconstructor(pathway_scores), pathway_scores
         return self.gene_reconstructor(pathway_scores)
