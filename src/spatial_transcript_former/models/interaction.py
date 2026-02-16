@@ -389,7 +389,8 @@ class SpatialTranscriptFormer(nn.Module):
                  mask_radius=None,
                  fusion_mode='decoder',
                  masked_quadrants=None,
-                 num_landmarks=256):
+                 num_landmarks=256,
+                 pathway_init=None):
         """Initializes the SpatialTranscriptFormer.
 
         Args:
@@ -406,8 +407,15 @@ class SpatialTranscriptFormer(nn.Module):
             fusion_mode (str): Architecture style ('decoder' or 'jaume').
             masked_quadrants (list, optional): Mask configuration for fusion.
             num_landmarks (int): Landmarks for Nystrom attention.
+            pathway_init (Tensor, optional): Biological pathway membership
+                matrix of shape (P, G) to initialize gene_reconstructor.
         """
         super().__init__()
+
+        # Override num_pathways if biological init is provided
+        if pathway_init is not None:
+            num_pathways = pathway_init.shape[0]
+            print(f"Pathway init: overriding num_pathways to {num_pathways}")
 
         self.num_pathways = num_pathways
         self.use_nystrom = use_nystrom
@@ -455,6 +463,15 @@ class SpatialTranscriptFormer(nn.Module):
         # 5. Prediction Head (Pathway Bottleneck)
         self.pathway_activator = nn.Linear(token_dim, 1)
         self.gene_reconstructor = nn.Linear(num_pathways, num_genes)
+
+        # Biological pathway initialization
+        if pathway_init is not None:
+            with torch.no_grad():
+                # gene_reconstructor.weight is (num_genes, num_pathways)
+                # pathway_init is (num_pathways, num_genes)
+                self.gene_reconstructor.weight.copy_(pathway_init.T)
+                self.gene_reconstructor.bias.zero_()
+            print("Initialized gene_reconstructor with MSigDB Hallmarks")
 
         # 6. Dense Head (for Whole Slide Mode/Local Predictions)
         # We want to predict genes from the interaction outputs.

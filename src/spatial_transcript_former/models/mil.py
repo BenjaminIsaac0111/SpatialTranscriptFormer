@@ -134,17 +134,22 @@ class TransMIL(nn.Module):
         h = torch.cat((cls_tokens, h), dim=1)
 
         # Transformer Layers
-        # In a real implementation we might collect attention maps here
-        h = self.layer1(h)
-        h = self.layer2(h)
+        # We can extract attention from TransLayer if we modify it to return it
+        h, attn1 = self.layer1(h, return_attn=True)
+        h, attn2 = self.layer2(h, return_attn=True)
         
         h = self.norm(h)[:, 0] # Take CLS token
         
         logits = self._fc2(h)
         
         if return_attention:
-            # TransMIL attention maps are complex; return dummy or implement if needed
-            return logits, None
+            # Aggregate attention maps from both layers
+            # Focusing on the CLS token's attention to other patches
+            # (B, H, 1, N+1) -> (B, N)
+            combined_attn = (attn1 + attn2) / 2
+            # Take the attention from CLS (index 0) to patches (indices 1:)
+            cls_attn = combined_attn[:, :, 0, 1:].mean(dim=1) # Average over heads
+            return logits, cls_attn
         return logits
 
 class PPEG(nn.Module):
@@ -185,6 +190,27 @@ class TransLayer(nn.Module):
             dropout=0.1
         )
 
-    def forward(self, x):
-        x = x + self.attn(self.norm(x))
-        return x
+    def forward(self, x, return_attn=False):
+        if not return_attn:
+            x = x + self.attn(self.norm(x))
+            return x
+        else:
+            # If we need attention, we'd ideally get it from nystrom_attention.
+            # However, since it's an external package, we might need to approximate or 
+            # calculate the dot product if x is not too large.
+            # For whole slide, a standard dot product (N^2) might OOM.
+            # Let's assume for validation/single case we can afford it or return dummy.
+            
+            # Dummy for now to avoid OOM on large slides
+            h = self.norm(x)
+            out = self.attn(h)
+            x = x + out
+            
+            # Approximate attention: For the CLS token (index 0)
+            # We can compute its similarity to all other tokens
+            q = h[:, 0:1, :] # (B, 1, D)
+            k = h # (B, N+1, D)
+            sim = torch.matmul(q, k.transpose(1, 2)) / (h.shape[-1]**0.5)
+            attn = torch.softmax(sim, dim=-1) # (B, 1, N+1)
+            # Reshape to match head format: (B, 1, 1, N+1)
+            return x, attn.unsqueeze(1)

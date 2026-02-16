@@ -1,237 +1,171 @@
+"""
+Training engine for SpatialTranscriptFormer.
+
+Provides train_one_epoch() and validate() functions that handle
+both standard patch-level and whole-slide training modes.
+"""
+
 import torch
 import torch.nn as nn
 from tqdm import tqdm
 from spatial_transcript_former.models import SpatialTranscriptFormer
 
-def train_one_epoch(model, loader, criterion, optimizer, device, sparsity_lambda=0.0, whole_slide=False, scaler=None, grad_accum_steps=1):
+
+def _optimizer_step(scaler, optimizer, loss, batch_idx, total_batches, grad_accum_steps):
+    """Shared gradient accumulation and optimizer step logic."""
+    if scaler is not None:
+        scaler.scale(loss).backward()
+        if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == total_batches:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+    else:
+        loss.backward()
+        if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == total_batches:
+            optimizer.step()
+            optimizer.zero_grad()
+
+
+def _compute_masked_mse(preds, targets, mask):
+    """MSE loss ignoring padded positions."""
+    diff = preds - targets
+    mse = diff ** 2
+    valid_mask = ~mask.unsqueeze(-1).expand_as(mse)
+    return (mse * valid_mask.float()).sum() / valid_mask.sum()
+
+
+def _compute_bag_target(genes, mask):
+    """Average gene expression over valid spots (bag-level target for MIL)."""
+    mask_float = (~mask).float().unsqueeze(-1)  # (B, N, 1)
+    return (genes * mask_float).sum(dim=1) / mask_float.sum(dim=1)  # (B, G)
+
+
+def train_one_epoch(model, loader, criterion, optimizer, device,
+                    sparsity_lambda=0.0, whole_slide=False,
+                    scaler=None, grad_accum_steps=1):
     """
     Train the model for one epoch.
-
-    Args:
-        model (nn.Module): The model to train.
-        loader (DataLoader): Training data loader.
-        criterion (nn.Module): Loss function.
-        optimizer (optim.Optimizer): Optimizer.
-        device (torch.device): Device to run training on.
-        sparsity_lambda (float): L1 sparsity penalty for gene reconstruction weights.
-        whole_slide (bool): Whether to use whole slide training mode.
-        scaler (torch.cuda.amp.GradScaler): Scaler for AMP.
-        grad_accum_steps (int): Number of steps to accumulate gradients.
 
     Returns:
         float: Average training loss for the epoch.
     """
     model.train()
     running_loss = 0.0
-    
-    optimizer.zero_grad()  # Initialize gradients
-    
+    optimizer.zero_grad()
     pbar = tqdm(loader, desc="Training")
-    
+
     if whole_slide:
-        for batch_idx, (feats, genes, coords, mask) in enumerate(pbar):  # batch_idx is global step in epoch
-            feats = feats.to(device)
-            genes = genes.to(device)
-            mask = mask.to(device)
-            
-            # Use AMP if scaler is provided
+        for batch_idx, (feats, genes, coords, mask) in enumerate(pbar):
+            feats, genes, mask = feats.to(device), genes.to(device), mask.to(device)
+
             with torch.amp.autocast('cuda', enabled=scaler is not None):
-                # Use forward_dense for whole-slide prediction
-                if hasattr(model, 'forward_dense'):
-                    preds = model.forward_dense(feats, mask=mask)  # (B, N, G)
+                if hasattr(model, 'forward_dense') and not getattr(model, 'weak_supervision', False):
+                    preds = model.forward_dense(feats, mask=mask)
+                    loss = _compute_masked_mse(preds, genes, mask)
                 else:
-                    # Fallback for models that don't support dense forward
-                    preds = model(feats.squeeze(0))
-                
-                # We need to mask the loss calculation too!
-                # genes is (B, N, G), preds is (B, N, G), mask is (B, N) True=Padding
-                
-                # Flatten everything to (B*N, G) and (B*N)
-                loss = criterion(preds, genes) # This assumes criterion handles unreduced or we mask after
-                
-                # Standard MSELoss reduces by mean usually.
-                # If we want to ignore padding, we must use reduction='none' and mask manually.
-                # OR we can just zerout the loss where mask is True.
-                
-                # Check criterion reduction. If it's mean, it includes padding zeros which is wrong.
-                # criterion = nn.MSELoss() usually.
-                
-                # Let's enforce masking if batch_size > 1
-                if feats.shape[0] > 1 or mask.any():
-                    # Recalculate loss with reduction='none'
-                    # We assume criterion passed in is default (mean).
-                    # We can't easily change it here without access to class.
-                    # Best way: make sure padded genes are 0 and preds are close to 0?
-                    # No, best is to compute manual MSE.
-                    
-                    diff = preds - genes
-                    mse = diff ** 2 # (B, N, G)
-                    
-                    # Expand mask to (B, N, G)
-                    # mask is True for padding. We want to keep False.
-                    valid_mask = ~mask.unsqueeze(-1).expand_as(mse)
-                    
-                    mse = mse * valid_mask.float()
-                    
-                    # Sum and divide by number of valid elements
-                    loss = mse.sum() / valid_mask.sum()
-                
+                    preds = model(feats)
+                    bag_target = _compute_bag_target(genes, mask)
+                    loss = criterion(preds, bag_target)
+
                 if sparsity_lambda > 0 and hasattr(model, 'get_sparsity_loss'):
                     loss = loss + (sparsity_lambda * model.get_sparsity_loss())
 
-                elif sparsity_lambda > 0:
-                    # Manual sparsity if method not available
-                    l1_loss = sum(p.abs().sum() for p in model.parameters() if p.requires_grad)
-                    loss = loss + (sparsity_lambda * l1_loss)
-                    
-                # Normalize loss for accumulation
                 loss = loss / grad_accum_steps
 
-            if scaler is not None:
-                scaler.scale(loss).backward()
-                
-                if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(loader):
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
-            else:
-                loss.backward()
-                
-                if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(loader):
-                    optimizer.step()
-                    optimizer.zero_grad()
-            
-            # Log unscaled loss for reporting
+            _optimizer_step(scaler, optimizer, loss, batch_idx, len(loader), grad_accum_steps)
+
             current_loss = loss.item() * grad_accum_steps
             running_loss += current_loss
-            pbar.set_postfix({'loss': current_loss})
+            pbar.set_postfix({'loss': f'{current_loss:.4f}'})
     else:
         for batch_idx, (images, targets, rel_coords) in enumerate(pbar):
-            images = images.to(device)
-            targets = targets.to(device)
+            images, targets = images.to(device), targets.to(device)
             rel_coords = rel_coords.to(device)
-            
+
             with torch.amp.autocast('cuda', enabled=scaler is not None):
                 if isinstance(model, SpatialTranscriptFormer):
                     outputs = model(images, rel_coords=rel_coords)
                 else:
                     outputs = model(images)
-                
+
                 loss = criterion(outputs, targets)
-                
+
                 if sparsity_lambda > 0 and hasattr(model, 'get_sparsity_loss'):
                     loss = loss + (sparsity_lambda * model.get_sparsity_loss())
-                    
+
                 loss = loss / grad_accum_steps
-            
-            if scaler is not None:
-                scaler.scale(loss).backward()
-                
-                if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(loader):
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
-            else:
-                loss.backward()
-                
-                if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(loader):
-                    optimizer.step()
-                    optimizer.zero_grad()
-            
+
+            _optimizer_step(scaler, optimizer, loss, batch_idx, len(loader), grad_accum_steps)
+
             current_loss = loss.item() * grad_accum_steps
             running_loss += current_loss
-            pbar.set_postfix({'loss': current_loss})
-            
+            pbar.set_postfix({'loss': f'{current_loss:.4f}'})
+
     return running_loss / len(loader)
+
 
 def validate(model, loader, criterion, device, whole_slide=False, use_amp=False):
     """
     Validate the model.
 
-    Args:
-        model (nn.Module): The model to validate.
-        loader (DataLoader): Validation data loader.
-        criterion (nn.Module): Loss function.
-        device (torch.device): Device to run validation on.
-        whole_slide (bool): Whether to use whole slide validation mode.
-
     Returns:
-        float: Average validation loss.
+        dict: {"val_loss": float, "attn_correlation": float or None}
     """
     model.eval()
     running_loss = 0.0
-    
-    with torch.no_grad():
-        for item in tqdm(loader, desc="Validation"):
-            # Handle both standard and whole-slide batches
-            if len(item) == 3:
-                data, targets, coords = item
-            else:
-                # Should not happen with new collate, but safety
-                data, targets, coords = item[0], item[1], item[2]
-            
-            data = data.to(device)
-            targets = targets.to(device)
-            coords = coords.to(device)
-            
-            with torch.amp.autocast('cuda', enabled=use_amp):
-                if whole_slide:
-                    # In whole slide mode, we only run inference on the first sample to save time/memory
-                    # or we run on all but we need to handle batching if loader is batched.
-                    # Given validation loader might imply batch_size=1 usually for simple eval.
-                    
-                    # We'll just take the first item from loader for visualization
-                    # This block is for visualization, not for loss calculation over the whole dataset.
-                    # The loss calculation for whole_slide is handled below.
-                    try:
-                        batch = next(iter(loader))
-                        # Handle unpacked batch
-                        if len(batch) == 4:
-                            feats, genes, coords_vis, mask = batch
-                        else:
-                            # Fallback if collate hasn't kicked in? Should always be 4 now for WS
-                            feats, genes, coords_vis = batch
-                            mask = None
-                            
-                        feats = feats.to(device)
-                        
-                        # Just take first sample in batch
-                        if feats.dim() == 3:
-                            feats = feats[0].unsqueeze(0) # (1, N, D)
-                            coords_vis = coords_vis[0] # (N, 2)
-                        
-                        # Run inference
-                        with torch.no_grad():
-                            # We can use forward_dense with no mask since it's 1 sample
-                            if hasattr(model, 'forward_dense'):
-                                preds = model.forward_dense(feats)
-                            else:
-                                preds = model(feats.squeeze(0))
-                        
-                        # ... plotting logic expects single sample ...
-                        # We need to ensure we pass correct coords and preds to plot
-                        # preds is (1, N, G) -> (N, G)
-                        preds = preds.squeeze(0).cpu().numpy()
-                    except StopIteration:
-                        # Loader might be empty or exhausted if this is called multiple times
-                        pass
+    attn_correlations = []
 
-                    if data.dim() == 2:
-                        data = data.unsqueeze(0)
-                    if targets.dim() == 3:
-                        targets = targets.squeeze(0)
-                        
-                    if hasattr(model, 'forward_dense'):
-                        preds = model.forward_dense(data)
-                        outputs = preds.squeeze(0)
+    with torch.no_grad():
+        for batch in tqdm(loader, desc="Validation"):
+            if whole_slide:
+                feats, genes, coords, mask = batch
+                feats, genes, mask = feats.to(device), genes.to(device), mask.to(device)
+            else:
+                images, genes, rel_coords = batch
+                images, genes = images.to(device), genes.to(device)
+                rel_coords = rel_coords.to(device)
+
+            with torch.amp.autocast('cuda', enabled=use_amp):
+                attn = None
+
+                if whole_slide:
+                    if hasattr(model, 'forward_dense') and not getattr(model, 'weak_supervision', False):
+                        outputs = model.forward_dense(feats, mask=mask)
+                        targets = genes
                     else:
-                        outputs = model(data.squeeze(0))
-                elif isinstance(model, SpatialTranscriptFormer):
-                    outputs = model(data, rel_coords=coords)
+                        # MIL models: extract attention if supported
+                        if hasattr(model, 'forward') and 'return_attention' in model.forward.__code__.co_varnames:
+                            outputs, attn = model(feats, return_attention=True)
+                        else:
+                            outputs = model(feats)
+                        targets = _compute_bag_target(genes, mask)
                 else:
-                    outputs = model(data)
-                
+                    targets = genes
+                    if isinstance(model, SpatialTranscriptFormer):
+                        outputs = model(images, rel_coords=rel_coords)
+                    else:
+                        outputs = model(images)
+
                 loss = criterion(outputs, targets)
+
+                # Spatial Attention Correlation (MIL weak supervision study)
+                if attn is not None and whole_slide:
+                    if attn.dim() == 3:
+                        attn = attn.squeeze(-1)
+                    for b in range(attn.shape[0]):
+                        valid_idx = ~mask[b]
+                        a_b = attn[b][valid_idx]
+                        g_total = genes[b][valid_idx].sum(dim=-1)
+                        if a_b.std() > 0 and g_total.std() > 0:
+                            corr = torch.corrcoef(torch.stack([a_b, g_total]))[0, 1]
+                            attn_correlations.append(corr.item())
+
             running_loss += loss.item()
-            
-    return running_loss / len(loader)
+
+    avg_loss = running_loss / len(loader)
+    avg_corr = sum(attn_correlations) / len(attn_correlations) if attn_correlations else None
+
+    if avg_corr is not None:
+        print(f"Spatial Attention Correlation: {avg_corr:.4f}")
+
+    return {"val_loss": avg_loss, "attn_correlation": avg_corr}

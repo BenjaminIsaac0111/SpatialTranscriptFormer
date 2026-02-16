@@ -148,7 +148,7 @@ def get_backbone(name, pretrained=True, num_classes=None):
             if pretrained:
                 # Download weights manually
                 weights_path = hf_hub_download(repo_id=repo_id, filename="pytorch_model.bin")
-                state_dict = torch.load(weights_path, map_location='cpu')
+                state_dict = torch.load(weights_path, map_location='cpu', weights_only=True)
                 if 'model' in state_dict:
                     state_dict = state_dict['model']
                 model.load_state_dict(state_dict, strict=False)
@@ -174,7 +174,7 @@ def get_backbone(name, pretrained=True, num_classes=None):
             
             if pretrained:
                 weights_path = hf_hub_download(repo_id="owkin/phikon", filename="pytorch_model.bin")
-                state_dict = torch.load(weights_path, map_location='cpu')
+                state_dict = torch.load(weights_path, map_location='cpu', weights_only=True)
                 if 'model' in state_dict:
                     state_dict = state_dict['model']
                 elif 'state_dict' in state_dict:
@@ -207,7 +207,7 @@ def get_backbone(name, pretrained=True, num_classes=None):
             
             if pretrained:
                 weights_path = hf_hub_download(repo_id="vinid/plip", filename="pytorch_model.bin")
-                state_dict = torch.load(weights_path, map_location='cpu')
+                state_dict = torch.load(weights_path, map_location='cpu', weights_only=True)
                 
                 new_state_dict = {}
                 for k, v in state_dict.items():

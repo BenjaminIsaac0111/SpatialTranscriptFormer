@@ -411,7 +411,7 @@ class HEST_FeatureDataset(Dataset):
             self.kdtree = None
 
     def _load_data(self):
-        saved_data = torch.load(self.feature_path, map_location='cpu')
+        saved_data = torch.load(self.feature_path, map_location='cpu', weights_only=True)
         features = saved_data['features'] # (N, D)
         coords = saved_data['coords'] # (N, 2)
         barcodes = saved_data['barcodes']
@@ -450,7 +450,7 @@ class HEST_FeatureDataset(Dataset):
             # Strictly load-on-demand to save RAM.
             # We do NOT cache in self.features.
             
-            saved_data = torch.load(self.feature_path, map_location='cpu')
+            saved_data = torch.load(self.feature_path, map_location='cpu', weights_only=True)
             features = saved_data['features']
             coords = saved_data['coords']
             barcodes = saved_data['barcodes']
@@ -618,12 +618,12 @@ def get_hest_feature_dataloader(
                 augment=augment,
                 log1p=log1p
             )
-            valid_datasets.append(ds)
+            datasets.append(ds)
             
-    if not valid_datasets:
+    if not datasets:
         raise ValueError("No valid feature datasets found.")
         
-    concat_ds = ConcatDataset(valid_datasets)
+    concat_ds = ConcatDataset(datasets)
     
     # If whole_slide_mode is True, we must use batch_size=1 and custom collate
     if whole_slide_mode:

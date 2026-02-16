@@ -34,6 +34,31 @@ This document provides a summary of the models implemented in this project, thei
 - **Reference**: [Shao et al. (2021). "TransMIL: Transformer based Correlated Multiple Instance Learning for Whole Slide Image Classification." NeurIPS.](https://arxiv.org/abs/2106.00908)
 - **Description**: Uses a Nyström-based linear transformer to capture correlations between patches across the entire slide.
 
+### Weak Supervision for MIL
+
+MIL models are trained with **bag-level supervision**: the model predicts a single slide-level expression vector and is supervised against the mean expression across all valid spots.
+
+Given a slide with $N$ valid spots and gene expression matrix $\mathbf{Y} \in \mathbb{R}^{N \times G}$, the **bag-level target** is:
+$$\bar{y}_g = \frac{1}{N} \sum_{i=1}^N y_{ig}$$
+
+For padded batches with mask $\mathbf{m} \in \{0, 1\}^{N}$, this becomes:
+$$\bar{y}_g = \frac{\sum_{i=1}^N (1 - m_i) \cdot y_{ig}}{\sum_{i=1}^N (1 - m_i)}$$
+
+The training loss is then:
+$$\mathcal{L}_{weak} = \frac{1}{G} \sum_{g=1}^G (\hat{y}_g - \bar{y}_g)^2$$
+
+### Spatial Attention Correlation
+
+To evaluate whether MIL attention maps recover spatial localisation of gene activity, we compute the **Pearson correlation** between attention weights and total gene expression at each spot:
+$$\rho = \text{corr}\left(\mathbf{a},\ \sum_{g=1}^G \mathbf{y}_g\right)$$
+
+where $\mathbf{a} \in \mathbb{R}^N$ is the vector of attention weights and $\sum_g \mathbf{y}_g \in \mathbb{R}^N$ is the total expression per spot. A high $\rho$ indicates the model has learned to attend to transcriptionally active regions.
+
+### Dense Supervision (Masked MSE)
+
+For models that support per-spot dense prediction in whole-slide mode (e.g., SpatialTranscriptFormer via `forward_dense`), we use a **masked MSE** that ignores padded positions:
+$$\mathcal{L}_{dense} = \frac{\sum_{i=1}^N \sum_{g=1}^G (1 - m_i)(\hat{y}_{ig} - y_{ig})^2}{\sum_{i=1}^N (1 - m_i) \cdot G}$$
+
 ---
 
 ## 3. SpatialTranscriptFormer (Proposed Model)
@@ -121,8 +146,19 @@ $$\hat{y} = \mathbf{S} \cdot (\mathbf{W}_{informed} \odot M_{mask} + \mathbf{W}_
 - $\mathbf{W}_{informed}$: Fixed weights or initialized from biological prior knowledge (e.g., MSigDB).
 - $\mathbf{W}_{latent}$: Learned parameters for discovering novel gene-morphology relationships.
 
+##### MSigDB Hallmarks Initialization
+
+When `--pathway-init` is enabled, $\mathbf{W}_{recon}$ is initialized from the **MSigDB Hallmark gene sets** (50 curated biological pathways). A binary membership matrix $\mathbf{M} \in \{0, 1\}^{P \times G}$ is constructed:
+$$M_{kg} = \begin{cases} 1 & \text{if gene } g \in \text{pathway } k \\ 0 & \text{otherwise} \end{cases}$$
+
+The gene reconstructor weight is then initialized as:
+$$\mathbf{W}_{recon} \leftarrow \mathbf{M}^\top \in \mathbb{R}^{G \times P}$$
+
+This gives the model a biologically-grounded starting point where each pathway token is connected only to its known member genes. During training, gradients can refine these connections — adding novel gene-pathway associations and adjusting the strengths. With 1,000 global genes, the Hallmark sets typically cover ~54% of genes, leaving the remaining genes initially disconnected but learnable.
+
 ### Why this works
 
 1. **Interpretability**: By inspecting $\mathbf{W}_{recon}$, we can determine which genes belong to which "latent pathway."
 2. **Sparsity**: Applying L1 regularization ($L_{sparse} = \lambda \|\mathbf{W}_{recon}\|_1$) forces the model to learn distinct, sparse gene sets for each pathway.
 3. **Morphology-Guided**: The Cross-Attention mechanism ensures that pathway activity is directly triggered by specific visual features in the histology.
+4. **Biological Prior**: MSigDB initialization constrains the model to discover pathway activations grounded in known biology, enabling faster convergence and more clinically meaningful representations.

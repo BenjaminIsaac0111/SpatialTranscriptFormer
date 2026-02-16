@@ -89,10 +89,14 @@ def setup_dataloaders(args, train_ids, val_ids):
         tuple: (train_loader, val_loader)
     """
     if args.precomputed:
-        feat_dir_name = 'he_features' if args.backbone == 'resnet50' else f"he_features_{args.backbone}"
-        feat_dir = os.path.join(args.data_dir, feat_dir_name)
-        if not os.path.exists(feat_dir):
-             feat_dir = os.path.join(args.data_dir, 'patches', feat_dir_name)
+        # Use explicit feature_dir if provided, otherwise auto-detect
+        if getattr(args, 'feature_dir', None) and os.path.exists(args.feature_dir):
+            feat_dir = args.feature_dir
+        else:
+            feat_dir_name = 'he_features' if args.backbone == 'resnet50' else f"he_features_{args.backbone}"
+            feat_dir = os.path.join(args.data_dir, feat_dir_name)
+            if not os.path.exists(feat_dir):
+                 feat_dir = os.path.join(args.data_dir, 'patches', feat_dir_name)
              
         if args.whole_slide:
             train_loader = get_hest_feature_dataloader(

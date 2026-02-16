@@ -20,6 +20,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
     """
     try:
         plot_pathways = getattr(args, 'plot_pathways', False)
+        log_transform = getattr(args, 'log_transform', False)
         
         with torch.no_grad():
             model.eval()
@@ -64,7 +65,6 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                     feats, _, _ = ds[0]
                     feats = feats.unsqueeze(0).to(device)
                     if hasattr(model, 'forward_dense'):
-                        # Handle potential tuple return (preds, pathways)
                         output = model.forward_dense(feats, return_pathways=plot_pathways)
                         if isinstance(output, tuple):
                             preds.append(output[0].detach().cpu().squeeze(0))
@@ -75,7 +75,6 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                     dl = DataLoader(ds, batch_size=32, shuffle=False)
                     for feats, _, rel_coords_batch in dl:
                         if isinstance(model, SpatialTranscriptFormer):
-                            # Handle potential tuple return (preds, pathways)
                             output = model(feats.to(device), rel_coords=rel_coords_batch.to(device), return_pathways=plot_pathways)
                             if isinstance(output, tuple):
                                 p = output[0].cpu()
@@ -108,14 +107,38 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                 coord_mask = np.array(mask, dtype=bool)
                 coord_subset = coords[coord_mask]
                 
-                plot_spatial_genes(coord_subset, gene_matrix, preds, gene_names[:5], sample_id, 
+                # Apply log1p to ground truth if model was trained with log transform
+                gene_truth = gene_matrix
+                if log_transform:
+                    gene_truth = np.log1p(gene_matrix)
+                
+                plot_spatial_genes(coord_subset, gene_truth, preds, gene_names[:5], sample_id, 
                                    save_path=os.path.join(args.output_dir, f"{sample_id}_epoch_{epoch+1}.png"),
                                    cmap='jet')
                 
+                # Pathway visualization with ground truth
                 if plot_pathways and pathways_list:
                     pathways = torch.cat(pathways_list, dim=0).numpy()
+                    
+                    # Compute pathway ground truth from gene expression
+                    pathway_names = None
+                    pathway_truth = None
+                    try:
+                        from spatial_transcript_former.data.pathways import get_pathway_init
+                        pw_matrix, pw_names = get_pathway_init(gene_names, verbose=False)
+                        pathway_names = pw_names
+                        # pw_matrix: (P, G) binary membership
+                        # Pathway ground truth = mean gene expression of member genes
+                        pw_np = pw_matrix.numpy()  # (P, G)
+                        member_counts = pw_np.sum(axis=1, keepdims=True).clip(min=1)  # (P, 1)
+                        pathway_truth = (gene_truth @ pw_np.T) / member_counts.T  # (N, P)
+                    except Exception as e:
+                        print(f"Warning: Could not compute pathway ground truth: {e}")
+                    
                     save_pathway_path = os.path.join(args.output_dir, f"{sample_id}_pathway_epoch_{epoch+1}.png")
-                    plot_spatial_pathways(coord_subset, pathways, sample_id, save_path=save_pathway_path, cmap='jet')
+                    plot_spatial_pathways(coord_subset, pathways, sample_id,
+                                          save_path=save_pathway_path, cmap='jet',
+                                          pathway_names=pathway_names, pathway_truth=pathway_truth)
 
                 # Histology Overlay
                 try:

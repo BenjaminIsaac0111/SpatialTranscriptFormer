@@ -24,18 +24,20 @@ def plot_spatial_genes(coords, truth, pred, gene_names, sample_id, save_path=Non
         gene_name = gene_names[i]
         
         # Truth
-        sns.scatterplot(x=coords[:, 1], y=coords[:, 0], hue=truth[:, i], 
-                        ax=axes[i, 0], palette=plt.get_cmap(cmap), legend=False, s=10)
+        sc = axes[i, 0].scatter(coords[:, 1], coords[:, 0], c=truth[:, i],
+                                cmap=cmap, s=10, edgecolors='none')
         axes[i, 0].set_title(f"{sample_id} - {gene_name} (TRUTH)")
         axes[i, 0].invert_yaxis()
         axes[i, 0].set_aspect('equal')
+        plt.colorbar(sc, ax=axes[i, 0], shrink=0.6)
         
         # Prediction
-        sns.scatterplot(x=coords[:, 1], y=coords[:, 0], hue=pred[:, i], 
-                        ax=axes[i, 1], palette=plt.get_cmap(cmap), legend=False, s=10)
+        sc = axes[i, 1].scatter(coords[:, 1], coords[:, 0], c=pred[:, i],
+                                cmap=cmap, s=10, edgecolors='none')
         axes[i, 1].set_title(f"{sample_id} - {gene_name} (PRED)")
         axes[i, 1].invert_yaxis()
         axes[i, 1].set_aspect('equal')
+        plt.colorbar(sc, ax=axes[i, 1], shrink=0.6)
 
     plt.tight_layout()
     if save_path:
@@ -83,14 +85,16 @@ def plot_histology_overlay(image, coords, values, gene_names, sample_id, scalef=
     plt.close(fig)
     plt.close('all')
 
-def plot_spatial_pathways(coords, activations, sample_id, save_path=None, cmap='jet'):
+def plot_spatial_pathways(coords, activations, sample_id, save_path=None, cmap='jet',
+                          pathway_names=None, pathway_truth=None):
     """
-    Plots spatial maps of pathway activations.
+    Plots spatial maps of pathway activations (top 5 by variance).
+    If pathway_truth is provided, shows truth (top row) vs prediction (bottom row).
     """
     num_pathways = activations.shape[1]
-    # Plot top 5 variance pathways or just first 5
-    vars = np.var(activations, axis=0)
-    top_indices = np.argsort(vars)[::-1][:5]
+    # Select top 5 pathways by prediction variance
+    vars_pred = np.var(activations, axis=0)
+    top_indices = np.argsort(vars_pred)[::-1][:5]
     
     num_plots = min(len(top_indices), 5)
     
@@ -98,24 +102,48 @@ def plot_spatial_pathways(coords, activations, sample_id, save_path=None, cmap='
         print("No pathways to plot.")
         return
 
-    fig, axes = plt.subplots(1, num_plots, figsize=(5 * num_plots, 5))
-    if num_plots == 1:
-        axes = [axes]
+    has_truth = pathway_truth is not None
+    nrows = 2 if has_truth else 1
+    fig, axes = plt.subplots(nrows, num_plots, figsize=(5 * num_plots, 5 * nrows))
+    if num_plots == 1 and nrows == 1:
+        axes = np.array([[axes]])
+    elif num_plots == 1:
+        axes = axes.reshape(nrows, 1)
+    elif nrows == 1:
+        axes = axes.reshape(1, num_plots)
         
     for i, idx in enumerate(top_indices):
-        ax = axes[i]
-        vals = activations[:, idx]
-        
-        sns.scatterplot(x=coords[:, 1], y=coords[:, 0], hue=vals, ax=ax, palette=plt.get_cmap(cmap), legend=False, s=15, edgecolor='none')
-        
-        ax.set_title(f"Pathway {idx} (Var: {vars[idx]:.2f})")
-        ax.invert_yaxis()
-        ax.set_aspect('equal')
-        ax.axis('off')
+        if pathway_names is not None and idx < len(pathway_names):
+            label = pathway_names[idx].replace("HALLMARK_", "")
+        else:
+            label = f"Pathway {idx}"
 
+        # Truth row
+        if has_truth:
+            ax_t = axes[0, i]
+            sc_t = ax_t.scatter(coords[:, 1], coords[:, 0], c=pathway_truth[:, idx],
+                                cmap=cmap, s=15, edgecolors='none')
+            ax_t.set_title(f"{label}\n(TRUTH)", fontsize=9)
+            ax_t.invert_yaxis()
+            ax_t.set_aspect('equal')
+            ax_t.axis('off')
+            plt.colorbar(sc_t, ax=ax_t, shrink=0.6)
+
+        # Prediction row
+        row = 1 if has_truth else 0
+        ax_p = axes[row, i]
+        sc_p = ax_p.scatter(coords[:, 1], coords[:, 0], c=activations[:, idx],
+                            cmap=cmap, s=15, edgecolors='none')
+        ax_p.set_title(f"{label}\n(PRED, Var: {vars_pred[idx]:.2f})", fontsize=9)
+        ax_p.invert_yaxis()
+        ax_p.set_aspect('equal')
+        ax_p.axis('off')
+        plt.colorbar(sc_p, ax=ax_p, shrink=0.6)
+
+    plt.suptitle(f"{sample_id} — Top Pathway Activations", fontweight='bold')
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Pathway plot saved to {save_path}")
     else:
         plt.show()
@@ -163,7 +191,7 @@ def main():
             backbone_name=args.backbone
         )
         
-    state_dict = torch.load(args.model_path, map_location=device)
+    state_dict = torch.load(args.model_path, map_location=device, weights_only=True)
     # Handle possible torch.compile prefix
     new_state_dict = {}
     for k, v in state_dict.items():

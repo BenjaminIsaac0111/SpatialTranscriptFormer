@@ -56,10 +56,31 @@ For colorectal cancer, we should prioritize monitoring these specific pathways:
 | **EMT** | `SNAI1`, `VIM`, `ZEB1` | Tumor invasion and metastasis risk |
 | **Angiogenesis** | `VEGFA`, `FLT1` | Potential for anti-angiogenic therapy |
 
-## 4. Next Steps
+## 4. Implementation Status
 
-To implement this, we can:
+### Implemented
 
-1. Create a `mapping/` directory and download `.gmt` files from MSigDB.
-2. Build a script to convert $(N \times G)$ prediction matrices into $(N \times P)$ pathway score matrices.
-3. Visualize these scores as spatial heatmaps to show "Biological Hotspots."
+- **MSigDB Hallmarks Initialization** (`--pathway-init` flag): Downloads the GMT file, matches genes against `global_genes.json`, and initializes `gene_reconstructor.weight` with the binary membership matrix. See [`pathways.py`](../src/spatial_transcript_former/data/pathways.py).
+  - 50 Hallmark pathways (fixed when using `--pathway-init`)
+  - ~54% gene coverage (542/1000 genes mapped to at least one pathway)
+  - GMT file cached in `.cache/` after first download
+
+- **Sparsity Regularization** (`--sparsity-lambda` flag): L1 penalty on `gene_reconstructor` weights to encourage pathway-like groupings when using data-driven (random) initialization.
+
+### Usage
+
+```bash
+# With biological initialization (50 MSigDB Hallmarks)
+python -m spatial_transcript_former.train \
+    --model interaction --pathway-init ...
+
+# With data-driven pathways + sparsity
+python -m spatial_transcript_former.train \
+    --model interaction --num-pathways 50 --sparsity-lambda 0.01 ...
+```
+
+### Future Work
+
+- **KEGG/Reactome**: More granular pathway databases for finer-grained analysis.
+- **Post-Hoc Enrichment**: `gseapy` integration for pathway activation maps from model outputs.
+- **Spatial Pathway Maps**: Visualize pathway activations as spatial heatmaps overlaid on histology.
