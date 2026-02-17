@@ -76,29 +76,37 @@ $$F = \text{Encoder}(x), \quad F \in \mathbb{R}^{D}$$
 
 We initialize $K$ learnable pathway tokens $T_{path} \in \mathbb{R}^{K \times D_{token}}$. These tokens act as "queries" to search for relevant morphological features in the image.
 
-#### 3. Interaction (Multimodal Fusion & Quadrant Masking)
+#### 3. Interaction (Unified Early Fusion)
 
-The interaction can be formulated as a generalized attention mechanism between Pathway tokens ($P \in \mathbb{R}^{N_P \times d}$) and Histology tokens ($H \in \mathbb{R}^{N_H \times d}$).
+The interaction logic is unified via the **EarlyFusionBlock**, which facilitates a generalized attention mechanism between Pathway tokens ($P \in \mathbb{R}^{N_P \times d}$) and Histology tokens ($H \in \mathbb{R}^{N_H \times d$).
 
-##### Unified Self-Attention Formulation
+##### Pre-Interaction Enrichment (PE & Mixed Context)
 
-The tokens are concatenated into a sequence $X = [P; H]$. The attention output $Z \in \mathbb{R}^{(N_P + N_H) \times d}$ is:
+Before attention, histology features $F$ are projected and enriched with spatial gradients and neighborhood morphology:
+
+1. **Projection**: $H_0 = image\_proj(F)$
+2. **Positional Encoding**: $H_{PE} = H_0 + \text{PE}_{2D}(x, y)$
+3. **Local Mixing**: $H_{mixed} = \text{Mixer}(H_{PE})$ (only in `decoder` mode)
+
+##### Interaction Forward Pass
+
+The tokens are concatenated into a sequence $X = [P; H_{final}]$. The attention output $Z$ is:
 $$Z = \text{Attention}(X, X, X; M)$$
 Where $M$ is the quadrant mask. The final pathway activations are extracted from the first $N_P$ tokens:
 $$Z_{path} = Z[1:N_P, :] \in \mathbb{R}^{N_P \times d}$$
 
-##### Decomposition of Interaction (Jaume vs. Decoder)
+##### Decomposition of Interaction Modes
 
-The model supports two distinct interaction paths that are functionally related:
+The model supports two distinct interaction paths:
 
 1. **Early Fusion (`jaume`)**:
-   $$Z_{path} = \text{Softmax}\left( \frac{Q_P K_P^\top + Q_P K_H^\top}{\sqrt{d}} \right) [V_P; V_H]$$
-   - $Q_P K_P^\top$: Pathway-to-Pathway self-correction (allows pathways to refine each other).
-   - $Q_P K_H^\top$: Pathway-to-Histology querying (extracts morphological evidence).
+   - Both modalities share the same transformer layers.
+   - Pathways can refine each other ($Q_P K_P^\top$).
+   - Pathways query histology ($Q_P K_H^\top$).
 
 2. **Cross-Attention (`decoder`)**:
-   $$Z_{path} = \text{Softmax}\left( \frac{Q_P K_H^\top}{\sqrt{d}} + M_{spatial} \right) V_H$$
-   - This mode is equivalent to `jaume` if $A_{P \to P}$ and $A_{H \to P}$ are masked and $V_P$ is null.
+   - Pathways act as queries to attend to the histology neighborhood.
+   - Equivalent to `jaume` with $A_{P \to P}$ and $A_{H \to P}$ quadrants masked.
 
 ##### Interaction Masking
 
@@ -108,7 +116,23 @@ For efficiency and to focus on multimodal interactions, we can apply an interact
 - **Spatial Radius Masking**: We further refine $A_{P \to H}$ by masking out patches beyond a radius $R$ from the center:
 $$M_{spatial}(p_i, h_j) = \begin{cases} 0 & \text{if } \text{dist}(p_i, h_j) \leq R \\ -\infty & \text{otherwise} \end{cases}$$
 
-### 4. Scalability: Nyström Approximation
+#### 4. Spatial Inductive Biases
+
+To better capture the spatial structure of tissue, the model incorporates two inductive biases:
+
+##### Sinusoidal Positional Encoding (2D)
+
+We inject knowledge of absolute patch locations $(x, y)$ into the transformer latent space via 2D sinusoidal embeddings:
+$$memory = image\_proj(F) + \text{PE}_{2D}(x, y)$$
+This ensures the attention mechanism is aware of the relative distances and orientations between histology features.
+
+##### Local Patch Mixing (Scatter-Gather Conv)
+
+For `decoder` mode, we introduce a **LocalPatchMixer** that uses a depthwise convolution over a local spatial grid:
+$$memory_{mixed} = \text{GELU}(\text{DepthwiseConv2d}(memory_{grid}))$$
+This allows the model to aggregate immediate neighborhood morphology (e.g., 3x3 window) through high-bandwidth spatial kernels before performing global cross-attention with pathway tokens.
+
+### 5. Scalability: Nyström Approximation
 
 To scale effectively to whole-slide contexts or extremely large neighborhoods ($N_H > 1000$), we utilize the **Nyström method** for approximating the self-attention matrix. This reduces the complexity from quadratic $O(N^2)$ to linear $O(N \cdot m)$.
 
@@ -162,3 +186,72 @@ This gives the model a biologically-grounded starting point where each pathway t
 2. **Sparsity**: Applying L1 regularization ($L_{sparse} = \lambda \|\mathbf{W}_{recon}\|_1$) forces the model to learn distinct, sparse gene sets for each pathway.
 3. **Morphology-Guided**: The Cross-Attention mechanism ensures that pathway activity is directly triggered by specific visual features in the histology.
 4. **Biological Prior**: MSigDB initialization constrains the model to discover pathway activations grounded in known biology, enabling faster convergence and more clinically meaningful representations.
+
+---
+
+## 4. Loss Functions and Gene Imbalance
+
+### The Gene Imbalance Problem
+
+Gene expression follows a **heavy-tailed distribution**:
+
+- **Housekeeping genes** (TMSB4X, TPT1, ACTB) can have counts in the thousands.
+- **Signalling genes** (transcription factors, receptors) often have counts of 0–10.
+- **Many genes** are zero-inflated (sparse across spots).
+
+With standard MSE, the model disproportionately optimises for high-expression genes because their squared errors dominate the loss. Low-expression genes — which may be the most biologically interesting — are effectively ignored.
+
+The `--log-transform` flag (`log1p`) is the primary mitigation, compressing the dynamic range from [0, 10000] to [0, 9.2]. Beyond this, we support multiple loss functions that address the problem from different angles.
+
+### Mean Squared Error (MSE) — Magnitude Focus
+
+$$\mathcal{L}_{MSE} = \frac{1}{N \cdot G} \sum_{i=1}^N \sum_{g=1}^G (\hat{y}_{ig} - y_{ig})^2$$
+
+MSE measures **pointwise magnitude error**. Each spot is evaluated independently — there is no notion of spatial coherence. Higher-expression genes contribute proportionally more to the loss.
+
+- **CLI**: `--loss mse` (default)
+- **Strength**: Ensures absolute expression values are accurate.
+- **Weakness**: Biased towards high-expression genes.
+
+### Pearson Correlation Coefficient (PCC) — Spatial Pattern Focus
+
+For each gene $g$, the Pearson correlation across all $N$ spots is:
+
+$$\rho_g = \frac{\sum_{i=1}^N (\hat{y}_{ig} - \bar{\hat{y}}_g)(y_{ig} - \bar{y}_g)}{\sqrt{\sum_{i=1}^N (\hat{y}_{ig} - \bar{\hat{y}}_g)^2} \cdot \sqrt{\sum_{i=1}^N (y_{ig} - \bar{y}_g)^2}}$$
+
+The PCC loss is then:
+
+$$\mathcal{L}_{PCC} = 1 - \frac{1}{G} \sum_{g=1}^G \rho_g$$
+
+PCC is **completely scale-invariant** — it mean-centres and normalises each gene, so it measures only the *spatial pattern*, not *magnitude*. A gene with range [0, 3] contributes equally to a gene with range [100, 5000].
+
+- **CLI**: `--loss pcc`
+- **Strength**: Every gene contributes equally regardless of expression level. Captures spatial coherence.
+- **Weakness**: Ignores absolute magnitude — predictions could be scaled arbitrarily and still achieve PCC = 1.0.
+
+### Comparison
+
+| Property | MSE | PCC |
+| :--- | :--- | :--- |
+| **Optimises for** | Correct magnitude at each spot | Correct spatial pattern per gene |
+| **Scale-invariant?** | No — biased to high-expression genes | Yes — all genes weighted equally |
+| **Spatial awareness?** | None — each spot independent | Yes — evaluates across all spots |
+| **Failure mode** | Ignores low-expression genes | Allows arbitrary magnitude scaling |
+
+### Combined MSE + PCC
+
+A combined objective captures both magnitude and spatial pattern:
+
+$$\mathcal{L}_{combined} = \mathcal{L}_{MSE} + \alpha \cdot \mathcal{L}_{PCC}$$
+
+- **CLI**: `--loss mse_pcc`
+- **Logic**: The combined loss ensures that the model learns to predict both the correct absolute intensity and the correct spatial distribution of gene expression. This is particularly effective for rare cell types or signalling gradients.
+
+### Full Training Objective
+
+The complete loss for the SpatialTranscriptFormer with pathway bottleneck and sparsity regularisation:
+
+$$\mathcal{L} = \underbrace{\mathcal{L}_{task}}_{\text{MSE, PCC, or MSE\_PCC}} + \underbrace{\lambda \|\mathbf{W}_{recon}\|_1}_{\text{Pathway Sparsity}}$$
+
+- **CLI**: `--sparsity-lambda 0.05`
+- The L1 term encourages the gene reconstructor to maintain sparse, pathway-like groupings, preserving the biological structure from MSigDB initialisation during training.
