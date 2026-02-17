@@ -61,7 +61,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device,
             with torch.amp.autocast('cuda', enabled=scaler is not None):
                 if hasattr(model, 'forward_dense') and not getattr(model, 'weak_supervision', False):
                     preds = model.forward_dense(feats, mask=mask)
-                    loss = _compute_masked_mse(preds, genes, mask)
+                    loss = criterion(preds, genes, mask=mask)
                 else:
                     preds = model(feats)
                     bag_target = _compute_bag_target(genes, mask)
@@ -146,7 +146,7 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                     else:
                         outputs = model(images)
 
-                loss = criterion(outputs, targets)
+                loss = criterion(outputs, targets, mask=mask) if whole_slide and hasattr(model, 'forward_dense') and not getattr(model, 'weak_supervision', False) else criterion(outputs, targets)
 
                 # Spatial Attention Correlation (MIL weak supervision study)
                 if attn is not None and whole_slide:

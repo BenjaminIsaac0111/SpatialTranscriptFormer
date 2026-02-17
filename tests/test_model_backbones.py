@@ -42,7 +42,7 @@ def test_attention_mil_backbone():
     model = AttentionMIL(output_dim=num_genes, backbone_name='resnet50', pretrained=False)
     
     x = torch.randn(2, 5, 3, 224, 224) # (B, N, C, H, W)
-    out, attn = model(x)
+    out, attn = model(x, return_attention=True)
     assert out.shape == (2, num_genes)
     assert attn.shape == (2, 5, 1)
 

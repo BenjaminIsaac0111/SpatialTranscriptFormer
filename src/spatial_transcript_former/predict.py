@@ -70,7 +70,7 @@ def plot_histology_overlay(image, coords, values, gene_names, sample_id, scalef=
         # Overlay Predictions
         # pixel_coords[:, 0] = X, pixel_coords[:, 1] = Y
         sc = ax.scatter(pixel_coords[:, 0], pixel_coords[:, 1], c=values[:, i], 
-                        cmap=plt.get_cmap(cmap), alpha=0.6, s=15, edgecolors='none')
+                        cmap=plt.get_cmap(cmap), alpha=0.4, s=15, edgecolors='none')
         
         ax.set_title(f"{sample_id} - {gene_name} Overlay")
         ax.axis('off')
@@ -85,70 +85,125 @@ def plot_histology_overlay(image, coords, values, gene_names, sample_id, scalef=
     plt.close(fig)
     plt.close('all')
 
-def plot_spatial_pathways(coords, activations, sample_id, save_path=None, cmap='jet',
-                          pathway_names=None, pathway_truth=None):
+# Fixed bowel-cancer-relevant pathways (MSigDB Hallmark names, without prefix)
+BOWEL_CANCER_PATHWAYS = [
+    'EPITHELIAL_MESENCHYMAL_TRANSITION',
+    'WNT_BETA_CATENIN_SIGNALING',
+    'INFLAMMATORY_RESPONSE',
+    'ANGIOGENESIS',
+    'APOPTOSIS',
+    'TNFA_SIGNALING_VIA_NFKB',
+]
+
+
+def plot_training_summary(coords, pathway_pred, pathway_truth, pathway_names,
+                          sample_id, histology_img=None, scalef=1.0,
+                          save_path=None, cmap='jet'):
     """
-    Plots spatial maps of pathway activations (top 5 by variance).
-    If pathway_truth is provided, shows truth (top row) vs prediction (bottom row).
+    Unified training visualization: histology + disease-relevant pathways.
+
+    Produces a single figure with:
+        - Row 0: Histology image (if available)
+        - Rows 1-N: Fixed bowel-cancer pathways, truth (left) vs prediction (right)
+
+    Args:
+        coords: (N, 2) spot coordinates.
+        pathway_pred: (N, P) predicted pathway activations.
+        pathway_truth: (N, P) ground-truth pathway activations.
+        pathway_names: List of pathway names (length P).
+        sample_id: Sample identifier for titles.
+        histology_img: Optional H&E image array.
+        scalef: Scale factor for projecting coords onto histology.
+        save_path: Where to save the figure.
+        cmap: Colormap for scatter plots.
     """
-    num_pathways = activations.shape[1]
-    # Select top 5 pathways by prediction variance
-    vars_pred = np.var(activations, axis=0)
-    top_indices = np.argsort(vars_pred)[::-1][:5]
-    
-    num_plots = min(len(top_indices), 5)
-    
-    if num_plots == 0:
-        print("No pathways to plot.")
+    # Find indices for our fixed pathways
+    name_to_idx = {}
+    if pathway_names is not None:
+        for i, name in enumerate(pathway_names):
+            short = name.replace('HALLMARK_', '')
+            name_to_idx[short] = i
+
+    display_pathways = []
+    for pw in BOWEL_CANCER_PATHWAYS:
+        if pw in name_to_idx:
+            display_pathways.append((pw, name_to_idx[pw]))
+
+    if not display_pathways:
+        print("Warning: No bowel cancer pathways found in model. Skipping plot.")
         return
 
-    has_truth = pathway_truth is not None
-    nrows = 2 if has_truth else 1
-    fig, axes = plt.subplots(nrows, num_plots, figsize=(5 * num_plots, 5 * nrows))
-    if num_plots == 1 and nrows == 1:
-        axes = np.array([[axes]])
-    elif num_plots == 1:
-        axes = axes.reshape(nrows, 1)
-    elif nrows == 1:
-        axes = axes.reshape(1, num_plots)
-        
-    for i, idx in enumerate(top_indices):
-        if pathway_names is not None and idx < len(pathway_names):
-            label = pathway_names[idx].replace("HALLMARK_", "")
-        else:
-            label = f"Pathway {idx}"
+    n_pathways = len(display_pathways)
+    has_histology = histology_img is not None
+    n_rows = n_pathways + (1 if has_histology else 0)
 
-        # Truth row
-        if has_truth:
-            ax_t = axes[0, i]
-            sc_t = ax_t.scatter(coords[:, 1], coords[:, 0], c=pathway_truth[:, idx],
-                                cmap=cmap, s=15, edgecolors='none')
-            ax_t.set_title(f"{label}\n(TRUTH)", fontsize=9)
-            ax_t.invert_yaxis()
-            ax_t.set_aspect('equal')
-            ax_t.axis('off')
-            plt.colorbar(sc_t, ax=ax_t, shrink=0.6)
+    fig, axes = plt.subplots(n_rows, 2, figsize=(10, 4 * n_rows),
+                             gridspec_kw={'hspace': 0.35, 'wspace': 0.15})
+    if n_rows == 1:
+        axes = axes.reshape(1, 2)
 
-        # Prediction row
-        row = 1 if has_truth else 0
-        ax_p = axes[row, i]
-        sc_p = ax_p.scatter(coords[:, 1], coords[:, 0], c=activations[:, idx],
-                            cmap=cmap, s=15, edgecolors='none')
-        ax_p.set_title(f"{label}\n(PRED, Var: {vars_pred[idx]:.2f})", fontsize=9)
+    row = 0
+
+    # --- Histology row ---
+    if has_histology:
+        for col in range(2):
+            axes[row, col].imshow(histology_img)
+            axes[row, col].axis('off')
+        axes[row, 0].set_title(f'{sample_id} — H&E', fontsize=10, fontweight='bold')
+        axes[row, 1].set_title('Histology Reference', fontsize=10, fontweight='bold')
+        row += 1
+
+    # --- Pathway rows ---
+    for pw_name, pw_idx in display_pathways:
+        label = pw_name.replace('_', ' ').title()
+
+        # Z-score normalize each independently for display
+        # (truth is in gene-expression space, prediction in model activation space)
+        truth_raw = pathway_truth[:, pw_idx]
+        pred_raw = pathway_pred[:, pw_idx]
+
+        eps = 1e-8
+        truth_vals = (truth_raw - truth_raw.mean()) / (truth_raw.std() + eps)
+        pred_vals = (pred_raw - pred_raw.mean()) / (pred_raw.std() + eps)
+
+        # Shared z-score range across both for visual comparison
+        vmin = min(truth_vals.min(), pred_vals.min())
+        vmax = max(truth_vals.max(), pred_vals.max())
+
+        # Ground truth (left)
+        ax_t = axes[row, 0]
+        sc_t = ax_t.scatter(coords[:, 1], coords[:, 0], c=truth_vals,
+                            cmap=cmap, s=12, edgecolors='none',
+                            vmin=vmin, vmax=vmax)
+        ax_t.set_title(f'{label}\nGround Truth', fontsize=9)
+        ax_t.invert_yaxis()
+        ax_t.set_aspect('equal')
+        ax_t.axis('off')
+        plt.colorbar(sc_t, ax=ax_t, shrink=0.6, pad=0.02)
+
+        # Prediction (right)
+        ax_p = axes[row, 1]
+        sc_p = ax_p.scatter(coords[:, 1], coords[:, 0], c=pred_vals,
+                            cmap=cmap, s=12, edgecolors='none',
+                            vmin=vmin, vmax=vmax)
+        ax_p.set_title(f'{label}\nPrediction', fontsize=9)
         ax_p.invert_yaxis()
         ax_p.set_aspect('equal')
         ax_p.axis('off')
-        plt.colorbar(sc_p, ax=ax_p, shrink=0.6)
+        plt.colorbar(sc_p, ax=ax_p, shrink=0.6, pad=0.02)
 
-    plt.suptitle(f"{sample_id} — Top Pathway Activations", fontweight='bold')
+        row += 1
+
+    fig.suptitle(f'{sample_id} — Pathway Summary', fontsize=12, fontweight='bold', y=1.0)
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"Pathway plot saved to {save_path}")
+        print(f"Training summary saved to {save_path}")
     else:
         plt.show()
     plt.close(fig)
     plt.close('all')
+
 
 def main():
     parser = argparse.ArgumentParser(description="Predict and Visualize Spatial Transcriptomics")

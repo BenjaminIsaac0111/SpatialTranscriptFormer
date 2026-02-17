@@ -14,7 +14,7 @@ import numpy as np
 
 from spatial_transcript_former.models import HE2RNA, ViT_ST, SpatialTranscriptFormer
 from spatial_transcript_former.utils import set_seed
-from spatial_transcript_former.training.losses import PCCLoss
+from spatial_transcript_former.training.losses import PCCLoss, CompositeLoss, MaskedMSELoss
 from spatial_transcript_former.training.engine import train_one_epoch, validate
 from spatial_transcript_former.training.experiment_logger import ExperimentLogger
 from spatial_transcript_former.visualization import run_inference_plot
@@ -59,7 +59,8 @@ def setup_model(args, device):
             fusion_mode=args.fusion_mode,
             masked_quadrants=args.masked_quadrants,
             num_pathways=args.num_pathways,
-            pathway_init=pathway_init
+            pathway_init=pathway_init,
+            use_spatial_pe=args.use_spatial_pe
         )
     elif args.model == 'attention_mil':
         from spatial_transcript_former.models.mil import AttentionMIL
@@ -87,13 +88,15 @@ def setup_criterion(args):
     """Create loss function from CLI args."""
     if args.loss == 'pcc':
         return PCCLoss()
+    elif args.loss == 'mse_pcc':
+        return CompositeLoss(alpha=args.pcc_weight)
     elif args.loss == 'poisson':
         return nn.PoissonNLLLoss(log_input=True)
     elif args.loss == 'logcosh':
         print("Using HuberLoss as proxy for LogCosh")
         return nn.HuberLoss()
     else:
-        return nn.MSELoss()
+        return MaskedMSELoss()
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +171,8 @@ def parse_args():
     g.add_argument('--log-transform', action='store_true', help='Log1p transform targets')
 
     # Loss
-    parser.add_argument('--loss', type=str, default='mse', choices=['mse', 'pcc', 'poisson', 'logcosh'])
+    parser.add_argument('--loss', type=str, default='mse', choices=['mse', 'pcc', 'mse_pcc', 'poisson', 'logcosh'])
+    parser.add_argument('--pcc-weight', type=float, default=1.0, help='Weight for PCC term in mse_pcc loss')
 
     # Model
     g = parser.add_argument_group('Model')
@@ -181,6 +185,8 @@ def parse_args():
     g.add_argument('--fusion-mode', type=str, default='decoder', choices=['decoder', 'jaume'])
     g.add_argument('--use-nystrom', action='store_true')
     g.add_argument('--mask-radius', type=float, default=None)
+    g.add_argument('--no-spatial-pe', action='store_false', dest='use_spatial_pe', help='Disable Spatial Positional Encoding')
+    g.set_defaults(use_spatial_pe=True)
 
     # Training
     g = parser.add_argument_group('Training')
