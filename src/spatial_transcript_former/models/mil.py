@@ -1,3 +1,15 @@
+"""
+Multiple-Instance Learning (MIL) baselines for slide-level gene expression.
+
+Models here aggregate an arbitrary number of patch features into a single
+slide-level prediction, trained with bag-level (mean-expression) supervision.
+
+* ``AttentionMIL``  — gated attention pooling (Ilse et al., 2018)
+* ``TransMIL``      — Nyström Transformer with PPEG positional encoding
+                      (Shao et al., 2021), adapted for regression
+* ``PPEG``          — multi-scale depthwise conv positional encoding module
+* ``TransLayer``    — single Nyström self-attention block used by TransMIL
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -22,7 +34,7 @@ class AttentionMIL(nn.Module):
             self.L = input_dim
             
         self.D = hidden_dim
-        self.K = 1 # attention score dimension
+        self.K = 1 
         
         self.feature_extractor = nn.Sequential(
             nn.Linear(self.L, self.D),
@@ -124,8 +136,6 @@ class TransMIL(nn.Module):
             x = x.unsqueeze(0)
              
         h = self._fc1(x) # [B, N, 512]
-        
-        # PPEG (positional encoding)
         h = self.pos_layer(h) 
         
         # Append CLS token
@@ -153,6 +163,15 @@ class TransMIL(nn.Module):
         return logits
 
 class PPEG(nn.Module):
+    """Pyramid Position Encoding Generator used in TransMIL.
+
+    Applies three parallel depthwise convolutions with kernel sizes 7, 5, and 3
+    and sums their outputs with the input.  When the sequence length *N* is a
+    perfect square (as it typically is for a regular patch grid), the tokens are
+    temporarily reshaped to a 2-D spatial grid (H×W = sqrt(N)×sqrt(N)) so the
+    convolutions encode genuine 2-D proximity.  If *N* is not a perfect square
+    the module is a no-op and the input is returned unchanged.
+    """
     def __init__(self, dim=512):
         super(PPEG, self).__init__()
         self.proj = nn.Conv2d(dim, dim, 7, 1, 7//2, groups=dim)
@@ -177,6 +196,14 @@ class PPEG(nn.Module):
         return x
 
 class TransLayer(nn.Module):
+    """Single pre-norm Nyström self-attention block used inside TransMIL.
+
+    When *return_attn* is ``False`` this is a standard residual block.  When
+    ``True``, a separate scaled dot-product between the CLS token (index 0) and
+    all tokens is computed *after* the Nyström forward pass to approximate the
+    CLS attention map.  This approximation avoids the O(N²) full attention
+    matrix, which would OOM on large whole-slide inputs.
+    """
     def __init__(self, norm_layer=nn.LayerNorm, dim=512):
         super().__init__()
         self.norm = norm_layer(dim)

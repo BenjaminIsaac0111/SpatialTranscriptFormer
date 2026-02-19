@@ -1,3 +1,19 @@
+"""
+Backbone factory for SpatialTranscriptFormer.
+
+Provides ``get_backbone``, a unified factory that returns a feature-extraction
+model together with its output feature dimension.  Supported identifiers:
+
+* ``'resnet50'``      — torchvision ResNet-50 (ImageNet weights)
+* ``'ctranspath'``   — Swin-Tiny with ConvStem, CTransPath weights from HuggingFace
+* ``'gigapath'``     — ProvGigaPath ViT-Giant (gated, HuggingFace)
+* ``'hibou-b'``      — Hibou-B ViT-Base (gated, HuggingFace)
+* ``'hibou-l'``      — Hibou-L ViT-Large (gated, HuggingFace)
+* ``'phikon'``       — Owkin Phikon ViT-Base (HuggingFace)
+* ``'plip'``         — PLIP CLIP visual encoder (HuggingFace)
+* ``'vit_b_16'``     — torchvision ViT-B/16 (ImageNet weights)
+* any timm or torchvision model name — generic fallback
+"""
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -7,8 +23,17 @@ except ImportError:
     timm = None
 
 class ConvStem(nn.Module):
-    """
-    ConvStem, from Original CTransPath implementation
+    """Two-stage strided convolutional stem used by CTransPath.
+
+    Replaces the standard patch-embedding layer in the Swin-Tiny backbone with
+    two 3×3 convolution blocks, each followed by BatchNorm and ReLU.  The first
+    block (stride 2) halves the spatial resolution; the second block (stride 2)
+    halves it again, giving a total stride of 4 — identical to the default
+    patch-size-4 Swin patch embedding, so the rest of the transformer is
+    unchanged.
+
+    Output is permuted to (B, H, W, C) to match the format expected by the
+    timm Swin-Transformer ``forward_features`` path.
     """
     def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=768, norm_layer=None, flatten=True):
         super().__init__()
@@ -16,7 +41,6 @@ class ConvStem(nn.Module):
         assert patch_size == 4
         
         # CTransPath Stem: 3 -> 24 -> 48 -> 96 (if embed_dim=96)
-        # Based on search: 2 stages of stride 2
         l1_embed_dim = embed_dim // 4
         l2_embed_dim = embed_dim // 2
 
@@ -49,10 +73,19 @@ class ConvStem(nn.Module):
         return x
 
 def get_backbone(name, pretrained=True, num_classes=None):
-    """
-    Creates a backbone model and returns both the model and its feature dimension.
-    If num_classes is provided, the model will have a classification/regression head.
-    Otherwise, it returns the feature extractor (head replaced by Identity).
+    """Create a backbone model and return ``(model, feature_dim)``.
+
+    When *num_classes* is given the final linear head is replaced with a new
+    ``nn.Linear(feature_dim, num_classes)`` layer.  When omitted the head is
+    replaced with ``nn.Identity`` so the model returns raw feature vectors.
+
+    Pretrained weights are loaded automatically for most backbones.  Backbones
+    hosted on HuggingFace Hub (CTransPath, Phikon, PLIP, Hibou) are downloaded
+    on first use and cached by ``huggingface_hub``.  GigaPath and Hibou require
+    acceptance of a gated-access agreement on the Hub before downloading.
+
+    Raises ``NotImplementedError`` if *name* is not recognised by timm or
+    torchvision.
     """
     feature_dim = None
     model = None
@@ -141,7 +174,7 @@ def get_backbone(name, pretrained=True, num_classes=None):
         try:
             from huggingface_hub import hf_hub_download
             repo_id = "histai/hibou-b" if name == 'hibou-b' else "histai/hibou-l"
-            arch = "vit_base_patch16_224" if name == 'hibou-b' else "vit_large_patch14_224" # Adjust arch if needed
+            arch = "vit_base_patch16_224" if name == 'hibou-b' else "vit_large_patch14_224"
             
             model = timm.create_model(arch, pretrained=False)
             
@@ -161,7 +194,7 @@ def get_backbone(name, pretrained=True, num_classes=None):
         except Exception as e:
             print(f"Error loading {name}: {e}")
             if "403" in str(e):
-                print(f"Note: {repo_id} might be gated. Please request access on HF Hub.")
+                print(f"Note: {repo_id} requires gated access on HF Hub.")
             raise e
 
     elif name == 'phikon':

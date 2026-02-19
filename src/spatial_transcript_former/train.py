@@ -56,7 +56,6 @@ def setup_model(args, device):
             pretrained=args.pretrained,
             use_nystrom=args.use_nystrom,
             mask_radius=args.mask_radius,
-            fusion_mode=args.fusion_mode,
             masked_quadrants=args.masked_quadrants,
             num_pathways=args.num_pathways,
             pathway_init=pathway_init,
@@ -182,7 +181,6 @@ def parse_args():
     g.add_argument('--no-pretrained', action='store_false', dest='pretrained')
     g.set_defaults(pretrained=True)
     g.add_argument('--num-pathways', type=int, default=50)
-    g.add_argument('--fusion-mode', type=str, default='decoder', choices=['decoder', 'jaume'])
     g.add_argument('--use-nystrom', action='store_true')
     g.add_argument('--mask-radius', type=float, default=None)
     g.add_argument('--no-spatial-pe', action='store_false', dest='use_spatial_pe', help='Disable Spatial Positional Encoding')
@@ -208,7 +206,7 @@ def parse_args():
     g.add_argument('--use-global-context', action='store_true')
     g.add_argument('--global-context-size', type=int, default=128)
     g.add_argument('--compile-backend', type=str, default='inductor')
-    g.add_argument('--masked-quadrants', type=str, nargs='+', default=None)
+    g.add_argument('--masked-quadrants', type=str, nargs='+', default=['H2H'])
     g.add_argument('--plot-pathways', action='store_true')
     g.add_argument('--weak-supervision', action='store_true', help='Bag-level training for MIL')
     g.add_argument('--pathway-init', action='store_true', help='Initialize gene_reconstructor with MSigDB Hallmarks')

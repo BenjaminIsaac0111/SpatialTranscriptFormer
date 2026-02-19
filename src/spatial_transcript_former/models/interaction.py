@@ -1,3 +1,17 @@
+"""
+Pathway-histology interaction layers for SpatialTranscriptFormer.
+
+This module defines the building blocks that fuse learnable pathway tokens
+with histology patch features via self- and cross-attention:
+
+* ``PathwayTokenizer``          — learnable pathway embeddings
+* ``LocalPatchMixer``           — scatter-gather depthwise conv for neighbourhood mixing
+* ``SinusoidalPositionalEncoder`` — 2-D sinusoidal positional embeddings
+* ``EarlyFusionBlock``          — concat-attention-slice wrapper (Jaume-mode)
+* ``MultimodalFusion``          — standard Transformer early fusion
+* ``NystromEncoder``            — Nyström-based early fusion
+* ``SpatialTranscriptFormer``   — the full model
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,7 +55,23 @@ class PathwayTokenizer(nn.Module):
 
 
 class LocalPatchMixer(nn.Module):
-    """Mixes patch features with their spatial neighbors using a Scatter-Gather Conv."""
+    """Mixes each patch's features with its immediate spatial neighbours via a depthwise conv.
+
+    The forward pass performs three steps:
+
+    1. **Scatter** — place each patch feature vector into a 2-D dense grid at its
+       grid-coordinate position.  Coordinates are zero-based and must be
+       integer-like (grid indices, *not* raw pixel coordinates).
+    2. **Depthwise Conv + GELU** — apply a ``kernel_size x kernel_size`` grouped
+       convolution over the spatial grid.  Each channel is processed independently
+       so the parameter count scales with *dim*, not *dim²*.
+    3. **Gather + Residual** — read the convolved values back at the same grid
+       positions and add them to the original features (residual connection).
+
+    A safety guard skips mixing if the bounding-box of grid coordinates exceeds
+    256×256 cells, which would indicate malformed / non-grid coordinates and
+    could allocate prohibitive memory.
+    """
     
     def __init__(self, dim, kernel_size=3):
         super().__init__()
@@ -221,19 +251,13 @@ class EarlyFusionBlock(nn.Module):
         
         x = torch.cat([p_tokens, h_tokens], dim=1)
         
-        # Check if encoder supports/needs mask
-        # Helper: standard transformer accepts src_mask or mask
-        # Nystrom accepts mask
-        
         mask = None
         if self.masked_quadrants:
             mask = self._generate_quadrant_mask(np, nh, p_tokens.device)
             
-        # Dispatch to encoder
-        if isinstance(self.encoder, nn.TransformerEncoder):
-            out = self.encoder(x, mask=mask)
-        else:
-             out = self.encoder(x, mask=mask)
+        # Standard PyTorch MHA and NystromAttention use different mask signatures.
+        # We handle the dispatch here to ensure correct mask application.
+        out = self.encoder(x, mask=mask)
             
         if return_all_tokens:
             return out
@@ -257,16 +281,19 @@ class MultimodalFusion(EarlyFusionBlock):
 
 
 class NystromStack(nn.Module):
-    """Stack of Nystrom Layers for use inside EarlyFusionBlock."""
+    """Sequential stack of Nyström attention layers, compatible with ``EarlyFusionBlock``.
+
+    Each element of *layers* is a ``nn.ModuleList`` of
+    ``(norm1, NystromAttention, norm2, FeedForward)`` sub-modules following a
+    pre-norm residual layout.  The attention mask convention differs from
+    standard PyTorch MHA: ``True`` means *keep* (attend), so the mask is
+    inverted (``~mask``) before being passed to ``NystromAttention``.
+    """
     def __init__(self, layers):
         super().__init__()
         self.layers = nn.ModuleList(layers)
         
     def forward(self, x, mask=None):
-        # Nystrom attention typically expects an inverted mask (True=Keep) compared to
-        # standard PyTorch MHA (True=Ignore). However, implementation specifics vary.
-        # Here we follow the convention: attn_mask = ~mask if mask is not None else None.
-        
         attn_mask = ~mask if mask is not None else None
         
         for norm1, attn, norm2, ff in self.layers:
@@ -306,149 +333,7 @@ class NystromEncoder(EarlyFusionBlock):
         super().__init__(encoder=stack, masked_quadrants=masked_quadrants)
 
 
-class NystromDecoderLayer(nn.Module):
-    """Hybrid layer combining Nystrom Self-Attention and Standard Cross-Attention.
-
-    Optimized for scenarios where queries (Pathways) are few but context (Histology)
-    is vast. Self-attention is efficient (Nystrom), while Cross-attention remains
-    standard as its complexity is already linear with respect to context size.
-    """
-
-    def __init__(self, dim, n_heads, dropout=0.1, num_landmarks=256):
-        """Initializes NystromDecoderLayer.
-
-        Args:
-            dim (int): Hidden dimension.
-            n_heads (int): Heads for multi-head attention.
-            dropout (float): Dropout probability.
-            num_landmarks (int): Nystrom landmarks.
-        """
-        super().__init__()
-        from nystrom_attention import NystromAttention
-
-        self.norm1 = nn.LayerNorm(dim)
-        self.self_attn = NystromAttention(
-            dim=dim, heads=n_heads, dim_head=dim // n_heads,
-            num_landmarks=num_landmarks, dropout=dropout
-        )
-
-        self.norm2 = nn.LayerNorm(dim)
-        # Using manual linear layers and SDPA for memory efficiency
-        self.q_proj = nn.Linear(dim, dim)
-        self.k_proj = nn.Linear(dim, dim)
-        self.v_proj = nn.Linear(dim, dim)
-        self.out_proj = nn.Linear(dim, dim)
-        self.n_heads = n_heads
-        self.dropout_p = dropout
-
-        self.norm3 = nn.LayerNorm(dim)
-        self.ff = nn.Sequential(
-            nn.Linear(dim, dim * 4),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(dim * 4, dim),
-            nn.Dropout(dropout)
-        )
-
-    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None,
-                tgt_key_padding_mask=None, memory_key_padding_mask=None):
-        """Processes tgt through self and cross attention.
-
-        Args:
-            tgt (torch.Tensor): Current state of queries (Pathways).
-            memory (torch.Tensor): Latent features of histology patches.
-            tgt_mask: (Ignored, for API compatibility).
-            memory_mask: (Ignored, for API compatibility).
-            tgt_key_padding_mask (torch.Tensor): Boolean mask for queries.
-            memory_key_padding_mask (torch.Tensor): Boolean mask for context (True=Ignore).
-
-        Returns:
-            torch.Tensor: Updated tgt tokens.
-        """
-        # Self-Attention on Pathways
-        sa_mask = ~tgt_key_padding_mask if tgt_key_padding_mask is not None else None
-        tgt = tgt + self.self_attn(self.norm1(tgt), mask=sa_mask)
-
-        # Cross-Attention (Pathways query Histology)
-        # Use scaled_dot_product_attention for memory efficiency (Flash Attention)
-        q = self.q_proj(self.norm2(tgt))
-        k = self.k_proj(memory)
-        v = self.v_proj(memory)
-        
-        # Reshape for multi-head SDPA
-        b, nq, d = q.shape
-        _, nk, _ = k.shape
-        h = self.n_heads
-        head_dim = d // h
-        
-        q = q.view(b, nq, h, head_dim).transpose(1, 2)
-        k = k.view(b, nk, h, head_dim).transpose(1, 2)
-        v = v.view(b, nk, h, head_dim).transpose(1, 2)
-        
-        # Prepare mask for SDPA using Flash Attention compatible logic
-        # Typically, memory_key_padding_mask is (B, K) where True=Ignore.
-        # SDPA expects a float mask (additive) or bool mask.
-        sdpa_mask = None
-        if memory_key_padding_mask is not None:
-             # Expand to (B, 1, 1, nk) for broadcasting across heads and queries
-             sdpa_mask = memory_key_padding_mask.view(b, 1, 1, nk)
-             # Invert because SDPA mask uses False to ignore in some versions, 
-             # but standard is usually True=Keep for bool masks in attention ops.
-             # We align with Nystrom convention: ~mask.
-             sdpa_mask = ~sdpa_mask
-             
-        attn_out = F.scaled_dot_product_attention(
-            q, k, v, 
-            attn_mask=sdpa_mask,
-            dropout_p=self.dropout_p if self.training else 0.0,
-            is_causal=False
-        )
-        
-        # Combine heads and project back
-        attn_out = attn_out.transpose(1, 2).contiguous().view(b, nq, d)
-        attn_out = self.out_proj(attn_out)
-        
-        tgt = tgt + attn_out
-
-        # Feed Forward
-        tgt = tgt + self.ff(self.norm3(tgt))
-        return tgt
-
-
-class NystromDecoder(nn.Module):
-    """Sequential stack of NystromDecoderLayers for pathway refinement."""
-
-    def __init__(self, layers):
-        """Initializes the decoder with a list of layers.
-
-        Args:
-            layers (list): List of NystromDecoderLayer modules.
-        """
-        super().__init__()
-        self.layers = nn.ModuleList(layers)
-
-    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None,
-                tgt_key_padding_mask=None, memory_key_padding_mask=None):
-        """Passes tgt through all decoder layers.
-
-        Args:
-            tgt (torch.Tensor): Target tokens.
-            memory (torch.Tensor): Memory context.
-            ... (masks for individual attention/padding)
-
-        Returns:
-            torch.Tensor: Re-contextualized target tokens.
-        """
-        out = tgt
-        for layer in self.layers:
-            out = layer(
-                out, memory,
-                tgt_mask=tgt_mask,
-                memory_mask=memory_mask,
-                tgt_key_padding_mask=tgt_key_padding_mask,
-                memory_key_padding_mask=memory_key_padding_mask
-            )
-        return out
+# Removed NystromDecoderLayer and NystromDecoder as we are focusing solely on the Jaume pipeline.
 
 
 class SpatialTranscriptFormer(nn.Module):
@@ -469,7 +354,6 @@ class SpatialTranscriptFormer(nn.Module):
     Attributes:
         num_pathways (int): Number of pathway bottlenecks.
         use_nystrom (bool): Whether to use efficient Nystrom attention.
-        fusion_mode (str): 'decoder' or 'jaume' mode.
     """
 
     def __init__(self,
@@ -483,7 +367,6 @@ class SpatialTranscriptFormer(nn.Module):
                  dropout=0.1,
                  use_nystrom=False,
                  mask_radius=None,
-                 fusion_mode='decoder',
                  masked_quadrants=None,
                  num_landmarks=256,
                  pathway_init=None,
@@ -496,12 +379,11 @@ class SpatialTranscriptFormer(nn.Module):
             backbone_name (str): Identifier for backbone model.
             pretrained (bool): Load pretrained backbone weights.
             token_dim (int): Common embedding dimension.
-            n_heads (int): Hits for attention layers.
+            n_heads (int): Number of attention heads.
             n_layers (int): Number of transformer/interaction layers.
             dropout (float): Dropout probability.
             use_nystrom (bool): Enable linear-complexity attention.
             mask_radius (float, optional): Distance-based masking threshold.
-            fusion_mode (str): Architecture style ('decoder' or 'jaume').
             masked_quadrants (list, optional): Mask configuration for fusion.
             num_landmarks (int): Landmarks for Nystrom attention.
             pathway_init (Tensor, optional): Biological pathway membership
@@ -518,16 +400,15 @@ class SpatialTranscriptFormer(nn.Module):
         self.num_pathways = num_pathways
         self.use_nystrom = use_nystrom
         self.mask_radius = mask_radius
-        self.fusion_mode = fusion_mode
         self.use_spatial_pe = use_spatial_pe
 
         # 1. Image Encoder Backbone
         self.backbone, self.image_feature_dim = get_backbone(backbone_name, pretrained=pretrained)
 
-        # 2. Image Projector - Unified space for multimodal interaction
+        # 2. Image Projector & Spatial Modules
         self.image_proj = nn.Linear(self.image_feature_dim, token_dim)
+        self.local_mixer = LocalPatchMixer(token_dim)
 
-        # 3. Pathway Tokenizer - Learnable latent representations
         self.pathway_tokenizer = PathwayTokenizer(num_pathways, token_dim)
 
         # 3b. Spatial Positional Encoder
@@ -535,48 +416,20 @@ class SpatialTranscriptFormer(nn.Module):
         if use_spatial_pe:
             self.spatial_encoder = SinusoidalPositionalEncoder(token_dim)
 
-        # 4. Fusion Engine
-        self.fusion_engine = None
-        self.decoder_engine = None
-        
-        if fusion_mode == 'jaume':
-            if use_nystrom:
-                self.fusion_engine = NystromEncoder(
-                    token_dim, n_heads, n_layers, dropout=dropout, num_landmarks=num_landmarks,
-                    masked_quadrants=masked_quadrants
-                )
-            else:
-                self.fusion_engine = MultimodalFusion(
-                    token_dim, n_heads, n_layers, dropout=dropout,
-                    masked_quadrants=masked_quadrants
-                )
-        else:  # Decoder Mode
-            # Local Mixing Layer (Depthwise Conv)
-            self.local_mixer = LocalPatchMixer(token_dim)
-            print("Enabled LocalPatchMixer (Scatter-Gather Conv)")
+        # 4. Interaction Engine (Unified Early Fusion)
+        if use_nystrom:
+            self.fusion_engine = NystromEncoder(
+                token_dim, n_heads, n_layers, dropout=dropout, num_landmarks=num_landmarks,
+                masked_quadrants=masked_quadrants
+            )
+        else:
+            self.fusion_engine = MultimodalFusion(
+                token_dim, n_heads, n_layers, dropout=dropout,
+                masked_quadrants=masked_quadrants
+            )
 
-            if use_nystrom:
-                layers = [
-                    NystromDecoderLayer(token_dim, n_heads, dropout=dropout,
-                                        num_landmarks=num_landmarks)
-                    for _ in range(n_layers)
-                ]
-                self.decoder_engine = NystromDecoder(layers)
-            else:
-                decoder_layer = nn.TransformerDecoderLayer(
-                    d_model=token_dim,
-                    nhead=n_heads,
-                    dim_feedforward=2048,
-                    dropout=dropout,
-                    batch_first=True
-                )
-                self.decoder_engine = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
-
-        # 5. Prediction Head (Pathway Bottleneck)
         self.pathway_activator = nn.Linear(token_dim, 1)
         self.gene_reconstructor = nn.Linear(num_pathways, num_genes)
-        
-        # Initialize gene_reconstructor weights...
 
         if pathway_init is not None:
             with torch.no_grad():
@@ -586,8 +439,7 @@ class SpatialTranscriptFormer(nn.Module):
                 self.gene_reconstructor.bias.zero_()
             print("Initialized gene_reconstructor with MSigDB Hallmarks")
 
-        # 6. Dense Head (Whole Slide Mode)
-        # Predicts genes directly from token dimension for local patch predictions.
+        # Dense Head (Whole Slide Mode)
         self.gene_head = nn.Linear(token_dim, num_genes)
 
     def get_sparsity_loss(self):
@@ -666,20 +518,8 @@ class SpatialTranscriptFormer(nn.Module):
         # 2. Retrieve learnable pathway tokens
         tgt = self.pathway_tokenizer(b)
 
-        # 3. Process interactions
-        if self.fusion_mode == 'jaume':
-            out = self.fusion_engine(p_tokens=tgt, h_tokens=memory)
-        else:
-            # Decoder processes neighborhood with optional spatial gating
-            key_mask = None
-            if rel_coords is not None and self.mask_radius is not None:
-                key_mask = self._generate_spatial_mask(rel_coords)
-
-            out = self.decoder_engine(
-                tgt,
-                memory,
-                memory_key_padding_mask=key_mask
-            )
+        # 3. Process Interactions (Unified Early Fusion Path)
+        out = self.fusion_engine(p_tokens=tgt, h_tokens=memory)
 
         # 4. Project focused pathway tokens back to gene space
         # We project each pathway token to a scalar activation, then use these
@@ -726,28 +566,17 @@ class SpatialTranscriptFormer(nn.Module):
         # 2. Retrieve learnable pathway tokens (global context)
         pathway_tokens = self.pathway_tokenizer(b) # (B, P, D)
 
-        # 3. Perform dense interaction
-        if self.fusion_mode == 'jaume':
-            # Jaume mode: Early fusion via concatenation
-            # The MultimodalFusion/NystromEncoder class handles the concatenation and masking
-            all_tokens = self.fusion_engine(
-                p_tokens=pathway_tokens,
-                h_tokens=memory,
-                return_all_tokens=True
-            )
-            # all_tokens is (B, Np+Nh, D)
-            # We need the Histology tokens: indices [Np:]
-            np = pathway_tokens.shape[1]
-            context_features = all_tokens[:, np:, :]
-        else:
-            # Decoder processes neighborhood with optional spatial gating
-            # NOTE: 'tgt_key_padding_mask' handles the self-attention on patches (x)
-            # We pass 'mask' (True=Padding) to it.
-            context_features = self.decoder_engine(
-                tgt=memory, 
-                memory=pathway_tokens, 
-                tgt_key_padding_mask=mask
-            )
+        # 3. Perform dense interaction (Global Patch-to-Patch + Pathway context)
+        # The MultimodalFusion/NystromEncoder class handles the concatenation and quadrant masking.
+        all_tokens = self.fusion_engine(
+            p_tokens=pathway_tokens,
+            h_tokens=memory,
+            return_all_tokens=True
+        )
+        
+        # Sliced Histology tokens: indices [Np:]
+        np = pathway_tokens.shape[1]
+        context_features = all_tokens[:, np:, :]
 
         # 4. Dense prediction head (Pathway Bottleneck enforcement)
         # Project updated patch tokens onto pathway embeddings: (B, N, D) @ (B, D, P) -> (B, N, P)
