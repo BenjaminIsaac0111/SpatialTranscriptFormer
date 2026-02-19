@@ -1,11 +1,13 @@
 import torch
 import time
+import pytest
 
 def foo(x, y):
     a = torch.sin(x)
     b = torch.cos(y)
     return a + b
 
+@pytest.mark.parametrize("backend", ["cudagraphs", "eager"])
 def test_compile_backend(backend):
     if not hasattr(torch, 'compile'):
         print("torch.compile not found!")

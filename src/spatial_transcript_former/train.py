@@ -288,8 +288,8 @@ def main():
         # Save latest
         save_checkpoint(model, optimizer, scaler, epoch, best_val_loss, args.output_dir, args.model)
 
-        # Periodic visualization
-        if val_ids:
+        # Periodic visualization (only when --plot-pathways is set)
+        if args.plot_pathways and val_ids:
             run_inference_plot(model, args, val_ids[0], epoch, device)
 
     # 6. Finalize

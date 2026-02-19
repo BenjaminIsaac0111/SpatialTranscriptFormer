@@ -658,6 +658,11 @@ class SpatialTranscriptFormer(nn.Module):
             pe = self.spatial_encoder(rel_coords)
             memory = memory + pe
 
+        # 1c. Local Patch Mixing (Conv)
+        if hasattr(self, 'local_mixer') and rel_coords is not None:
+            # Enforce mixing of histology features before they attend to pathways
+            memory = self.local_mixer(memory, rel_coords)
+
         # 2. Retrieve learnable pathway tokens
         tgt = self.pathway_tokenizer(b)
 
@@ -713,6 +718,10 @@ class SpatialTranscriptFormer(nn.Module):
         if self.use_spatial_pe and coords is not None:
              pe = self.spatial_encoder(coords)
              memory = memory + pe
+
+        # 1c. Local Patch Mixing (Conv)
+        if hasattr(self, 'local_mixer') and coords is not None:
+             memory = self.local_mixer(memory, coords)
 
         # 2. Retrieve learnable pathway tokens (global context)
         pathway_tokens = self.pathway_tokenizer(b) # (B, P, D)

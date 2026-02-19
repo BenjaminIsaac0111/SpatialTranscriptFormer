@@ -133,9 +133,7 @@ def setup_dataloaders(args, train_ids, val_ids):
         train_transform = norm
         if args.augment:
             train_transform = transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-                transforms.RandomRotation(90),
+                # Note: Rotations/Flips are now handled DIHEDRALLY inside HEST_Dataset for coord sync
                 transforms.ColorJitter(brightness=0.1, contrast=0.1),
                 norm
             ])
@@ -147,7 +145,7 @@ def setup_dataloaders(args, train_ids, val_ids):
             print("Warning: Global context only supported with pre-computed features.")
         train_loader = get_hest_dataloader(args.data_dir, train_ids, batch_size=args.batch_size, shuffle=True, 
                                           num_genes=args.num_genes, n_neighbors=args.n_neighbors,
-                                          transform=train_transform)
+                                          transform=train_transform, augment=args.augment)
         val_loader = get_hest_dataloader(args.data_dir, val_ids, batch_size=args.batch_size, shuffle=False, 
                                         num_genes=args.num_genes, n_neighbors=args.n_neighbors,
                                         transform=val_transform)

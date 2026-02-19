@@ -24,18 +24,20 @@ def plot_spatial_genes(coords, truth, pred, gene_names, sample_id, save_path=Non
         gene_name = gene_names[i]
         
         # Truth
-        sc = axes[i, 0].scatter(coords[:, 1], coords[:, 0], c=truth[:, i],
+        # HEST coords are (x, y). Scatter takes (x, y). 
+        # imshow is y-down.
+        sc = axes[i, 0].scatter(coords[:, 0], coords[:, 1], c=truth[:, i],
                                 cmap=cmap, s=10, edgecolors='none')
         axes[i, 0].set_title(f"{sample_id} - {gene_name} (TRUTH)")
-        axes[i, 0].invert_yaxis()
+        axes[i, 0].invert_yaxis() # Match image space
         axes[i, 0].set_aspect('equal')
         plt.colorbar(sc, ax=axes[i, 0], shrink=0.6)
         
         # Prediction
-        sc = axes[i, 1].scatter(coords[:, 1], coords[:, 0], c=pred[:, i],
+        sc = axes[i, 1].scatter(coords[:, 0], coords[:, 1], c=pred[:, i],
                                 cmap=cmap, s=10, edgecolors='none')
         axes[i, 1].set_title(f"{sample_id} - {gene_name} (PRED)")
-        axes[i, 1].invert_yaxis()
+        axes[i, 1].invert_yaxis() # Match image space
         axes[i, 1].set_aspect('equal')
         plt.colorbar(sc, ax=axes[i, 1], shrink=0.6)
 
@@ -100,11 +102,12 @@ def plot_training_summary(coords, pathway_pred, pathway_truth, pathway_names,
                           sample_id, histology_img=None, scalef=1.0,
                           save_path=None, cmap='jet'):
     """
-    Unified training visualization: histology + disease-relevant pathways.
+    Compact landscape training visualization dashboard.
 
-    Produces a single figure with:
-        - Row 0: Histology image (if available)
-        - Rows 1-N: Fixed bowel-cancer pathways, truth (left) vs prediction (right)
+    Layout:
+        [Histology] | [GT pw1][Pred pw1][GT pw2][Pred pw2]
+                    | [GT pw3][Pred pw3][GT pw4][Pred pw4]
+                    | [GT pw5][Pred pw5][GT pw6][Pred pw6]
 
     Args:
         coords: (N, 2) spot coordinates.
@@ -117,6 +120,8 @@ def plot_training_summary(coords, pathway_pred, pathway_truth, pathway_names,
         save_path: Where to save the figure.
         cmap: Colormap for scatter plots.
     """
+    import matplotlib.gridspec as gridspec
+
     # Find indices for our fixed pathways
     name_to_idx = {}
     if pathway_names is not None:
@@ -133,71 +138,84 @@ def plot_training_summary(coords, pathway_pred, pathway_truth, pathway_names,
         print("Warning: No bowel cancer pathways found in model. Skipping plot.")
         return
 
-    n_pathways = len(display_pathways)
+    n_per_row = 2  # pathways per row
+    n_pw = len(display_pathways)
+    n_rows = int(np.ceil(n_pw / n_per_row))  # 3 rows for 6 pathways
     has_histology = histology_img is not None
-    n_rows = n_pathways + (1 if has_histology else 0)
 
-    fig, axes = plt.subplots(n_rows, 2, figsize=(10, 4 * n_rows),
-                             gridspec_kw={'hspace': 0.35, 'wspace': 0.15})
-    if n_rows == 1:
-        axes = axes.reshape(1, 2)
+    vis_coords = coords * scalef if has_histology else coords
 
-    row = 0
+    # --- Compact landscape figure (dark background) ---
+    fig = plt.figure(figsize=(18, 5 * n_rows), constrained_layout=False)
+    fig.patch.set_facecolor('#1a1a2e')
 
-    # --- Histology row ---
+    # Outer grid: [1 histology col | 3× wider pathway grid]
+    outer = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[1, 3],
+                              left=0.03, right=0.97, top=0.92, bottom=0.03,
+                              wspace=0.06)
+
+    # --- Left: Histology panel ---
+    ax_hist = fig.add_subplot(outer[0, 0])
     if has_histology:
-        for col in range(2):
-            axes[row, col].imshow(histology_img)
-            axes[row, col].axis('off')
-        axes[row, 0].set_title(f'{sample_id} — H&E', fontsize=10, fontweight='bold')
-        axes[row, 1].set_title('Histology Reference', fontsize=10, fontweight='bold')
-        row += 1
+        ax_hist.imshow(histology_img)
+    ax_hist.set_title('Histology', fontsize=13, color='white', pad=8)
+    ax_hist.axis('off')
+    ax_hist.set_facecolor('#0d0d1a')
 
-    # --- Pathway rows ---
-    for pw_name, pw_idx in display_pathways:
+    # --- Right: n_rows × (n_per_row*2) grid of GT|Pred panels ---
+    n_cols = n_per_row * 2
+    inner = gridspec.GridSpecFromSubplotSpec(n_rows, n_cols,
+                                             subplot_spec=outer[0, 1],
+                                             hspace=0.40, wspace=0.06)
+
+    for idx, (pw_name, pw_idx) in enumerate(display_pathways):
+        row   = idx // n_per_row
+        col_l = (idx % n_per_row) * 2  # GT panel column
+        col_r = col_l + 1              # Pred panel column
+
         label = pw_name.replace('_', ' ').title()
+        if len(label) > 26:
+            label = label[:23] + '...'
 
-        # Z-score normalize each independently for display
-        # (truth is in gene-expression space, prediction in model activation space)
         truth_raw = pathway_truth[:, pw_idx]
-        pred_raw = pathway_pred[:, pw_idx]
+        pred_raw  = pathway_pred[:, pw_idx]
 
         eps = 1e-8
         truth_vals = (truth_raw - truth_raw.mean()) / (truth_raw.std() + eps)
-        pred_vals = (pred_raw - pred_raw.mean()) / (pred_raw.std() + eps)
+        pred_vals  = (pred_raw  - pred_raw.mean())  / (pred_raw.std()  + eps)
 
-        # Shared z-score range across both for visual comparison
         vmin = min(truth_vals.min(), pred_vals.min())
         vmax = max(truth_vals.max(), pred_vals.max())
 
-        # Ground truth (left)
-        ax_t = axes[row, 0]
-        sc_t = ax_t.scatter(coords[:, 1], coords[:, 0], c=truth_vals,
-                            cmap=cmap, s=12, edgecolors='none',
+        for col, vals, suffix in [(col_l, truth_vals, 'Truth'), (col_r, pred_vals, 'Pred')]:
+            ax = fig.add_subplot(inner[row, col])
+            ax.set_facecolor('#0d0d1a')
+
+            if has_histology:
+                ax.imshow(histology_img, alpha=0.25)
+
+            sc = ax.scatter(vis_coords[:, 0], vis_coords[:, 1], c=vals,
+                            cmap=cmap, s=6, edgecolors='none',
                             vmin=vmin, vmax=vmax)
-        ax_t.set_title(f'{label}\nGround Truth', fontsize=9)
-        ax_t.invert_yaxis()
-        ax_t.set_aspect('equal')
-        ax_t.axis('off')
-        plt.colorbar(sc_t, ax=ax_t, shrink=0.6, pad=0.02)
 
-        # Prediction (right)
-        ax_p = axes[row, 1]
-        sc_p = ax_p.scatter(coords[:, 1], coords[:, 0], c=pred_vals,
-                            cmap=cmap, s=12, edgecolors='none',
-                            vmin=vmin, vmax=vmax)
-        ax_p.set_title(f'{label}\nPrediction', fontsize=9)
-        ax_p.invert_yaxis()
-        ax_p.set_aspect('equal')
-        ax_p.axis('off')
-        plt.colorbar(sc_p, ax=ax_p, shrink=0.6, pad=0.02)
+            if not has_histology:
+                ax.invert_yaxis()
+            ax.set_aspect('equal')
+            ax.axis('off')
+            ax.set_title(f'{label}\n{suffix}', fontsize=9, color='white', pad=4)
 
-        row += 1
+            # Colorbar only on the Pred panel to save space
+            if suffix == 'Pred':
+                cb = plt.colorbar(sc, ax=ax, shrink=0.75, pad=0.03)
+                cb.ax.tick_params(labelsize=7, colors='white')
+                cb.outline.set_edgecolor('white')
 
-    fig.suptitle(f'{sample_id} — Pathway Summary', fontsize=12, fontweight='bold', y=1.0)
-    plt.tight_layout()
+    fig.suptitle(f'{sample_id}  —  Pathway Activation Summary',
+                 fontsize=15, fontweight='bold', color='white', y=0.97)
+
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight',
+                    facecolor=fig.get_facecolor())
         print(f"Training summary saved to {save_path}")
     else:
         plt.show()
