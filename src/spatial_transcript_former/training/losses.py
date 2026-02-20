@@ -47,15 +47,14 @@ class PCCLoss(nn.Module):
                 target = target[valid]
 
         # Centre per-spot
-        vx = preds - preds.mean(dim=1, keepdim=True)
-        vy = target - target.mean(dim=1, keepdim=True)
+        vx = preds - preds.mean(dim=0, keepdim=True)
+        vy = target - target.mean(dim=0, keepdim=True)
 
         # Correlation
         cost = (
-            torch.sum(vx * vy, dim=1)
-            / (torch.sqrt(torch.sum(vx ** 2, dim=1))
-               * torch.sqrt(torch.sum(vy ** 2, dim=1))
-               + self.eps)
+            torch.sum(vx * vy, dim=0)
+            / (torch.sqrt(torch.sum(vx ** 2, dim=0) + self.eps)
+               * torch.sqrt(torch.sum(vy ** 2, dim=0) + self.eps))
         )
         return 1 - cost.mean()
 
@@ -102,10 +101,13 @@ class CompositeLoss(nn.Module):
         eps:   Numerical stability for PCC. Default 1e-8.
     """
 
-    def __init__(self, alpha=1.0, eps=1e-8):
+    def __init__(self, alpha=1.0, eps=1e-8, mse_type='mse'):
         super().__init__()
         self.alpha = alpha
-        self.mse = MaskedMSELoss()
+        if mse_type == 'huber':
+            self.mse = MaskedHuberLoss()
+        else:
+            self.mse = MaskedMSELoss()
         self.pcc = PCCLoss(eps=eps)
 
     def forward(self, preds, target, mask=None):
@@ -121,3 +123,22 @@ class CompositeLoss(nn.Module):
         mse_val = self.mse(preds, target, mask)
         pcc_val = self.pcc(preds, target, mask)
         return mse_val + self.alpha * pcc_val
+
+
+class MaskedHuberLoss(nn.Module):
+    """
+    Huber loss (SmoothL1) with optional masking.
+    Robust to outliers.
+    """
+    def __init__(self, delta=1.0):
+        super().__init__()
+        self.loss = nn.HuberLoss(delta=delta, reduction='none')
+
+    def forward(self, preds, target, mask=None):
+        loss = self.loss(preds, target)
+        
+        if mask is not None and preds.dim() == 3:
+            valid = ~mask.unsqueeze(-1).expand_as(loss)
+            return (loss * valid.float()).sum() / valid.sum()
+            
+        return loss.mean()

@@ -11,8 +11,8 @@ import torch
 # Add src to path
 sys.path.append(os.path.abspath('src'))
 from spatial_transcript_former.models.interaction import SpatialTranscriptFormer
-from spatial_transcript_former.data.dataset import HEST_FeatureDataset, load_global_genes
-from spatial_transcript_former.data.pathways import get_pathway_init
+from spatial_transcript_former.data.dataset import HEST_FeatureDataset, load_global_genes, load_gene_expression_matrix
+from spatial_transcript_former.data.pathways import get_pathway_init, MSIGDB_URLS
 
 def load_histology(h5ad_path):
     """Load the downscaled histology image and scale factor."""
@@ -57,16 +57,35 @@ def load_model_and_predict(checkpoint_path, args, sample_id, device):
     else:
         state_dict = checkpoint
 
-    # Infer config (simplistic)
+    # Load global genes logic
+    try:
+        common_gene_names = load_global_genes(args.data_dir, args.num_genes)
+    except:
+        common_gene_names = None
+
+    # Get pathway names and membership matrix for GT computation
+    urls = [MSIGDB_URLS['hallmarks'], MSIGDB_URLS['c2_kegg'], MSIGDB_URLS['c2_medicus'], MSIGDB_URLS['c2_cgp']]
+    membership_tensor, pathway_names = get_pathway_init(
+        common_gene_names,
+        gmt_urls=urls,
+        filter_names=getattr(args, 'pathways', None),
+        cache_dir=os.path.join(args.data_dir, '.cache'),
+        verbose=False
+    )
+    membership = membership_tensor.cpu().numpy() # (P, G)
+    
+    # Infer config
     if 'pathway_tokenizer.pathway_embeddings' in state_dict:
         _, num_pathways, token_dim = state_dict['pathway_tokenizer.pathway_embeddings'].shape
+        if num_pathways != membership.shape[0]:
+            print(f"Warning: Model has {num_pathways} pathways, parsed {membership.shape[0]}")
     else:
-        num_pathways = 50
+        num_pathways = membership.shape[0]
         token_dim = 512 # guess
     
     print(f"Inferred: {num_pathways} pathways, {token_dim} dim")
 
-    # Reconstruct model (assuming default architecture options for now)
+    # Reconstruct model
     # Ideally we'd pickle the args, but we'll use defaults + CLI overrides if we had them
     # For now, hardcode the most likely config or rely on the user to match?
     # We'll use the visualize_top_patches approach
@@ -76,7 +95,6 @@ def load_model_and_predict(checkpoint_path, args, sample_id, device):
         backbone_name=args.backbone,
         token_dim=token_dim,
         use_nystrom=args.use_nystrom,
-        fusion_mode='decoder', # Default
         use_spatial_pe=True # Default true now
     )
     
@@ -87,7 +105,7 @@ def load_model_and_predict(checkpoint_path, args, sample_id, device):
     model.to(device)
     model.eval()
 
-    # Data Loading for Features
+    # Data Loading for Features and Genes
     feat_dir_name = 'he_features' if args.backbone == 'resnet50' else f"he_features_{args.backbone}"
     feature_path = os.path.join(args.data_dir, feat_dir_name, f"{sample_id}.pt")
     if not os.path.exists(feature_path):
@@ -96,37 +114,42 @@ def load_model_and_predict(checkpoint_path, args, sample_id, device):
     st_dir = os.path.join(args.data_dir, 'st')
     h5ad_path = os.path.join(st_dir, f"{sample_id}.h5ad")
 
-    # Load global genes logic
-    try:
-        common_gene_names = load_global_genes(args.data_dir, args.num_genes)
-    except:
-        common_gene_names = None
-
     ds = HEST_FeatureDataset(
         feature_path, h5ad_path, num_genes=args.num_genes,
         selected_gene_names=common_gene_names,
         whole_slide_mode=True
     )
 
-    feats, _, coords = ds[0]
+    feats, targets, coords = ds[0]
     feats = feats.unsqueeze(0).to(device)
-    coords = coords.unsqueeze(0).to(device)
-
+    
     print("Running inference on whole slide...")
     with torch.no_grad():
-        # inference without coords to match visualization.py behavior (avoids PE grid artifacts)
         _, pathway_activations = model.forward_dense(feats, return_pathways=True)
     
     # (1, N, P) -> (N, P)
-    activations = pathway_activations.squeeze(0).cpu().numpy()
+    pred_activations = pathway_activations.squeeze(0).cpu().numpy()
     
-    # Get pathway names
-    from spatial_transcript_former.data.pathways import download_hallmarks_gmt, parse_gmt
-    gmt_path = download_hallmarks_gmt(os.path.join(args.data_dir, '.cache'))
-    pathway_dict = parse_gmt(gmt_path)
-    pathway_names = list(pathway_dict.keys())
+    # --- Compute Ground Truth Pathways ---
+    # Project log-transformed genes: (N, G) @ (G, P) -> (N, P)
+    # Target in HEST_FeatureDataset is typically log1p transformed
+    # We verify alignment: targets is (N, G)
+    truth_activations = targets.numpy() @ membership.T
     
-    return activations, pathway_names
+    # Normalize truth for visualization (z-score like prediction latent space)
+    truth_activations = (truth_activations - truth_activations.mean(axis=0)) / (truth_activations.std(axis=0) + 1e-8)
+    
+    # Compute Pearson Correlation per pathway
+    correlations = {}
+    from scipy.stats import pearsonr
+    for i, name in enumerate(pathway_names):
+        try:
+            r, _ = pearsonr(pred_activations[:, i], truth_activations[:, i])
+            correlations[name] = r
+        except:
+            correlations[name] = 0.0
+
+    return pred_activations, truth_activations, correlations, pathway_names
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive WSI Viewer for HEST")
@@ -138,6 +161,13 @@ def main():
     parser.add_argument('--backbone', type=str, default='ctranspath')
     parser.add_argument('--num-genes', type=int, default=1000)
     parser.add_argument('--use-nystrom', action='store_true')
+    parser.add_argument('--pathways', nargs='+', default=[
+        'KEGG_COLORECTAL_CANCER', 
+        'GRADE_COLON_CANCER_UP', 
+        'GRADE_COLON_CANCER_DN', 
+        'GRADE_COLON_AND_RECTAL_CANCER_UP', 
+        'GRADE_COLON_AND_RECTAL_CANCER_DN'
+    ], help='Optional list of MSigDB pathway names to target')
     
     args = parser.parse_args()
 
@@ -170,16 +200,20 @@ def main():
     tree = KDTree(scaled_coords)
 
     # 3. Optional: Run Inference
-    activations = None
+    pred_activations = None
+    truth_activations = None
+    correlations = {}
     pathway_names = []
     if args.checkpoint:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         try:
-            activations, pathway_names = load_model_and_predict(args.checkpoint, args, sample_id, device)
-            print(f"Inference complete. Activations: {activations.shape}")
+            pred_activations, truth_activations, correlations, pathway_names = load_model_and_predict(args.checkpoint, args, sample_id, device)
+            print(f"Inference complete. Preds: {pred_activations.shape}, Truth: {truth_activations.shape}")
         except Exception as e:
             print(f"Error running inference: {e}")
-            activations = None
+            import traceback
+            traceback.print_exc()
+            pred_activations = None
 
     # 4. Setup Visualization
     fig, ax = plt.subplots(figsize=(14, 10))
@@ -195,7 +229,7 @@ def main():
     h5_handle = h5py.File(h5_path, 'r')
 
     # 5. Controls
-    if activations is not None:
+    if pred_activations is not None:
         # Pathway Selector
         button_ax = plt.axes([0.02, 0.05, 0.25, 0.85]) 
         button_ax.set_title("Select Pathway", fontsize=10)
@@ -212,9 +246,16 @@ def main():
         for label in radio.labels:
             label.set_fontsize(8)
 
-        # Smoothing Checkbox
-        smooth_ax = plt.axes([0.02, 0.92, 0.25, 0.05])
-        check = CheckButtons(smooth_ax, ['Smooth'], [False])
+        # Smoothing & Truth Toggles
+        check_ax = plt.axes([0.02, 0.90, 0.25, 0.08])
+        check = CheckButtons(check_ax, ['Smooth', 'Show Truth'], [False, False])
+        
+        # Stats label
+        stats_ax = plt.axes([0.02, 0.01, 0.25, 0.03])
+        stats_ax.axis('off')
+        corr_text = stats_ax.text(0.5, 0.5, "Alignment: N/A", ha='center', va='center', 
+                                  color='white', fontsize=10, fontweight='bold')
+        fig.patch.set_facecolor('#1a1a2e') # Professional dark background
 
         # Alpha Slider
         alpha_ax = plt.axes([0.3, 0.02, 0.4, 0.03])
@@ -245,29 +286,35 @@ def main():
             scatter.set_array(None)
             scatter.set_color('r')
             scatter.set_alpha(0.3)
-            scatter.set_sizes([5] * len(scaled_coords))
-            
             if current_pathway is None or current_pathway == '(None)':
                 ax.set_title(f"Sample: {sample_id}")
+                corr_text.set_text("Alignment: N/A")
                 fig.canvas.draw_idle()
                 return
 
             print(f"Visualizing: {current_pathway}")
             idx = pathway_names.index(current_pathway)
-            vals = activations[:, idx]
             
             is_smooth = check.get_status()[0]
+            show_truth = check.get_status()[1]
             alpha_val = alpha_slider.val
             
+            # Select target data
+            vals = truth_activations[:, idx] if show_truth else pred_activations[:, idx]
+            mode_str = "TRUTH" if show_truth else "PRED"
+            
+            # Update Correlation
+            r = correlations.get(current_pathway, 0.0)
+            corr_text.set_text(f"Alignment (r): {r:.3f}")
+            corr_text.set_color('lime' if r > 0.6 else 'orange' if r > 0.3 else 'red')
+
             if is_smooth:
                 # Hide scatter (make it invisible but kept for clicking)
                 scatter.set_visible(False)
                 
-                # Triangulate and Contour
-                # We need to triangulate on the fly? or once?
-                # Just let tricontourf handle it.
-                cntr = ax.tricontourf(scaled_coords[:, 0], scaled_coords[:, 1], vals, 
-                                      levels=20, cmap='jet', alpha=alpha_val)
+                # tripcolor with Gouraud shading creates a smooth heatmap effect
+                cntr = ax.tripcolor(scaled_coords[:, 0], scaled_coords[:, 1], vals, 
+                                    shading='gouraud', cmap='jet', alpha=alpha_val)
                 contours = cntr
             else:
                 scatter.set_visible(True)
@@ -276,7 +323,7 @@ def main():
                 scatter.set_alpha(alpha_val)
                 scatter.set_sizes([15] * len(vals))
             
-            ax.set_title(f"Sample: {sample_id} | Overlay: {current_pathway}")
+            ax.set_title(f"Sample: {sample_id} | {mode_str}: {current_pathway}")
             fig.canvas.draw_idle()
 
         def change_pathway(label):
@@ -321,11 +368,12 @@ def main():
         
         # Check current selection from radio buttons if available
         if radio and radio.value_selected != '(None)':
-             p_name = radio.value_selected
-             if p_name in pathway_names:
-                 p_idx = pathway_names.index(p_name)
-                 score = activations[idx, p_idx]
-                 title += f"\n{p_name}: {score:.4f}"
+              p_name = radio.value_selected
+              if p_name in pathway_names:
+                  p_idx = pathway_names.index(p_name)
+                  p_score = pred_activations[idx, p_idx]
+                  t_score = truth_activations[idx, p_idx]
+                  title += f"\n{p_name}\nPred: {p_score:.3f} | Truth: {t_score:.3f}"
                 
         new_ax.set_title(title)
         new_ax.axis('off')

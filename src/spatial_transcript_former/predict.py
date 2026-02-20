@@ -130,12 +130,26 @@ def plot_training_summary(coords, pathway_pred, pathway_truth, pathway_names,
             name_to_idx[short] = i
 
     display_pathways = []
-    for pw in BOWEL_CANCER_PATHWAYS:
-        if pw in name_to_idx:
-            display_pathways.append((pw, name_to_idx[pw]))
+    if pathway_names is not None:
+        if len(pathway_names) <= 6:
+            # If the model only predicted a few pathways, just show them all!
+            for pw in pathway_names:
+                if pw.replace('HALLMARK_', '') in name_to_idx:
+                    display_pathways.append((pw.replace('HALLMARK_', ''), name_to_idx[pw.replace('HALLMARK_', '')]))
+        else:
+            # Otherwise filter by bowel cancer
+            for pw in BOWEL_CANCER_PATHWAYS:
+                if pw in name_to_idx:
+                    display_pathways.append((pw, name_to_idx[pw]))
+
+        if not display_pathways:
+            # Fallback to first 6 pathways
+            for pw in pathway_names[:6]:
+                if pw.replace('HALLMARK_', '') in name_to_idx:
+                    display_pathways.append((pw.replace('HALLMARK_', ''), name_to_idx[pw.replace('HALLMARK_', '')]))
 
     if not display_pathways:
-        print("Warning: No bowel cancer pathways found in model. Skipping plot.")
+        print("Warning: No viable pathways found in model to display. Skipping plot.")
         return
 
     n_per_row = 2  # pathways per row
@@ -233,7 +247,6 @@ def main():
     parser.add_argument('--output-dir', type=str, default='./results')
     parser.add_argument('--n-neighbors', type=int, default=0, help='Number of spatial neighbors to use')
     parser.add_argument('--use-nystrom', action='store_true', help='Use Nystrom attention for linear complexity')
-    parser.add_argument('--fusion-mode', type=str, default='decoder', choices=['decoder', 'jaume'], help='Fusion mode for SpatialTranscriptFormer')
     parser.add_argument('--num-pathways', type=int, default=50, help='Number of pathways in the bottleneck')
     parser.add_argument('--backbone', type=str, default='resnet50', help='Backbone for feature extraction')
     parser.add_argument('--plot-pathways', action='store_true', help='Visualize pathway activations')
@@ -259,7 +272,6 @@ def main():
         model = SpatialTranscriptFormer(
             num_genes=args.num_genes,
             use_nystrom=args.use_nystrom,
-            fusion_mode=args.fusion_mode,
             num_pathways=args.num_pathways,
             backbone_name=args.backbone
         )

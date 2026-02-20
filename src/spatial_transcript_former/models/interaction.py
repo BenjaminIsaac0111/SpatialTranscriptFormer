@@ -469,6 +469,38 @@ class SpatialTranscriptFormer(nn.Module):
         mask = dists > self.mask_radius
         return mask
 
+    def _normalize_coords(self, coords):
+        """Auto-normalizes coordinates to integer grid indices."""
+        with torch.no_grad():
+            b, n, _ = coords.shape
+            normalized_coords = coords.clone()
+            
+            for i in range(b):
+                c = coords[i] # (N, 2)
+                # Find unique X and Y coordinates
+                x_vals = torch.unique(c[:, 0])
+                y_vals = torch.unique(c[:, 1])
+                
+                # Compute differences between sorted unique values
+                dx = x_vals[1:] - x_vals[:-1]
+                dy = y_vals[1:] - y_vals[:-1]
+                
+                steps = torch.cat([dx, dy])
+                # We assume "1.0" is the target unit step.
+                valid_steps = steps[steps > 0.5]
+                
+                if valid_steps.numel() == 0:
+                    continue # Already normalized or no obvious step geometry
+                    
+                # Use the smallest non-zero step to handle slight gaps robustly
+                step_size = valid_steps.min()
+                
+                # If the step size is effectively 1, do nothing.
+                if step_size >= 2.0:
+                    normalized_coords[i] = (c / step_size).round()
+                    
+        return normalized_coords
+
     def forward(self, x, rel_coords=None, return_pathways=False):
         """Main inference path.
 
@@ -503,6 +535,10 @@ class SpatialTranscriptFormer(nn.Module):
 
         # 1. Project features into latent interaction space
         memory = self.image_proj(features)
+
+        # Normalize coordinates once for all spatial modules
+        if rel_coords is not None:
+             rel_coords = self._normalize_coords(rel_coords)
 
         # 1b. Inject Spatial Positional Encodings
         if self.use_spatial_pe and rel_coords is not None:
@@ -553,6 +589,10 @@ class SpatialTranscriptFormer(nn.Module):
             
         # 1. Project to latent space
         memory = self.image_proj(x)
+
+        # Normalize coordinates once
+        if coords is not None:
+             coords = self._normalize_coords(coords)
 
         # 1b. Inject Spatial Positional Encodings (Global)
         if self.use_spatial_pe and coords is not None:

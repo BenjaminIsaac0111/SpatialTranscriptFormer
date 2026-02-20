@@ -11,24 +11,27 @@ import torch
 import urllib.request
 from typing import Dict, List, Optional
 
-# MSigDB Hallmarks GMT URL (v2024.1.Hs, gene symbols)
-HALLMARKS_URL = "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/h.all.v2024.1.Hs.symbols.gmt"
-HALLMARKS_FILENAME = "h.all.v2024.1.Hs.symbols.gmt"
+# MSigDB collections URLs (v2024.1.Hs, gene symbols)
+MSIGDB_URLS = {
+    'hallmarks': "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/h.all.v2024.1.Hs.symbols.gmt",
+    'c2_kegg': "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_legacy.v2024.1.Hs.symbols.gmt",
+    'c2_medicus': "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_medicus.v2024.1.Hs.symbols.gmt",
+    'c2_cgp': "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cgp.v2024.1.Hs.symbols.gmt",
+}
 
-
-def download_hallmarks_gmt(cache_dir: str = ".cache") -> str:
+def download_msigdb_gmt(url: str, filename: str, cache_dir: str = ".cache") -> str:
     """
-    Download the MSigDB Hallmarks GMT file if not already cached.
+    Download an MSigDB GMT file if not already cached.
 
     Returns:
         str: Path to the local GMT file.
     """
     os.makedirs(cache_dir, exist_ok=True)
-    local_path = os.path.join(cache_dir, HALLMARKS_FILENAME)
+    local_path = os.path.join(cache_dir, filename)
 
     if not os.path.exists(local_path):
-        print(f"Downloading MSigDB Hallmarks from {HALLMARKS_URL}...")
-        urllib.request.urlretrieve(HALLMARKS_URL, local_path)
+        print(f"Downloading MSigDB gene sets from {url}...")
+        urllib.request.urlretrieve(url, local_path)
         print(f"Saved to {local_path}")
     
     return local_path
@@ -89,29 +92,52 @@ def build_membership_matrix(
 
 def get_pathway_init(
     gene_list: List[str],
+    gmt_urls: Optional[List[str]] = None,
+    filter_names: Optional[List[str]] = None,
     cache_dir: str = ".cache",
     verbose: bool = True
 ) -> tuple:
     """
-    Main entry point: download Hallmarks, match to gene list, return init matrix.
+    Main entry point: download GMTs, match to gene list, return init matrix.
 
     Args:
         gene_list: Ordered list of gene symbols from global_genes.json.
+        gmt_urls: List of MSigDB GMT URLs to download. Defaults to Hallmarks and C2 KEGG.
+        filter_names: If provided, only include these specific pathway names. 
         cache_dir: Directory to cache the downloaded GMT file.
         verbose: Print pathway coverage statistics.
 
     Returns:
-        tuple: (membership_matrix [Tensor (50, G)], pathway_names [list of str])
+        tuple: (membership_matrix [Tensor (P, G)], pathway_names [list of str])
     """
-    gmt_path = download_hallmarks_gmt(cache_dir)
-    pathway_dict = parse_gmt(gmt_path)
+    if gmt_urls is None:
+        gmt_urls = [MSIGDB_URLS['hallmarks'], MSIGDB_URLS['c2_kegg']]
 
-    matrix, pathway_names = build_membership_matrix(pathway_dict, gene_list)
+    combined_dict = {}
+
+    for url in gmt_urls:
+        filename = url.split('/')[-1]
+        local_path = download_msigdb_gmt(url, filename, cache_dir)
+        pathway_dict = parse_gmt(local_path)
+        
+        # Filter if requested
+        if filter_names is not None:
+             pathway_dict = {k: v for k, v in pathway_dict.items() if k in filter_names}
+             
+        # Merge with combined dict (don't overwrite if name collision occurs somehow)
+        for k, v in pathway_dict.items():
+            if k not in combined_dict:
+                combined_dict[k] = v
+
+    if not combined_dict:
+        raise ValueError("No pathways matched the provided filter or URLs.")
+
+    matrix, pathway_names = build_membership_matrix(combined_dict, gene_list)
 
     if verbose:
         total_genes = len(gene_list)
         covered = (matrix.sum(dim=0) > 0).sum().item()
-        print(f"MSigDB Hallmarks: {len(pathway_names)} pathways")
+        print(f"Pathways initialized: {len(pathway_names)}")
         print(f"Gene coverage: {covered}/{total_genes} ({100*covered/total_genes:.1f}%)")
         for i, name in enumerate(pathway_names):
             n_matched = int(matrix[i].sum().item())

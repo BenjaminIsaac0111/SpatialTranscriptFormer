@@ -25,8 +25,7 @@ def main():
         token_dim=512,
         n_heads=8,
         n_layers=2,
-        use_nystrom=True,
-        fusion_mode='decoder'
+        use_nystrom=True
     ).to(device)
     
     print("Model initialized.")

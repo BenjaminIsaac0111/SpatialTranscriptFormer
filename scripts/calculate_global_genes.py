@@ -43,7 +43,7 @@ def get_sample_ids(data_dir, filter_organ=None):
 
     return final_ids
 
-def calculate_global_genes(data_dir, ids, num_genes=1000):
+def calculate_global_genes(data_dir, ids, num_genes=1000, target_pathways=None):
     st_dir = os.path.join(data_dir, 'st')
     if not os.path.exists(st_dir):
         st_dir = os.path.join(data_dir, '..', 'st') # Try parent/st if in patches
@@ -51,7 +51,6 @@ def calculate_global_genes(data_dir, ids, num_genes=1000):
     print(f"Scanning {len(ids)} samples in {st_dir}...")
     
     gene_totals = defaultdict(float)
-    gene_occurences = defaultdict(int)
     
     for sample_id in tqdm(ids):
         h5ad_path = os.path.join(st_dir, f"{sample_id}.h5ad")
@@ -76,10 +75,6 @@ def calculate_global_genes(data_dir, ids, num_genes=1000):
                     data = X['data'][:]
                     indices = X['indices'][:]
                     indptr = X['indptr'][:]
-                    # We want column sums. 
-                    # CSR matrix sum(axis=0) is efficient.
-                    # But implementing CSR sum manually without scipy potentially?
-                    # Let's import scipy, it's installed.
                     from scipy.sparse import csr_matrix
                     n_obs = f['obs']['_index'].shape[0] if '_index' in f['obs'] else f['obs']['index'].shape[0]
                     n_vars = len(gene_names)
@@ -91,19 +86,57 @@ def calculate_global_genes(data_dir, ids, num_genes=1000):
                 
                 for i, gene in enumerate(gene_names):
                     gene_totals[gene] += float(sums[i])
-                    gene_occurences[gene] += 1
                     
         except Exception as e:
             print(f"Error processing {sample_id}: {e}")
             
     print(f"Aggregated counts for {len(gene_totals)} unique genes.")
     
-    # Sort by total expression
-    sorted_genes = sorted(gene_totals.items(), key=lambda x: x[1], reverse=True)
+    prioritized_genes = set()
+    if target_pathways:
+        from spatial_transcript_former.data.pathways import download_msigdb_gmt, parse_gmt, MSIGDB_URLS
+        print(f"Prioritizing genes from pathways: {target_pathways}")
+        
+        # Load C2 KEGG first
+        kegg_path = download_msigdb_gmt(MSIGDB_URLS['c2_kegg'], MSIGDB_URLS['c2_kegg'].split('/')[-1], os.path.join(data_dir, '.cache'))
+        dict_kegg = parse_gmt(kegg_path)
+        
+        kegg_med_path = download_msigdb_gmt(MSIGDB_URLS['c2_medicus'], MSIGDB_URLS['c2_medicus'].split('/')[-1], os.path.join(data_dir, '.cache'))
+        dict_med = parse_gmt(kegg_med_path)
+        
+        # Load C2 CGP
+        cgp_path = download_msigdb_gmt(MSIGDB_URLS['c2_cgp'], MSIGDB_URLS['c2_cgp'].split('/')[-1], os.path.join(data_dir, '.cache'))
+        dict_cgp = parse_gmt(cgp_path)
+        
+        # Also load hallmarks just in case
+        h_path = download_msigdb_gmt(MSIGDB_URLS['hallmarks'], 'h.all.v2024.1.Hs.symbols.gmt', os.path.join(data_dir, '.cache'))
+        dict_h = parse_gmt(h_path)
+        
+        combined_dict = {**dict_kegg, **dict_med, **dict_cgp, **dict_h}
+        
+        for p in target_pathways:
+            if p in combined_dict:
+                for pw_gene in combined_dict[p]:
+                    if pw_gene in gene_totals:
+                        prioritized_genes.add(pw_gene)
+            else:
+                print(f"Warning: Pathway {p} not found in MSIGDB dictionaries.")
+                
+        print(f"Found {len(prioritized_genes)} valid target pathway genes.")
+
+    # Sort all by total expression
+    sorted_all = sorted(gene_totals.items(), key=lambda x: x[1], reverse=True)
     
-    top_genes = [g[0] for g in sorted_genes[:num_genes]]
+    top_genes = list(prioritized_genes)
+    for g, _ in sorted_all:
+        if len(top_genes) >= num_genes:
+            break
+        if g not in prioritized_genes:
+            top_genes.append(g)
+            
+    print(f"Final set: {len(prioritized_genes)} pathway genes + {len(top_genes) - len(prioritized_genes)} global genes")
     
-    return top_genes, sorted_genes
+    return top_genes, sorted_all
 
 def main():
     parser = argparse.ArgumentParser(description="Calculate Global Top Genes")
@@ -111,17 +144,21 @@ def main():
     parser.add_argument('--organ', type=str, default=None, help="Filter by organ (e.g., Bowel)")
     parser.add_argument('--num-genes', type=int, default=1000)
     parser.add_argument('--output', type=str, default='global_genes.json')
+    parser.add_argument('--pathways', nargs='+', default=None, help='List of MSigDB pathway names to explicitly include')
     
     args = parser.parse_args()
     
+    # Must add src to path to import MSIGDB logic
+    import sys
+    sys.path.append(os.path.abspath('src'))
+    
     ids = get_sample_ids(args.data_dir, args.organ)
-    top_genes, all_stats = calculate_global_genes(args.data_dir, ids, args.num_genes)
+    top_genes, all_stats = calculate_global_genes(args.data_dir, ids, args.num_genes, target_pathways=args.pathways)
     
     print(f"Saving top {len(top_genes)} genes to {args.output}")
     with open(args.output, 'w') as f:
         json.dump(top_genes, f, indent=4)
         
-    # Optional: Save stats
     stats_df = pd.DataFrame(all_stats, columns=['gene', 'total_counts'])
     stats_df.to_csv(args.output.replace('.json', '_stats.csv'), index=False)
     print("Saved stats to CSV.")

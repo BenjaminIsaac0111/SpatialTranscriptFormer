@@ -11,7 +11,6 @@ def test_nystrom_jaume_mode(mock_image_batch):
     num_genes = 100
     model = SpatialTranscriptFormer(
         num_genes=num_genes,
-        fusion_mode='jaume',
         use_nystrom=True,
         num_landmarks=32 # Small for testing
     )
@@ -19,17 +18,15 @@ def test_nystrom_jaume_mode(mock_image_batch):
     output = model(mock_image_batch)
     assert output.shape == (mock_image_batch.shape[0], num_genes)
 
-def test_nystrom_decoder_mode(mock_image_batch):
+def test_nystrom_with_masking(mock_image_batch):
     """
-    EDUCATIONAL: Verifies that Nystrom Attention works in 'decoder' mode.
-    In this mode, we use Nystrom for self-attention on pathway tokens and 
-    standard cross-attention for histology querying.
+    EDUCATIONAL: Verifies that Nystrom Attention works with quadrant masking.
     """
     num_genes = 100
     model = SpatialTranscriptFormer(
         num_genes=num_genes,
-        fusion_mode='decoder',
         use_nystrom=True,
+        masked_quadrants=['H2H'],
         num_landmarks=32
     )
     
@@ -50,7 +47,6 @@ def test_nystrom_scalability():
     
     model = SpatialTranscriptFormer(
         num_genes=num_genes,
-        fusion_mode='jaume',
         use_nystrom=True,
         num_landmarks=128
     )

@@ -34,7 +34,7 @@ def _load_histology(h5ad_path):
         return None, None
 
 
-def _compute_pathway_truth(gene_truth, gene_names):
+def _compute_pathway_truth(gene_truth, gene_names, args=None):
     """Compute pathway ground truth from gene expression using MSigDB membership.
 
     For each pathway, computes the mean expression of its member genes.
@@ -43,13 +43,25 @@ def _compute_pathway_truth(gene_truth, gene_names):
     Args:
         gene_truth: (N, G) gene expression matrix (log-transformed if applicable).
         gene_names: List of gene names (length G).
+        args: Optional CLI args to extract pathway_init filters.
 
     Returns:
         tuple: (pathway_truth (N, P), pathway_names list) or (None, None).
     """
     try:
-        from spatial_transcript_former.data.pathways import get_pathway_init
-        pw_matrix, pw_names = get_pathway_init(gene_names, verbose=False)
+        from spatial_transcript_former.data.pathways import get_pathway_init, MSIGDB_URLS
+        filter_names = None
+        urls = None
+        if args is not None and getattr(args, 'pathway_init', False):
+            urls = [MSIGDB_URLS['hallmarks'], MSIGDB_URLS['c2_kegg'], MSIGDB_URLS['c2_medicus'], MSIGDB_URLS['c2_cgp']]
+            filter_names = getattr(args, 'pathways', None)
+            
+        pw_matrix, pw_names = get_pathway_init(
+            gene_names, 
+            gmt_urls=urls,
+            filter_names=filter_names,
+            verbose=False
+        )
         pw_np = pw_matrix.numpy()  # (P, G) binary membership
         member_counts = pw_np.sum(axis=1, keepdims=True).clip(min=1)  # (P, 1)
         # Mean expression of member genes per pathway
@@ -186,7 +198,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
 
             # Compute pathway ground truth from MSigDB membership (fixed across epochs)
             gene_truth = np.log1p(gene_matrix) if log_transform else gene_matrix
-            pathway_truth, pathway_names = _compute_pathway_truth(gene_truth, gene_names)
+            pathway_truth, pathway_names = _compute_pathway_truth(gene_truth, gene_names, args=args)
 
             if pathway_truth is None:
                 print("Warning: Could not compute pathway truth. Skipping plot.")

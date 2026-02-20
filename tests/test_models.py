@@ -62,19 +62,19 @@ def test_sparsity_regularization_loss():
     assert sparsity_loss > 0
     assert sparsity_loss.dim() == 0
 
-def test_fusion_mode_toggle(mock_image_batch):
+def test_interaction_with_masking(mock_image_batch):
     """
-    EDUCATIONAL: Verifies that the model can switch between 'decoder' (pathway queries)
-    and 'jaume' (shared multimodal space) without shape mismatches.
+    EDUCATIONAL: Verifies that the unified interaction model works with 
+    different quadrant masking configurations.
     """
     num_genes = 100
     
-    # Test Decoder Mode (Default)
-    model_dec = SpatialTranscriptFormer(num_genes=num_genes, fusion_mode='decoder')
-    out_dec = model_dec(mock_image_batch)
-    assert out_dec.shape == (mock_image_batch.shape[0], num_genes)
+    # Test with H2H masking (Default)
+    model = SpatialTranscriptFormer(num_genes=num_genes, masked_quadrants=['H2H'])
+    out = model(mock_image_batch)
+    assert out.shape == (mock_image_batch.shape[0], num_genes)
     
-    # Test Jaume Mode
-    model_jau = SpatialTranscriptFormer(num_genes=num_genes, fusion_mode='jaume')
-    out_jau = model_jau(mock_image_batch)
-    assert out_jau.shape == (mock_image_batch.shape[0], num_genes)
+    # Test with all quadrants open
+    model_all = SpatialTranscriptFormer(num_genes=num_genes, masked_quadrants=[])
+    out_all = model_all(mock_image_batch)
+    assert out_all.shape == (mock_image_batch.shape[0], num_genes)

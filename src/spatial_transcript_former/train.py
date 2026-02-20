@@ -41,14 +41,23 @@ def setup_model(args, device):
         # Load biological pathway initialization if requested
         pathway_init = None
         if getattr(args, 'pathway_init', False):
-            from spatial_transcript_former.data.pathways import get_pathway_init
+            from spatial_transcript_former.data.pathways import get_pathway_init, MSIGDB_URLS
             import json
             genes_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'global_genes.json')
             if not os.path.exists(genes_path):
                 genes_path = 'global_genes.json'
             with open(genes_path) as f:
                 gene_list = json.load(f)
-            pathway_init, pathway_names = get_pathway_init(gene_list[:args.num_genes])
+            
+            urls = [MSIGDB_URLS['hallmarks'], MSIGDB_URLS['c2_kegg'], MSIGDB_URLS['c2_medicus'], MSIGDB_URLS['c2_cgp']]
+            pathway_init, pathway_names = get_pathway_init(
+                gene_list[:args.num_genes], 
+                gmt_urls=urls, 
+                filter_names=args.pathways
+            )
+            # Override num_pathways based on actual parsed paths
+            args.num_pathways = len(pathway_names)
+            print(f"Num pathways forced to {args.num_pathways} based on init dict")
 
         model = SpatialTranscriptFormer(
             num_genes=args.num_genes,
@@ -210,6 +219,7 @@ def parse_args():
     g.add_argument('--plot-pathways', action='store_true')
     g.add_argument('--weak-supervision', action='store_true', help='Bag-level training for MIL')
     g.add_argument('--pathway-init', action='store_true', help='Initialize gene_reconstructor with MSigDB Hallmarks')
+    g.add_argument('--pathways', nargs='+', default=None, help='List of MSigDB pathway names to explicitly instantiate (e.g. KEGG_COLORECTAL_CANCER)')
 
     return parser.parse_args()
 
@@ -272,6 +282,10 @@ def main():
 
         # Log epoch
         epoch_row = {"train_loss": train_loss, "val_loss": val_loss}
+        if val_metrics.get("val_mae") is not None:
+            epoch_row["val_mae"] = round(val_metrics["val_mae"], 4)
+        if val_metrics.get("val_pcc") is not None:
+            epoch_row["val_pcc"] = round(val_metrics["val_pcc"], 4)
         if val_metrics.get("attn_correlation") is not None:
             epoch_row["attn_correlation"] = round(val_metrics["attn_correlation"], 4)
         logger.log_epoch(epoch + 1, epoch_row)
