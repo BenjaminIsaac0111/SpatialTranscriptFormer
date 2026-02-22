@@ -4,15 +4,20 @@ Tests for MSigDB pathway initialization and ground truth computation.
 Verifies membership matrix structure, gene coverage, pathway truth consistency,
 and the z-score normalization used for visualization.
 """
+
 import pytest
 import numpy as np
 import torch
-from spatial_transcript_former.data.pathways import get_pathway_init, download_hallmarks_gmt, parse_gmt
-
+from spatial_transcript_former.data.pathways import (
+    get_pathway_init,
+    download_hallmarks_gmt,
+    parse_gmt,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def hallmarks():
@@ -25,10 +30,22 @@ def hallmarks():
 def gene_list():
     """A realistic gene list (subset of common genes)."""
     # These are known to appear in MSigDB Hallmarks
-    known = ['TP53', 'MYC', 'VEGFA', 'CTNNB1', 'VIM', 'SNAI1',
-             'MLH1', 'MSH2', 'CDH1', 'AXIN2', 'FLT1', 'TGFB1']
+    known = [
+        "TP53",
+        "MYC",
+        "VEGFA",
+        "CTNNB1",
+        "VIM",
+        "SNAI1",
+        "MLH1",
+        "MSH2",
+        "CDH1",
+        "AXIN2",
+        "FLT1",
+        "TGFB1",
+    ]
     # Add some filler genes
-    filler = [f'GENE_{i}' for i in range(988)]
+    filler = [f"GENE_{i}" for i in range(988)]
     return known + filler
 
 
@@ -42,6 +59,7 @@ def pathway_result(gene_list):
 # GMT Parsing
 # ---------------------------------------------------------------------------
 
+
 class TestGMTParsing:
     def test_hallmarks_contains_50_pathways(self, hallmarks):
         """MSigDB Hallmarks should contain exactly 50 pathways."""
@@ -50,7 +68,7 @@ class TestGMTParsing:
     def test_pathway_names_have_prefix(self, hallmarks):
         """All pathway names should start with HALLMARK_."""
         for name in hallmarks:
-            assert name.startswith('HALLMARK_'), f"Unexpected name: {name}"
+            assert name.startswith("HALLMARK_"), f"Unexpected name: {name}"
 
     def test_each_pathway_has_genes(self, hallmarks):
         """Each pathway should contain at least one gene."""
@@ -61,6 +79,7 @@ class TestGMTParsing:
 # ---------------------------------------------------------------------------
 # Membership matrix
 # ---------------------------------------------------------------------------
+
 
 class TestMembershipMatrix:
     def test_shape(self, pathway_result, gene_list):
@@ -77,7 +96,7 @@ class TestMembershipMatrix:
     def test_known_gene_mapped(self, pathway_result, gene_list):
         """Known cancer genes should appear in at least one pathway."""
         matrix, _ = pathway_result
-        known_genes = ['TP53', 'MYC', 'VEGFA', 'VIM']
+        known_genes = ["TP53", "MYC", "VEGFA", "VIM"]
         for gene in known_genes:
             if gene in gene_list:
                 idx = gene_list.index(gene)
@@ -92,14 +111,14 @@ class TestMembershipMatrix:
     def test_bowel_cancer_pathways_exist(self, pathway_result):
         """All 6 disease-relevant pathways should be in the names list."""
         _, names = pathway_result
-        short_names = [n.replace('HALLMARK_', '') for n in names]
+        short_names = [n.replace("HALLMARK_", "") for n in names]
         required = [
-            'EPITHELIAL_MESENCHYMAL_TRANSITION',
-            'WNT_BETA_CATENIN_SIGNALING',
-            'INFLAMMATORY_RESPONSE',
-            'ANGIOGENESIS',
-            'APOPTOSIS',
-            'TNFA_SIGNALING_VIA_NFKB',
+            "EPITHELIAL_MESENCHYMAL_TRANSITION",
+            "WNT_BETA_CATENIN_SIGNALING",
+            "INFLAMMATORY_RESPONSE",
+            "ANGIOGENESIS",
+            "APOPTOSIS",
+            "TNFA_SIGNALING_VIA_NFKB",
         ]
         for pw in required:
             assert pw in short_names, f"Missing pathway: {pw}"
@@ -108,6 +127,7 @@ class TestMembershipMatrix:
 # ---------------------------------------------------------------------------
 # Pathway ground truth
 # ---------------------------------------------------------------------------
+
 
 class TestPathwayTruth:
     def test_consistent_across_calls(self, gene_list):

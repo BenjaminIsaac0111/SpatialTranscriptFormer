@@ -6,7 +6,7 @@ potential_paths = [
     "../hest_data/HEST_v1_3_0.csv",
     "HEST_v1_3_0.csv",
     "../HEST_v1_3_0.csv",
-    r"A:\hest_data\HEST_v1_3_0.csv"
+    r"A:\hest_data\HEST_v1_3_0.csv",
 ]
 
 csv_path = None
@@ -20,10 +20,10 @@ if not csv_path:
 else:
     print(f"Reading metadata from: {csv_path}")
     df = pd.read_csv(csv_path)
-    bowel_df = df[df['organ'].str.lower() == 'bowel']
+    bowel_df = df[df["organ"].str.lower() == "bowel"]
     print("Bowel samples species:")
-    print(bowel_df['species'].value_counts())
+    print(bowel_df["species"].value_counts())
 
     print("\nSample IDs for Human Bowel:")
-    human_bowel = bowel_df[bowel_df['species'] == 'Homo sapiens']
-    print(human_bowel['id'].head(10).tolist())
+    human_bowel = bowel_df[bowel_df["species"] == "Homo sapiens"]
+    print(human_bowel["id"].head(10).tolist())

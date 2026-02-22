@@ -1,25 +1,26 @@
 import pandas as pd
 import os
 
+
 def estimate_size():
     # Load metadata
-    csv_path = 'HEST_v1_3_0.csv'
+    csv_path = "HEST_v1_3_0.csv"
     if not os.path.exists(csv_path):
-        csv_path = os.path.join('..', 'HEST_v1_3_0.csv')
-        
+        csv_path = os.path.join("..", "HEST_v1_3_0.csv")
+
     if not os.path.exists(csv_path):
         print(f"Error: {csv_path} not found.")
         return
 
     df = pd.read_csv(csv_path)
-    bowel_ids = set(df[df['organ'] == 'Bowel']['id'].unique())
-    
+    bowel_ids = set(df[df["organ"] == "Bowel"]["id"].unique())
+
     total_size = 0
     count = 0
-    
-    repo_files_path = 'repo_files.txt'
+
+    repo_files_path = "repo_files.txt"
     if not os.path.exists(repo_files_path):
-        repo_files_path = os.path.join('..', 'repo_files.txt')
+        repo_files_path = os.path.join("..", "repo_files.txt")
 
     # Check if repo_files.txt exists
     if not os.path.exists(repo_files_path):
@@ -28,9 +29,9 @@ def estimate_size():
 
     # Read repo_files.txt (UTF-16 encoded)
     try:
-        with open(repo_files_path, 'r', encoding='utf-16le') as f:
+        with open(repo_files_path, "r", encoding="utf-16le") as f:
             for line in f:
-                parts = line.strip().split('\t')
+                parts = line.strip().split("\t")
                 if len(parts) >= 2:
                     try:
                         size = int(parts[0])
@@ -49,6 +50,7 @@ def estimate_size():
 
     print(f"Total Size: {total_size / (1024**3):.2f} GB")
     print(f"Total Files: {count}")
+
 
 if __name__ == "__main__":
     estimate_size()

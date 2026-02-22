@@ -30,8 +30,8 @@ class ExperimentLogger:
         """
         self.output_dir = output_dir
         self.config = config
-        self.csv_path = os.path.join(output_dir, 'training_log.csv')
-        self.json_path = os.path.join(output_dir, 'results_summary.json')
+        self.csv_path = os.path.join(output_dir, "training_log.csv")
+        self.json_path = os.path.join(output_dir, "results_summary.json")
         self.start_time = time.time()
         self.epoch_metrics = []
         self._csv_header_written = os.path.exists(self.csv_path)
@@ -50,14 +50,16 @@ class ExperimentLogger:
         # Determine fieldnames from first row
         fieldnames = list(row.keys())
 
-        with open(self.csv_path, 'a', newline='') as f:
+        with open(self.csv_path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             if not self._csv_header_written:
                 writer.writeheader()
                 self._csv_header_written = True
             writer.writerow(row)
 
-    def finalize(self, best_val_loss: float, extra_metrics: Optional[Dict[str, Any]] = None):
+    def finalize(
+        self, best_val_loss: float, extra_metrics: Optional[Dict[str, Any]] = None
+    ):
         """
         Write results_summary.json with full experiment metadata.
 
@@ -66,7 +68,7 @@ class ExperimentLogger:
             extra_metrics: Any additional metrics to include (e.g., attn_correlation).
         """
         elapsed = time.time() - self.start_time
-        
+
         summary = {
             "timestamp": datetime.now().isoformat(),
             "runtime_seconds": round(elapsed, 1),
@@ -82,7 +84,7 @@ class ExperimentLogger:
         if extra_metrics:
             summary.update(extra_metrics)
 
-        with open(self.json_path, 'w') as f:
+        with open(self.json_path, "w") as f:
             json.dump(summary, f, indent=2, default=str)
 
         print(f"Results summary saved to {self.json_path}")

@@ -28,10 +28,10 @@ from typing import List, Optional, Tuple, Union
 from scipy.spatial import KDTree
 import torch.nn.functional as F
 
-
 # ---------------------------------------------------------------------------
 # Spatial augmentation helpers
 # ---------------------------------------------------------------------------
+
 
 def apply_dihedral_augmentation(coords, op=None):
     """Apply one of the 8 dihedral symmetries to a set of 2-D coordinates.
@@ -78,21 +78,21 @@ def apply_dihedral_augmentation(coords, op=None):
     if op is None:
         op = np.random.randint(0, 8)
 
-    if op == 0:   # Identity
+    if op == 0:  # Identity
         pass
-    elif op == 1: # Rotate 90° CCW
+    elif op == 1:  # Rotate 90° CCW
         x, y = y, -x
-    elif op == 2: # Rotate 180°
+    elif op == 2:  # Rotate 180°
         x, y = -x, -y
-    elif op == 3: # Rotate 270° CCW
+    elif op == 3:  # Rotate 270° CCW
         x, y = -y, x
-    elif op == 4: # Flip horizontal
+    elif op == 4:  # Flip horizontal
         x = -x
-    elif op == 5: # Flip vertical
+    elif op == 5:  # Flip vertical
         y = -y
-    elif op == 6: # Transpose
+    elif op == 6:  # Transpose
         x, y = y, x
-    elif op == 7: # Anti-transpose
+    elif op == 7:  # Anti-transpose
         x, y = -y, -x
 
     if is_torch:
@@ -115,20 +115,29 @@ def apply_dihedral_to_tensor(img, op):
     Returns:
         torch.Tensor: Transformed image tensor, same shape as ``img``.
     """
-    if op == 0: return img
-    if op == 1: return torch.rot90(img, k=1, dims=[1, 2])  # Rotate 90° CCW
-    if op == 2: return torch.rot90(img, k=2, dims=[1, 2])  # Rotate 180°
-    if op == 3: return torch.rot90(img, k=3, dims=[1, 2])  # Rotate 270° CCW
-    if op == 4: return torch.flip(img, dims=[2])            # Flip horizontal (width axis)
-    if op == 5: return torch.flip(img, dims=[1])            # Flip vertical   (height axis)
-    if op == 6: return img.transpose(1, 2)                  # Transpose
-    if op == 7: return img.transpose(1, 2).flip(dims=[1, 2]) # Anti-transpose
+    if op == 0:
+        return img
+    if op == 1:
+        return torch.rot90(img, k=1, dims=[1, 2])  # Rotate 90° CCW
+    if op == 2:
+        return torch.rot90(img, k=2, dims=[1, 2])  # Rotate 180°
+    if op == 3:
+        return torch.rot90(img, k=3, dims=[1, 2])  # Rotate 270° CCW
+    if op == 4:
+        return torch.flip(img, dims=[2])  # Flip horizontal (width axis)
+    if op == 5:
+        return torch.flip(img, dims=[1])  # Flip vertical   (height axis)
+    if op == 6:
+        return img.transpose(1, 2)  # Transpose
+    if op == 7:
+        return img.transpose(1, 2).flip(dims=[1, 2])  # Anti-transpose
     return img
 
 
 # ---------------------------------------------------------------------------
 # Raw-patch dataset
 # ---------------------------------------------------------------------------
+
 
 class HEST_Dataset(Dataset):
     """PyTorch Dataset that loads raw histology patches from a HEST ``.h5`` file.
@@ -174,6 +183,7 @@ class HEST_Dataset(Dataset):
         neighborhood_indices: Optional[np.ndarray] = None,
         coords_all: Optional[np.ndarray] = None,
         augment: bool = False,
+        log1p: bool = False,
     ):
         self.h5_path = h5_path
         self.transform = transform
@@ -183,6 +193,7 @@ class HEST_Dataset(Dataset):
         self.neighborhood_indices = neighborhood_indices
         self.coords_all = coords_all
         self.augment = augment
+        self.log1p = log1p
 
         # Opened lazily inside each DataLoader worker (see __getitem__).
         self.h5_file = None
@@ -193,7 +204,7 @@ class HEST_Dataset(Dataset):
     def __getitem__(self, idx):
         # Open the HDF5 file on first access within this worker process.
         if self.h5_file is None:
-            self.h5_file = h5py.File(self.h5_path, 'r')
+            self.h5_file = h5py.File(self.h5_path, "r")
 
         # Map dataset index to the row index inside the HDF5 file.
         center_file_idx = self.indices[idx] if self.indices is not None else idx
@@ -209,7 +220,7 @@ class HEST_Dataset(Dataset):
 
             patch_sequence = []
             for f_idx in file_indices:
-                p = self.h5_file['img'][f_idx]
+                p = self.h5_file["img"][f_idx]
                 p = torch.from_numpy(p).permute(2, 0, 1).float() / 255.0
                 if self.transform:
                     p = self.transform(p)
@@ -232,16 +243,19 @@ class HEST_Dataset(Dataset):
 
         else:
             # --- Single-patch mode ---
-            patch = self.h5_file['img'][center_file_idx]
+            patch = self.h5_file["img"][center_file_idx]
             patch = torch.from_numpy(patch).permute(2, 0, 1).float() / 255.0
             if self.transform:
                 patch = self.transform(patch)
             if self.augment:
                 patch = apply_dihedral_to_tensor(patch, aug_op)
-            data = patch           # (3, H, W)
+            data = patch  # (3, H, W)
             rel_coords = torch.zeros((1, 2))
 
         gene_counts = torch.tensor(self.genes[idx], dtype=torch.float32)
+        if self.log1p:
+            gene_counts = torch.log1p(gene_counts)
+
         return data, gene_counts, rel_coords
 
     def __del__(self):
@@ -252,6 +266,7 @@ class HEST_Dataset(Dataset):
 # ---------------------------------------------------------------------------
 # Gene-expression loading utilities
 # ---------------------------------------------------------------------------
+
 
 def load_gene_expression_matrix(
     h5ad_path: str,
@@ -292,38 +307,37 @@ def load_gene_expression_matrix(
               output columns (discovery mode) or the unchanged input list
               (alignment mode).
     """
-    with h5py.File(h5ad_path, 'r') as f:
+    with h5py.File(h5ad_path, "r") as f:
         # --- Load observation barcodes ---
-        if 'obs' in f and '_index' in f['obs']:
-            st_barcodes = f['obs']['_index'][:]
-        elif 'obs' in f and 'index' in f['obs']:
-            st_barcodes = f['obs']['index'][:]
+        if "obs" in f and "_index" in f["obs"]:
+            st_barcodes = f["obs"]["_index"][:]
+        elif "obs" in f and "index" in f["obs"]:
+            st_barcodes = f["obs"]["index"][:]
         else:
             raise ValueError(f"Could not find barcodes in {h5ad_path}")
 
         st_barcodes = [
-            b.decode('utf-8') if isinstance(b, bytes) else str(b)
-            for b in st_barcodes
+            b.decode("utf-8") if isinstance(b, bytes) else str(b) for b in st_barcodes
         ]
         st_barcode_to_idx = {b: i for i, b in enumerate(st_barcodes)}
 
         # --- Load variable (gene) names ---
-        if 'var' in f and '_index' in f['var']:
-            gene_names_raw = f['var']['_index'][:]
-        elif 'var' in f and 'index' in f['var']:
-            gene_names_raw = f['var']['index'][:]
+        if "var" in f and "_index" in f["var"]:
+            gene_names_raw = f["var"]["_index"][:]
+        elif "var" in f and "index" in f["var"]:
+            gene_names_raw = f["var"]["index"][:]
         else:
             raise ValueError(f"Could not find gene names (var index) in {h5ad_path}")
 
         current_gene_names = [
-            g.decode('utf-8') if isinstance(g, bytes) else str(g)
+            g.decode("utf-8") if isinstance(g, bytes) else str(g)
             for g in gene_names_raw
         ]
         gene_name_to_idx = {name: i for i, name in enumerate(current_gene_names)}
 
         # --- Map patch barcodes to row indices ---
         patch_barcodes_decoded = [
-            b.decode('utf-8') if isinstance(b, bytes) else str(b)
+            b.decode("utf-8") if isinstance(b, bytes) else str(b)
             for b in patch_barcodes
         ]
         patch_indices = []
@@ -333,22 +347,22 @@ def load_gene_expression_matrix(
                 patch_indices.append(st_barcode_to_idx[pb])
                 valid_patch_mask.append(True)
             else:
-                patch_indices.append(0)   # placeholder; excluded by mask
+                patch_indices.append(0)  # placeholder; excluded by mask
                 valid_patch_mask.append(False)
 
         valid_patch_mask = np.array(valid_patch_mask)
         patch_indices_array = np.array(patch_indices)
 
         # --- Load expression matrix (sparse or dense) ---
-        X = f['X']
+        X = f["X"]
         if isinstance(X, h5py.Group):
             # Stored as a CSR group (data / indices / indptr)
             mat = csr_matrix(
-                (X['data'][:], X['indices'][:], X['indptr'][:]),
+                (X["data"][:], X["indices"][:], X["indptr"][:]),
                 shape=(len(st_barcodes), len(current_gene_names)),
             )
         elif isinstance(X, h5py.Dataset):
-            mat = X[:]   # Dense; assumed to fit in memory
+            mat = X[:]  # Dense; assumed to fit in memory
         else:
             raise ValueError("Unknown X format in h5ad file")
 
@@ -405,6 +419,29 @@ def load_gene_expression_matrix(
         return final_subset, valid_patch_mask, selected_names
 
 
+def normalize_coordinates(coords: np.ndarray) -> np.ndarray:
+    """Auto-normalizes physical coordinates to integer grid indices."""
+    if len(coords) == 0:
+        return coords
+
+    x_vals = np.unique(coords[:, 0])
+    y_vals = np.unique(coords[:, 1])
+
+    dx = x_vals[1:] - x_vals[:-1]
+    dy = y_vals[1:] - y_vals[:-1]
+
+    steps = np.concatenate([dx, dy])
+    valid_steps = steps[steps > 0.5]
+
+    if len(valid_steps) == 0:
+        return coords
+
+    step_size = valid_steps.min()
+    if step_size >= 2.0:
+        return np.round(coords / step_size).astype(coords.dtype)
+    return coords
+
+
 def load_global_genes(root_dir: str, num_genes: int = 1000) -> List[str]:
     """Load a globally consistent gene list from ``global_genes.json``.
 
@@ -422,9 +459,9 @@ def load_global_genes(root_dir: str, num_genes: int = 1000) -> List[str]:
         FileNotFoundError: If ``global_genes.json`` cannot be found.
         RuntimeError: If the file cannot be parsed.
     """
-    global_genes_path = os.path.join(root_dir, 'global_genes.json')
+    global_genes_path = os.path.join(root_dir, "global_genes.json")
     if not os.path.exists(global_genes_path):
-        global_genes_path = 'global_genes.json'
+        global_genes_path = "global_genes.json"
 
     if not os.path.exists(global_genes_path):
         raise FileNotFoundError(
@@ -433,7 +470,7 @@ def load_global_genes(root_dir: str, num_genes: int = 1000) -> List[str]:
         )
 
     try:
-        with open(global_genes_path, 'r') as f:
+        with open(global_genes_path, "r") as f:
             genes = json.load(f)
         genes = genes[:num_genes]
         print(f"Loaded {len(genes)} global genes from {global_genes_path}")
@@ -446,6 +483,7 @@ def load_global_genes(root_dir: str, num_genes: int = 1000) -> List[str]:
 # Raw-patch DataLoader factory
 # ---------------------------------------------------------------------------
 
+
 def get_hest_dataloader(
     root_dir: str,
     ids: List[str],
@@ -456,6 +494,7 @@ def get_hest_dataloader(
     num_genes: int = 1000,
     n_neighbors: int = 0,
     augment: bool = False,
+    log1p: bool = False,
 ):
     """Build a DataLoader over raw histology patches for a list of HEST sample IDs.
 
@@ -481,11 +520,11 @@ def get_hest_dataloader(
     """
     datasets = []
 
-    patches_dir = os.path.join(root_dir, 'patches')
-    st_dir = os.path.join(root_dir, 'st')
+    patches_dir = os.path.join(root_dir, "patches")
+    st_dir = os.path.join(root_dir, "st")
     if not os.path.exists(patches_dir):
         patches_dir = root_dir
-        st_dir = os.path.join(os.path.dirname(root_dir), 'st')
+        st_dir = os.path.join(os.path.dirname(root_dir), "st")
 
     common_gene_names = load_global_genes(root_dir, num_genes)
 
@@ -500,13 +539,14 @@ def get_hest_dataloader(
             continue
 
         try:
-            with h5py.File(h5_path, 'r') as f:
-                if 'coords' not in f or 'img' not in f:
+            with h5py.File(h5_path, "r") as f:
+                if "coords" not in f or "img" not in f:
                     print(f"Warning: {sample_id}.h5 missing 'coords' or 'img'")
                     continue
 
-                patch_barcodes = f['barcode'][:].flatten()
-                coords_all = f['coords'][:]
+                patch_barcodes = f["barcode"][:].flatten()
+                coords_all = f["coords"][:]
+                coords_all = normalize_coordinates(coords_all)
 
             gene_matrix, mask, _ = load_gene_expression_matrix(
                 h5ad_path,
@@ -546,6 +586,7 @@ def get_hest_dataloader(
                 neighborhood_indices=neighborhood_indices,
                 coords_all=coords_all,
                 augment=augment,
+                log1p=log1p,
             )
             datasets.append(ds)
 
@@ -557,12 +598,15 @@ def get_hest_dataloader(
         raise ValueError("No valid datasets found.")
 
     concat_ds = ConcatDataset(datasets)
-    return DataLoader(concat_ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+    return DataLoader(
+        concat_ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers
+    )
 
 
 # ---------------------------------------------------------------------------
 # Pre-computed feature dataset
 # ---------------------------------------------------------------------------
+
 
 class HEST_FeatureDataset(Dataset):
     """Dataset for pre-computed backbone feature vectors.
@@ -633,10 +677,12 @@ class HEST_FeatureDataset(Dataset):
 
     def _load_data(self):
         """Load features and gene expression into memory and build the KD-tree."""
-        saved_data = torch.load(self.feature_path, map_location='cpu', weights_only=True)
-        features = saved_data['features']   # (N, D)
-        coords = saved_data['coords']       # (N, 2)
-        barcodes = saved_data['barcodes']
+        saved_data = torch.load(
+            self.feature_path, map_location="cpu", weights_only=True
+        )
+        features = saved_data["features"]  # (N, D)
+        coords = saved_data["coords"]  # (N, 2)
+        barcodes = saved_data["barcodes"]
 
         gene_matrix, mask, selected_names = load_gene_expression_matrix(
             self.h5ad_path,
@@ -652,9 +698,12 @@ class HEST_FeatureDataset(Dataset):
             self.selected_gene_names = selected_names
 
         mask_bool = np.array(mask, dtype=bool)
-        self.features = features[mask_bool]                             # (N_valid, D)
-        self.coords = coords[mask_bool]                                 # (N_valid, 2)
-        self.genes = torch.tensor(gene_matrix, dtype=torch.float32)    # (N_valid, G)
+        self.features = features[mask_bool]  # (N_valid, D)
+        coords_valid = coords[mask_bool].numpy()
+        self.coords = torch.from_numpy(
+            normalize_coordinates(coords_valid)
+        )  # (N_valid, 2)
+        self.genes = torch.tensor(gene_matrix, dtype=torch.float32)  # (N_valid, G)
         self.kdtree = KDTree(self.coords.numpy())
 
     def __len__(self):
@@ -667,10 +716,12 @@ class HEST_FeatureDataset(Dataset):
 
     def _getitem_whole_slide(self):
         """Return all patches on the slide as a single (N, ...) item."""
-        saved_data = torch.load(self.feature_path, map_location='cpu', weights_only=True)
-        features = saved_data['features']
-        coords = saved_data['coords']
-        barcodes = saved_data['barcodes']
+        saved_data = torch.load(
+            self.feature_path, map_location="cpu", weights_only=True
+        )
+        features = saved_data["features"]
+        coords = saved_data["coords"]
+        barcodes = saved_data["barcodes"]
         del saved_data
 
         gene_matrix, mask, _ = load_gene_expression_matrix(
@@ -685,7 +736,8 @@ class HEST_FeatureDataset(Dataset):
 
         mask_bool = np.array(mask, dtype=bool)
         feats = features[mask_bool]
-        co = coords[mask_bool]
+        co = coords[mask_bool].numpy()
+        co = torch.from_numpy(normalize_coordinates(co))
         g = torch.tensor(gene_matrix, dtype=torch.float32)
         del gene_matrix
 
@@ -698,7 +750,9 @@ class HEST_FeatureDataset(Dataset):
         """Return a single patch together with its neighbourhood context."""
         # --- Build neighbourhood index sequence ---
         # Query k+1 neighbours; the first result is usually the point itself.
-        dists, neighbor_idxs = self.kdtree.query(self.coords[idx], k=self.n_neighbors + 1)
+        dists, neighbor_idxs = self.kdtree.query(
+            self.coords[idx], k=self.n_neighbors + 1
+        )
 
         if self.n_neighbors == 0:
             dists = np.array([dists])
@@ -707,15 +761,15 @@ class HEST_FeatureDataset(Dataset):
         # Pad when the slide has fewer patches than requested neighbours
         if len(self.coords) < self.n_neighbors + 1:
             pad_len = (self.n_neighbors + 1) - len(self.coords)
-            neighbor_idxs = np.array(
-                list(range(len(self.coords))) + [idx] * pad_len
-            )
+            neighbor_idxs = np.array(list(range(len(self.coords))) + [idx] * pad_len)
 
         # --- Optional global context ---
         if self.use_global_context:
             total_patches = len(self.coords)
             global_idxs = (
-                np.random.choice(total_patches, size=self.global_context_size, replace=True)
+                np.random.choice(
+                    total_patches, size=self.global_context_size, replace=True
+                )
                 if total_patches > 0
                 else np.full(self.global_context_size, idx)
             )
@@ -755,6 +809,7 @@ class HEST_FeatureDataset(Dataset):
 # ---------------------------------------------------------------------------
 # Pre-computed feature DataLoader factory
 # ---------------------------------------------------------------------------
+
 
 def get_hest_feature_dataloader(
     root_dir: str,
@@ -808,13 +863,13 @@ def get_hest_feature_dataloader(
     datasets = []
 
     if feature_dir is None:
-        features_dir = os.path.join(root_dir, 'he_features')
+        features_dir = os.path.join(root_dir, "he_features")
         if not os.path.exists(features_dir):
             features_dir = root_dir
     else:
         features_dir = feature_dir
 
-    st_dir = os.path.join(root_dir, 'st')
+    st_dir = os.path.join(root_dir, "st")
     common_gene_names = load_global_genes(root_dir, num_genes)
 
     for sample_id in ids:
@@ -842,6 +897,7 @@ def get_hest_feature_dataloader(
     concat_ds = ConcatDataset(datasets)
 
     if whole_slide_mode:
+
         def collate_fn_ws(batch):
             """Pad variable-length slides to the longest in the batch.
 
@@ -860,16 +916,16 @@ def get_hest_feature_dataloader(
             g_dim = batch[0][1].shape[1]
             bs = len(batch)
 
-            padded_feats  = torch.zeros(bs, max_len, d_dim)
-            padded_genes  = torch.zeros(bs, max_len, g_dim)
+            padded_feats = torch.zeros(bs, max_len, d_dim)
+            padded_genes = torch.zeros(bs, max_len, g_dim)
             padded_coords = torch.zeros(bs, max_len, 2)
             # True = padding, False = valid data  (matches nn.MultiheadAttention convention)
             mask = torch.ones(bs, max_len, dtype=torch.bool)
 
             for i, (f, g, c) in enumerate(batch):
                 l = lengths[i]
-                padded_feats[i, :l]  = f
-                padded_genes[i, :l]  = g
+                padded_feats[i, :l] = f
+                padded_genes[i, :l] = g
                 padded_coords[i, :l] = c
                 mask[i, :l] = False
 
@@ -883,4 +939,6 @@ def get_hest_feature_dataloader(
             collate_fn=collate_fn_ws,
         )
 
-    return DataLoader(concat_ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+    return DataLoader(
+        concat_ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers
+    )

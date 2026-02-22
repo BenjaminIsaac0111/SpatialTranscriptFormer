@@ -8,10 +8,18 @@ from torch.utils.data import DataLoader
 
 from spatial_transcript_former.models.regression import HE2RNA, ViT_ST
 from spatial_transcript_former.models.interaction import SpatialTranscriptFormer
-from spatial_transcript_former.data.dataset import get_hest_dataloader, HEST_Dataset, load_gene_expression_matrix, load_global_genes
+from spatial_transcript_former.data.dataset import (
+    get_hest_dataloader,
+    HEST_Dataset,
+    load_gene_expression_matrix,
+    load_global_genes,
+)
 import h5py
 
-def plot_spatial_genes(coords, truth, pred, gene_names, sample_id, save_path=None, cmap='viridis'):
+
+def plot_spatial_genes(
+    coords, truth, pred, gene_names, sample_id, save_path=None, cmap="viridis"
+):
     """
     Plots spatial maps of gene expression (dot plot format).
     """
@@ -22,23 +30,30 @@ def plot_spatial_genes(coords, truth, pred, gene_names, sample_id, save_path=Non
 
     for i in range(num_plots):
         gene_name = gene_names[i]
-        
+
         # Truth
-        # HEST coords are (x, y). Scatter takes (x, y). 
+        # HEST coords are (x, y). Scatter takes (x, y).
         # imshow is y-down.
-        sc = axes[i, 0].scatter(coords[:, 0], coords[:, 1], c=truth[:, i],
-                                cmap=cmap, s=10, edgecolors='none')
+        sc = axes[i, 0].scatter(
+            coords[:, 0],
+            coords[:, 1],
+            c=truth[:, i],
+            cmap=cmap,
+            s=10,
+            edgecolors="none",
+        )
         axes[i, 0].set_title(f"{sample_id} - {gene_name} (TRUTH)")
-        axes[i, 0].invert_yaxis() # Match image space
-        axes[i, 0].set_aspect('equal')
+        axes[i, 0].invert_yaxis()  # Match image space
+        axes[i, 0].set_aspect("equal")
         plt.colorbar(sc, ax=axes[i, 0], shrink=0.6)
-        
+
         # Prediction
-        sc = axes[i, 1].scatter(coords[:, 0], coords[:, 1], c=pred[:, i],
-                                cmap=cmap, s=10, edgecolors='none')
+        sc = axes[i, 1].scatter(
+            coords[:, 0], coords[:, 1], c=pred[:, i], cmap=cmap, s=10, edgecolors="none"
+        )
         axes[i, 1].set_title(f"{sample_id} - {gene_name} (PRED)")
-        axes[i, 1].invert_yaxis() # Match image space
-        axes[i, 1].set_aspect('equal')
+        axes[i, 1].invert_yaxis()  # Match image space
+        axes[i, 1].set_aspect("equal")
         plt.colorbar(sc, ax=axes[i, 1], shrink=0.6)
 
     plt.tight_layout()
@@ -48,9 +63,19 @@ def plot_spatial_genes(coords, truth, pred, gene_names, sample_id, save_path=Non
     else:
         plt.show()
     plt.close(fig)
-    plt.close('all')
+    plt.close("all")
 
-def plot_histology_overlay(image, coords, values, gene_names, sample_id, scalef=1.0, save_path=None, cmap='viridis'):
+
+def plot_histology_overlay(
+    image,
+    coords,
+    values,
+    gene_names,
+    sample_id,
+    scalef=1.0,
+    save_path=None,
+    cmap="viridis",
+):
     """
     Plots predictions as an overlay on the histology image.
     """
@@ -65,17 +90,24 @@ def plot_histology_overlay(image, coords, values, gene_names, sample_id, scalef=
     for i in range(num_plots):
         gene_name = gene_names[i]
         ax = axes[i]
-        
+
         # Display Histology
         ax.imshow(image)
-        
+
         # Overlay Predictions
         # pixel_coords[:, 0] = X, pixel_coords[:, 1] = Y
-        sc = ax.scatter(pixel_coords[:, 0], pixel_coords[:, 1], c=values[:, i], 
-                        cmap=plt.get_cmap(cmap), alpha=0.4, s=15, edgecolors='none')
-        
+        sc = ax.scatter(
+            pixel_coords[:, 0],
+            pixel_coords[:, 1],
+            c=values[:, i],
+            cmap=plt.get_cmap(cmap),
+            alpha=0.4,
+            s=15,
+            edgecolors="none",
+        )
+
         ax.set_title(f"{sample_id} - {gene_name} Overlay")
-        ax.axis('off')
+        ax.axis("off")
         plt.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
 
     plt.tight_layout()
@@ -85,29 +117,35 @@ def plot_histology_overlay(image, coords, values, gene_names, sample_id, scalef=
     else:
         plt.show()
     plt.close(fig)
-    plt.close('all')
+    plt.close("all")
+
 
 # Fixed bowel-cancer-relevant pathways (MSigDB Hallmark names, without prefix)
 BOWEL_CANCER_PATHWAYS = [
-    'EPITHELIAL_MESENCHYMAL_TRANSITION',
-    'WNT_BETA_CATENIN_SIGNALING',
-    'INFLAMMATORY_RESPONSE',
-    'ANGIOGENESIS',
-    'APOPTOSIS',
-    'TNFA_SIGNALING_VIA_NFKB',
+    "EPITHELIAL_MESENCHYMAL_TRANSITION",
+    "WNT_BETA_CATENIN_SIGNALING",
+    "INFLAMMATORY_RESPONSE",
+    "ANGIOGENESIS",
+    "APOPTOSIS",
+    "TNFA_SIGNALING_VIA_NFKB",
 ]
 
 
-def plot_training_summary(coords, pathway_pred, pathway_truth, pathway_names,
-                          sample_id, histology_img=None, scalef=1.0,
-                          save_path=None, cmap='jet'):
+def plot_training_summary(
+    coords,
+    pathway_pred,
+    pathway_truth,
+    pathway_names,
+    sample_id,
+    histology_img=None,
+    scalef=1.0,
+    save_path=None,
+    cmap="jet",
+):
     """
-    Compact landscape training visualization dashboard.
-
-    Layout:
-        [Histology] | [GT pw1][Pred pw1][GT pw2][Pred pw2]
-                    | [GT pw3][Pred pw3][GT pw4][Pred pw4]
-                    | [GT pw5][Pred pw5][GT pw6][Pred pw6]
+    Compact landscape training visualization dashboard without z-scoring.
+    Colorbars are explicitly externalized using make_axes_locatable so plots
+    stay uniform in size.
 
     Args:
         coords: (N, 2) spot coordinates.
@@ -121,230 +159,307 @@ def plot_training_summary(coords, pathway_pred, pathway_truth, pathway_names,
         cmap: Colormap for scatter plots.
     """
     import matplotlib.gridspec as gridspec
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     # Find indices for our fixed pathways
     name_to_idx = {}
     if pathway_names is not None:
         for i, name in enumerate(pathway_names):
-            short = name.replace('HALLMARK_', '')
+            short = name.replace("HALLMARK_", "")
             name_to_idx[short] = i
 
     display_pathways = []
     if pathway_names is not None:
         if len(pathway_names) <= 6:
-            # If the model only predicted a few pathways, just show them all!
             for pw in pathway_names:
-                if pw.replace('HALLMARK_', '') in name_to_idx:
-                    display_pathways.append((pw.replace('HALLMARK_', ''), name_to_idx[pw.replace('HALLMARK_', '')]))
+                short = pw.replace("HALLMARK_", "")
+                if short in name_to_idx:
+                    display_pathways.append((short, name_to_idx[short]))
         else:
-            # Otherwise filter by bowel cancer
             for pw in BOWEL_CANCER_PATHWAYS:
                 if pw in name_to_idx:
                     display_pathways.append((pw, name_to_idx[pw]))
 
         if not display_pathways:
-            # Fallback to first 6 pathways
             for pw in pathway_names[:6]:
-                if pw.replace('HALLMARK_', '') in name_to_idx:
-                    display_pathways.append((pw.replace('HALLMARK_', ''), name_to_idx[pw.replace('HALLMARK_', '')]))
+                short = pw.replace("HALLMARK_", "")
+                if short in name_to_idx:
+                    display_pathways.append((short, name_to_idx[short]))
 
     if not display_pathways:
         print("Warning: No viable pathways found in model to display. Skipping plot.")
         return
 
-    n_per_row = 2  # pathways per row
+    n_per_row = 2
     n_pw = len(display_pathways)
-    n_rows = int(np.ceil(n_pw / n_per_row))  # 3 rows for 6 pathways
+    n_rows = int(np.ceil(n_pw / n_per_row))
     has_histology = histology_img is not None
 
     vis_coords = coords * scalef if has_histology else coords
 
-    # --- Compact landscape figure (dark background) ---
-    fig = plt.figure(figsize=(18, 5 * n_rows), constrained_layout=False)
-    fig.patch.set_facecolor('#1a1a2e')
+    # Create figure: Width accommodates 1 Histology + (2 pathways * 3 cols each (Truth, Pred, Cbar))
+    # Total ~7 logical columns
+    fig = plt.figure(figsize=(24, 6 * n_rows), constrained_layout=False)
+    fig.patch.set_facecolor("#1a1a2e")
 
-    # Outer grid: [1 histology col | 3× wider pathway grid]
-    outer = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[1, 3],
-                              left=0.03, right=0.97, top=0.92, bottom=0.03,
-                              wspace=0.06)
+    # Outer Grid: 1 col for Histology, 1 for all pathways
+    outer = gridspec.GridSpec(
+        1,
+        2,
+        figure=fig,
+        width_ratios=[1, 3.5],
+        left=0.02,
+        right=0.98,
+        top=0.92,
+        bottom=0.05,
+        wspace=0.1,
+    )
 
     # --- Left: Histology panel ---
     ax_hist = fig.add_subplot(outer[0, 0])
     if has_histology:
         ax_hist.imshow(histology_img)
-    ax_hist.set_title('Histology', fontsize=13, color='white', pad=8)
-    ax_hist.axis('off')
-    ax_hist.set_facecolor('#0d0d1a')
+    ax_hist.set_title("Histology", fontsize=16, color="white", pad=12)
+    ax_hist.axis("off")
+    ax_hist.set_facecolor("#0d0d1a")
+    # Anchor to top so it doesn't float randomly if pathways are tall
+    ax_hist.set_anchor("N")
 
-    # --- Right: n_rows × (n_per_row*2) grid of GT|Pred panels ---
-    n_cols = n_per_row * 2
-    inner = gridspec.GridSpecFromSubplotSpec(n_rows, n_cols,
-                                             subplot_spec=outer[0, 1],
-                                             hspace=0.40, wspace=0.06)
+    # --- Right: Pathway Grids ---
+    # For each pathway, we want [GT | Pred | Colorbar] = 3 sub-columns.
+    # Total columns = n_per_row * 3
+    n_cols = n_per_row * 3
+    # Configure width ratios: Maps get width 1, Colorbars get width 0.1
+    col_widths = [1, 1, 0.1] * n_per_row
+
+    inner = gridspec.GridSpecFromSubplotSpec(
+        n_rows,
+        n_cols,
+        subplot_spec=outer[0, 1],
+        width_ratios=col_widths,
+        hspace=0.35,
+        wspace=0.15,
+    )
 
     for idx, (pw_name, pw_idx) in enumerate(display_pathways):
-        row   = idx // n_per_row
-        col_l = (idx % n_per_row) * 2  # GT panel column
-        col_r = col_l + 1              # Pred panel column
+        row = idx // n_per_row
+        pw_col_base = (idx % n_per_row) * 3
 
-        label = pw_name.replace('_', ' ').title()
-        if len(label) > 26:
-            label = label[:23] + '...'
+        col_gt = pw_col_base
+        col_pred = pw_col_base + 1
+        col_cbar = pw_col_base + 2
+
+        label = pw_name.replace("_", " ").title()
+        if len(label) > 30:
+            label = label[:27] + "..."
 
         truth_raw = pathway_truth[:, pw_idx]
-        pred_raw  = pathway_pred[:, pw_idx]
+        pred_raw = pathway_pred[:, pw_idx]
 
-        eps = 1e-8
-        truth_vals = (truth_raw - truth_raw.mean()) / (truth_raw.std() + eps)
-        pred_vals  = (pred_raw  - pred_raw.mean())  / (pred_raw.std()  + eps)
+        # Use absolute bounds instead of per-plot z-scored normalized bounds
+        vmin = min(truth_raw.min(), pred_raw.min())
+        vmax = max(truth_raw.max(), pred_raw.max())
 
-        vmin = min(truth_vals.min(), pred_vals.min())
-        vmax = max(truth_vals.max(), pred_vals.max())
-
-        for col, vals, suffix in [(col_l, truth_vals, 'Truth'), (col_r, pred_vals, 'Pred')]:
+        sc = None
+        for col, vals, suffix in [
+            (col_gt, truth_raw, "Truth"),
+            (col_pred, pred_raw, "Pred"),
+        ]:
             ax = fig.add_subplot(inner[row, col])
-            ax.set_facecolor('#0d0d1a')
+            ax.set_facecolor("#0d0d1a")
 
             if has_histology:
                 ax.imshow(histology_img, alpha=0.25)
 
-            sc = ax.scatter(vis_coords[:, 0], vis_coords[:, 1], c=vals,
-                            cmap=cmap, s=6, edgecolors='none',
-                            vmin=vmin, vmax=vmax)
+            sc = ax.scatter(
+                vis_coords[:, 0],
+                vis_coords[:, 1],
+                c=vals,
+                cmap=cmap,
+                s=6,
+                edgecolors="none",
+                vmin=vmin,
+                vmax=vmax,
+            )
 
             if not has_histology:
                 ax.invert_yaxis()
-            ax.set_aspect('equal')
-            ax.axis('off')
-            ax.set_title(f'{label}\n{suffix}', fontsize=9, color='white', pad=4)
+            ax.set_aspect("equal")
+            ax.axis("off")
+            ax.set_title(f"{label}\n{suffix}", fontsize=12, color="white", pad=6)
 
-            # Colorbar only on the Pred panel to save space
-            if suffix == 'Pred':
-                cb = plt.colorbar(sc, ax=ax, shrink=0.75, pad=0.03)
-                cb.ax.tick_params(labelsize=7, colors='white')
-                cb.outline.set_edgecolor('white')
+        # Plot the colorbar in its dedicated axis so it NEVER shrinks the prediction map
+        cax = fig.add_subplot(inner[row, col_cbar])
+        cb = plt.colorbar(sc, cax=cax)
+        cb.ax.tick_params(labelsize=9, colors="white")
+        cb.outline.set_edgecolor("white")
 
-    fig.suptitle(f'{sample_id}  —  Pathway Activation Summary',
-                 fontsize=15, fontweight='bold', color='white', y=0.97)
+    fig.suptitle(
+        f"{sample_id}  —  Pathway Activation Summary",
+        fontsize=20,
+        fontweight="bold",
+        color="white",
+        y=0.98,
+    )
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight',
-                    facecolor=fig.get_facecolor())
+        plt.savefig(
+            save_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor()
+        )
         print(f"Training summary saved to {save_path}")
     else:
         plt.show()
     plt.close(fig)
-    plt.close('all')
+    plt.close("all")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Predict and Visualize Spatial Transcriptomics")
-    parser.add_argument('--data-dir', type=str, required=True)
-    parser.add_argument('--sample-id', type=str, required=True)
-    parser.add_argument('--model-path', type=str, required=True)
-    parser.add_argument('--model-type', type=str, default='he2rna', choices=['he2rna', 'vit_st', 'interaction'])
-    parser.add_argument('--num-genes', type=int, default=1000)
-    parser.add_argument('--output-dir', type=str, default='./results')
-    parser.add_argument('--n-neighbors', type=int, default=0, help='Number of spatial neighbors to use')
-    parser.add_argument('--use-nystrom', action='store_true', help='Use Nystrom attention for linear complexity')
-    parser.add_argument('--num-pathways', type=int, default=50, help='Number of pathways in the bottleneck')
-    parser.add_argument('--backbone', type=str, default='resnet50', help='Backbone for feature extraction')
-    parser.add_argument('--plot-pathways', action='store_true', help='Visualize pathway activations')
-    
+    parser = argparse.ArgumentParser(
+        description="Predict and Visualize Spatial Transcriptomics"
+    )
+    parser.add_argument("--data-dir", type=str, required=True)
+    parser.add_argument("--sample-id", type=str, required=True)
+    parser.add_argument("--model-path", type=str, required=True)
+    parser.add_argument(
+        "--model-type",
+        type=str,
+        default="he2rna",
+        choices=["he2rna", "vit_st", "interaction"],
+    )
+    parser.add_argument("--num-genes", type=int, default=1000)
+    parser.add_argument("--output-dir", type=str, default="./results")
+    parser.add_argument(
+        "--n-neighbors", type=int, default=0, help="Number of spatial neighbors to use"
+    )
+    parser.add_argument(
+        "--use-nystrom",
+        action="store_true",
+        help="Use Nystrom attention for linear complexity",
+    )
+    parser.add_argument(
+        "--num-pathways",
+        type=int,
+        default=50,
+        help="Number of pathways in the bottleneck",
+    )
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        default="resnet50",
+        help="Backbone for feature extraction",
+    )
+    parser.add_argument(
+        "--plot-pathways", action="store_true", help="Visualize pathway activations"
+    )
+
     args = parser.parse_args()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # Paths
-    patches_dir = os.path.join(args.data_dir, 'patches')
+    patches_dir = os.path.join(args.data_dir, "patches")
     if not os.path.exists(patches_dir):
         patches_dir = args.data_dir
-    st_dir = os.path.join(args.data_dir, 'st')
-    
+    st_dir = os.path.join(args.data_dir, "st")
+
     h5_path = os.path.join(patches_dir, f"{args.sample_id}.h5")
     h5ad_path = os.path.join(st_dir, f"{args.sample_id}.h5ad")
-    
+
     # Load Model
-    if args.model_type == 'he2rna':
+    if args.model_type == "he2rna":
         model = HE2RNA(num_genes=args.num_genes, backbone=args.backbone)
-    elif args.model_type == 'vit_st':
+    elif args.model_type == "vit_st":
         model = ViT_ST(num_genes=args.num_genes, model_name=args.backbone)
-    elif args.model_type == 'interaction':
+    elif args.model_type == "interaction":
         model = SpatialTranscriptFormer(
             num_genes=args.num_genes,
             use_nystrom=args.use_nystrom,
             num_pathways=args.num_pathways,
-            backbone_name=args.backbone
+            backbone_name=args.backbone,
         )
-        
+
     state_dict = torch.load(args.model_path, map_location=device, weights_only=True)
     # Handle possible torch.compile prefix
     new_state_dict = {}
     for k, v in state_dict.items():
-        if k.startswith('_orig_mod.'):
-            new_state_dict[k[len('_orig_mod.'):]] = v
+        if k.startswith("_orig_mod."):
+            new_state_dict[k[len("_orig_mod.") :]] = v
         else:
             new_state_dict[k] = v
     # Handle legacy checkpoints missing keys? No, usually extra keys are issue or missing
     # But if we added components (pathways?) no they are same architecture just different forward.
-            
+
     model.load_state_dict(new_state_dict)
     model.to(device)
     model.eval()
-    
+
     # Load Sample
-    with h5py.File(h5_path, 'r') as f:
-        patch_barcodes = f['barcode'][:].flatten()
-        coords = f['coords'][:]
-        
+    with h5py.File(h5_path, "r") as f:
+        patch_barcodes = f["barcode"][:].flatten()
+        coords = f["coords"][:]
+
     # Load common genes for consistency
     try:
         common_gene_names = load_global_genes(args.data_dir, args.num_genes)
     except Exception as e:
-        print(f"Warning: Could not load global genes, falling back to sample top genes: {e}")
+        print(
+            f"Warning: Could not load global genes, falling back to sample top genes: {e}"
+        )
         common_gene_names = None
 
     gene_matrix, mask, gene_names = load_gene_expression_matrix(
-        h5ad_path, patch_barcodes, selected_gene_names=common_gene_names, num_genes=args.num_genes
+        h5ad_path,
+        patch_barcodes,
+        selected_gene_names=common_gene_names,
+        num_genes=args.num_genes,
     )
-    
+
     coord_subset = coords[mask]
     indices = np.where(mask)[0]
-    
+
     # Neighborhood computation if requested
     neighborhood_indices = None
     if args.n_neighbors > 0:
         from scipy.spatial import KDTree
-        with h5py.File(h5_path, 'r') as f:
-            coords_all = f['coords'][:]
+
+        with h5py.File(h5_path, "r") as f:
+            coords_all = f["coords"][:]
         tree = KDTree(coords_all)
         dists, idxs = tree.query(coord_subset, k=args.n_neighbors + 1)
         final_neighbors = []
         for i, center_idx in enumerate(indices):
             n_idxs = idxs[i]
             n_idxs = n_idxs[n_idxs != center_idx]
-            final_neighbors.append(n_idxs[:args.n_neighbors])
+            final_neighbors.append(n_idxs[: args.n_neighbors])
         neighborhood_indices = np.array(final_neighbors)
     else:
-        with h5py.File(h5_path, 'r') as f:
-            coords_all = f['coords'][:]
- 
-    dataset = HEST_Dataset(h5_path, coord_subset, gene_matrix, indices=indices, 
-                           neighborhood_indices=neighborhood_indices, coords_all=coords_all)
+        with h5py.File(h5_path, "r") as f:
+            coords_all = f["coords"][:]
+
+    dataset = HEST_Dataset(
+        h5_path,
+        coord_subset,
+        gene_matrix,
+        indices=indices,
+        neighborhood_indices=neighborhood_indices,
+        coords_all=coords_all,
+    )
     loader = DataLoader(dataset, batch_size=32, shuffle=False)
-    
+
     all_preds = []
     all_truth = []
     all_pathways = []
-    
+
     print(f"Running inference on {len(dataset)} patches...")
     with torch.no_grad():
         for images, targets, rel_coords in loader:
             images = images.to(device)
             rel_coords = rel_coords.to(device)
-            
+
             if isinstance(model, SpatialTranscriptFormer):
                 # Request pathways if argument set
-                output = model(images, rel_coords=rel_coords, return_pathways=args.plot_pathways)
+                output = model(
+                    images, rel_coords=rel_coords, return_pathways=args.plot_pathways
+                )
                 if isinstance(output, tuple):
                     preds = output[0]
                     pathways = output[1]
@@ -353,59 +468,102 @@ def main():
                     preds = output
             else:
                 preds = model(images)
-                
+
             all_preds.append(preds.cpu().numpy())
             all_truth.append(targets.numpy())
-            
+
     all_preds = np.concatenate(all_preds, axis=0)
     all_truth = np.concatenate(all_truth, axis=0)
     if all_pathways:
         all_pathways = np.concatenate(all_pathways, axis=0)
-    
+
     # Save results
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     # Standard Plot
-    save_dot_path = os.path.join(args.output_dir, f"{args.sample_id}_spatial_inference.png")
-    plot_spatial_genes(coord_subset, all_truth, all_preds, gene_names[:5], args.sample_id, save_path=save_dot_path, cmap='jet')
-    
+    save_dot_path = os.path.join(
+        args.output_dir, f"{args.sample_id}_spatial_inference.png"
+    )
+    plot_spatial_genes(
+        coord_subset,
+        all_truth,
+        all_preds,
+        gene_names[:5],
+        args.sample_id,
+        save_path=save_dot_path,
+        cmap="jet",
+    )
+
     if args.plot_pathways and len(all_pathways) > 0:
-        save_pathway_path = os.path.join(args.output_dir, f"{args.sample_id}_pathway_activations.png")
-        plot_spatial_pathways(coord_subset, all_pathways, args.sample_id, save_path=save_pathway_path, cmap='jet')
-    
+        save_pathway_path = os.path.join(
+            args.output_dir, f"{args.sample_id}_pathway_activations.png"
+        )
+        plot_spatial_pathways(
+            coord_subset,
+            all_pathways,
+            args.sample_id,
+            save_path=save_pathway_path,
+            cmap="jet",
+        )
+
     # Histology Overlay Plot
     try:
         # Construct h5ad path robustly
-        h5ad_overlay_path = h5_path.replace('.h5', '.h5ad')
-        if 'patches' in h5ad_overlay_path:
-             h5ad_overlay_path = h5ad_overlay_path.replace('patches', 'st')
-        
+        h5ad_overlay_path = h5_path.replace(".h5", ".h5ad")
+        if "patches" in h5ad_overlay_path:
+            h5ad_overlay_path = h5ad_overlay_path.replace("patches", "st")
+
         if os.path.exists(h5ad_overlay_path):
-            with h5py.File(h5ad_overlay_path, 'r') as f:
+            with h5py.File(h5ad_overlay_path, "r") as f:
                 # Robust group access
-                if 'uns' in f and 'spatial' in f['uns']:
-                    spatial = f['uns/spatial']
-                    sample_key = list(spatial.keys())[0] if len(spatial.keys()) > 0 else None
+                if "uns" in f and "spatial" in f["uns"]:
+                    spatial = f["uns/spatial"]
+                    sample_key = (
+                        list(spatial.keys())[0] if len(spatial.keys()) > 0 else None
+                    )
                     if sample_key:
-                        img_group = spatial[sample_key]['images']
-                        img_key = 'downscaled_fullres' if 'downscaled_fullres' in img_group else list(img_group.keys())[0]
+                        img_group = spatial[sample_key]["images"]
+                        img_key = (
+                            "downscaled_fullres"
+                            if "downscaled_fullres" in img_group
+                            else list(img_group.keys())[0]
+                        )
                         img = img_group[img_key][:]
-                        
-                        scale_group = spatial[sample_key]['scalefactors']
-                        scale_key = 'tissue_downscaled_fullres_scalef' if 'tissue_downscaled_fullres_scalef' in scale_group else list(scale_group.keys())[0]
+
+                        scale_group = spatial[sample_key]["scalefactors"]
+                        scale_key = (
+                            "tissue_downscaled_fullres_scalef"
+                            if "tissue_downscaled_fullres_scalef" in scale_group
+                            else list(scale_group.keys())[0]
+                        )
                         scalef = scale_group[scale_key][()]
-                        
-                        save_overlay_path = os.path.join(args.output_dir, f"{args.sample_id}_histology_overlay.png")
+
+                        save_overlay_path = os.path.join(
+                            args.output_dir, f"{args.sample_id}_histology_overlay.png"
+                        )
                         print(f"Generating histology overlay for {args.sample_id}...")
-                        plot_histology_overlay(img, coord_subset, all_preds, gene_names, args.sample_id, scalef=scalef, save_path=save_overlay_path, cmap='jet')
+                        plot_histology_overlay(
+                            img,
+                            coord_subset,
+                            all_preds,
+                            gene_names,
+                            args.sample_id,
+                            scalef=scalef,
+                            save_path=save_overlay_path,
+                            cmap="jet",
+                        )
                 else:
-                    print(f"No 'uns/spatial' found in {h5ad_overlay_path}. Keys: {list(f.keys())}")
+                    print(
+                        f"No 'uns/spatial' found in {h5ad_overlay_path}. Keys: {list(f.keys())}"
+                    )
         else:
             print(f"H5AD file not found for overlay: {h5ad_overlay_path}")
     except Exception as e:
         print(f"Warning: Could not generate histology overlay: {e}")
         import traceback
+
         traceback.print_exc()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

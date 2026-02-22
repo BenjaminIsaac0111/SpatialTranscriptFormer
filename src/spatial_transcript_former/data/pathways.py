@@ -13,11 +13,12 @@ from typing import Dict, List, Optional
 
 # MSigDB collections URLs (v2024.1.Hs, gene symbols)
 MSIGDB_URLS = {
-    'hallmarks': "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/h.all.v2024.1.Hs.symbols.gmt",
-    'c2_kegg': "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_legacy.v2024.1.Hs.symbols.gmt",
-    'c2_medicus': "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_medicus.v2024.1.Hs.symbols.gmt",
-    'c2_cgp': "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cgp.v2024.1.Hs.symbols.gmt",
+    "hallmarks": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/h.all.v2024.1.Hs.symbols.gmt",
+    "c2_kegg": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_legacy.v2024.1.Hs.symbols.gmt",
+    "c2_medicus": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_medicus.v2024.1.Hs.symbols.gmt",
+    "c2_cgp": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cgp.v2024.1.Hs.symbols.gmt",
 }
+
 
 def download_msigdb_gmt(url: str, filename: str, cache_dir: str = ".cache") -> str:
     """
@@ -33,7 +34,7 @@ def download_msigdb_gmt(url: str, filename: str, cache_dir: str = ".cache") -> s
         print(f"Downloading MSigDB gene sets from {url}...")
         urllib.request.urlretrieve(url, local_path)
         print(f"Saved to {local_path}")
-    
+
     return local_path
 
 
@@ -45,9 +46,9 @@ def parse_gmt(gmt_path: str) -> Dict[str, List[str]]:
         pathway_name \\t description \\t gene1 \\t gene2 \\t ...
     """
     pathways = {}
-    with open(gmt_path, 'r') as f:
+    with open(gmt_path, "r") as f:
         for line in f:
-            parts = line.strip().split('\t')
+            parts = line.strip().split("\t")
             if len(parts) < 3:
                 continue
             name = parts[0]
@@ -57,9 +58,7 @@ def parse_gmt(gmt_path: str) -> Dict[str, List[str]]:
 
 
 def build_membership_matrix(
-    pathway_dict: Dict[str, List[str]],
-    gene_list: List[str],
-    scale: float = 1.0
+    pathway_dict: Dict[str, List[str]], gene_list: List[str], scale: float = 1.0
 ) -> torch.Tensor:
     """
     Build a binary membership matrix (num_pathways x num_genes).
@@ -95,7 +94,7 @@ def get_pathway_init(
     gmt_urls: Optional[List[str]] = None,
     filter_names: Optional[List[str]] = None,
     cache_dir: str = ".cache",
-    verbose: bool = True
+    verbose: bool = True,
 ) -> tuple:
     """
     Main entry point: download GMTs, match to gene list, return init matrix.
@@ -103,7 +102,7 @@ def get_pathway_init(
     Args:
         gene_list: Ordered list of gene symbols from global_genes.json.
         gmt_urls: List of MSigDB GMT URLs to download. Defaults to Hallmarks and C2 KEGG.
-        filter_names: If provided, only include these specific pathway names. 
+        filter_names: If provided, only include these specific pathway names.
         cache_dir: Directory to cache the downloaded GMT file.
         verbose: Print pathway coverage statistics.
 
@@ -111,19 +110,19 @@ def get_pathway_init(
         tuple: (membership_matrix [Tensor (P, G)], pathway_names [list of str])
     """
     if gmt_urls is None:
-        gmt_urls = [MSIGDB_URLS['hallmarks'], MSIGDB_URLS['c2_kegg']]
+        gmt_urls = [MSIGDB_URLS["hallmarks"], MSIGDB_URLS["c2_kegg"]]
 
     combined_dict = {}
 
     for url in gmt_urls:
-        filename = url.split('/')[-1]
+        filename = url.split("/")[-1]
         local_path = download_msigdb_gmt(url, filename, cache_dir)
         pathway_dict = parse_gmt(local_path)
-        
+
         # Filter if requested
         if filter_names is not None:
-             pathway_dict = {k: v for k, v in pathway_dict.items() if k in filter_names}
-             
+            pathway_dict = {k: v for k, v in pathway_dict.items() if k in filter_names}
+
         # Merge with combined dict (don't overwrite if name collision occurs somehow)
         for k, v in pathway_dict.items():
             if k not in combined_dict:
@@ -138,7 +137,9 @@ def get_pathway_init(
         total_genes = len(gene_list)
         covered = (matrix.sum(dim=0) > 0).sum().item()
         print(f"Pathways initialized: {len(pathway_names)}")
-        print(f"Gene coverage: {covered}/{total_genes} ({100*covered/total_genes:.1f}%)")
+        print(
+            f"Gene coverage: {covered}/{total_genes} ({100*covered/total_genes:.1f}%)"
+        )
         for i, name in enumerate(pathway_names):
             n_matched = int(matrix[i].sum().item())
             short_name = name.replace("HALLMARK_", "")

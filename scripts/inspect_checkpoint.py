@@ -1,16 +1,17 @@
-
 import torch
 import os
 
-ckpt_path = r"z:\Projects\SpatialTranscriptFormer\results_long_run\latest_model_interaction.pth"
+ckpt_path = (
+    r"z:\Projects\SpatialTranscriptFormer\results_long_run\latest_model_interaction.pth"
+)
 
 if os.path.exists(ckpt_path):
     print(f"Inspecting {ckpt_path}...")
     try:
-        checkpoint = torch.load(ckpt_path, map_location='cpu')
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
         if isinstance(checkpoint, dict):
             print(f"Keys: {list(checkpoint.keys())}")
-            if 'epoch' in checkpoint:
+            if "epoch" in checkpoint:
                 print(f"Epoch: {checkpoint['epoch']}")
             else:
                 print("No 'epoch' key found.")

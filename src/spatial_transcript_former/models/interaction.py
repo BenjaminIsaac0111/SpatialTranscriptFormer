@@ -12,6 +12,7 @@ with histology patch features via self- and cross-attention:
 * ``NystromEncoder``            — Nyström-based early fusion
 * ``SpatialTranscriptFormer``   — the full model
 """
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -53,7 +54,6 @@ class PathwayTokenizer(nn.Module):
         return self.pathway_embeddings.expand(batch_size, -1, -1)
 
 
-
 class LocalPatchMixer(nn.Module):
     """Mixes each patch's features with its immediate spatial neighbours via a depthwise conv.
 
@@ -72,79 +72,168 @@ class LocalPatchMixer(nn.Module):
     256×256 cells, which would indicate malformed / non-grid coordinates and
     could allocate prohibitive memory.
     """
-    
+
     def __init__(self, dim, kernel_size=3):
         super().__init__()
         self.dim = dim
-        self.conv = nn.Conv2d(dim, dim, kernel_size=kernel_size, padding=kernel_size//2, groups=dim)
+        self.conv = nn.Conv2d(
+            dim, dim, kernel_size=kernel_size, padding=kernel_size // 2, groups=dim
+        )
         self.act = nn.GELU()
-        
+
     def forward(self, x, coords):
         """
         Args:
             x: (B, N, D) Patch features
             coords: (B, N, 2) Coordinates (absolute-ish indices)
-            
+
         Returns:
             (B, N, D) Enriched features
         """
         B, N, D = x.shape
         device = x.device
-        
+
         # 1. Normalize coords to grid indices
         # We assume coords are already roughly grid-like or pixel coords.
         # But to be safe, we subtract min and assume unit step?
         # Actually, let's assume coords ARE grid indices for now, or scaled pixels.
         # If they are large pixels (e.g. 10000), we need to know the patch size (224).
         # We'll trust the caller to pass grid-indices.
-        
+
         # Find bounds per batch? Or global max?
         # To batch this efficiently, we find global bounds in the batch
-        min_c = coords.min(dim=1, keepdim=True)[0] # (B, 1, 2)
-        grid_coords = coords - min_c # Zero-based
-        
-        max_c = grid_coords.max(dim=1)[0].max(dim=0)[0] # (2,)
+        min_c = coords.min(dim=1, keepdim=True)[0]  # (B, 1, 2)
+        grid_coords = coords - min_c  # Zero-based
+
+        max_c = grid_coords.max(dim=1)[0].max(dim=0)[0]  # (2,)
         H, W = int(max_c[1].item()) + 1, int(max_c[0].item()) + 1
-        
+
         # Cap memory usage if outliers exist
-        if H * W > 256 * 256: 
-             # Fallback: Don't crash on massive outlier. Just skip mix? 
-             # Or clamp? Let's skip mixing if grid is absurd.
-             return x
+        if H * W > 256 * 256:
+            # Fallback: Don't crash on massive outlier. Just skip mix?
+            # Or clamp? Let's skip mixing if grid is absurd.
+            return x
 
         # 2. Scatter
         grid = torch.zeros(B, D, H, W, device=device, dtype=x.dtype)
-        
-        # We need advanced indexing: grid[b, :, y, x] = feat
-        # Flatten batch for easier indexing if B>1, but here we loop or use gather scatter
-        # Let's loop for clarity and safety with B=1 expected mostly. 
-        # Actually, pytorch advanced indexing works fine.
-        
-        # indices: (B, N, 2) -> we want to assign x[b,n] to grid[b, :, y[b,n], x[b,n]]
-        # This is tricky to vectorize perfectly across High B without scatter.
-        # But B is usually small (1 for Inference, 8 for Train).
-        
-        # Let's just Loop over Batch
-        for b in range(B):
-            gx = grid_coords[b, :, 0].long()
-            gy = grid_coords[b, :, 1].long()
-            
-            # Simple assignment (last one wins if collision, but shouldn't be collisions in ST)
-            grid[b, :, gy, gx] = x[b].T
-            
+
+        b_idx = torch.arange(B, device=device).view(B, 1, 1)
+        d_idx = torch.arange(D, device=device).view(1, D, 1)
+
+        gx = grid_coords[..., 0].long()  # (B, N)
+        gy = grid_coords[..., 1].long()  # (B, N)
+
+        gy_idx = gy.unsqueeze(1)  # (B, 1, N)
+        gx_idx = gx.unsqueeze(1)  # (B, 1, N)
+
+        x_T = x.transpose(1, 2)  # (B, D, N)
+        grid[b_idx, d_idx, gy_idx, gx_idx] = x_T
+
         # 3. Conv
         out_grid = self.act(self.conv(grid))
-        
+
         # 4. Gather & Residual
-        out = torch.zeros_like(x)
-        for b in range(B):
-            gx = grid_coords[b, :, 0].long()
-            gy = grid_coords[b, :, 1].long()
-            
-            # Extract columns
-            mixed = out_grid[b, :, gy, gx].T # (N, D)
-            out[b] = mixed
-            
+        out = out_grid[b_idx, d_idx, gy_idx, gx_idx].transpose(
+            1, 2
+        )  # (B, D, N) -> (B, N, D)
+
+        return x + out
+
+
+class GraphPatchMixer(nn.Module):
+    """Mixes each patch's features with its k-nearest physical neighbors using Graph Attention.
+
+    This acts as a spatial refiner. It constructs a k-NN graph on the fly from the
+    physical coordinates and performs message passing.
+    """
+
+    def __init__(self, dim, k=8, heads=4):
+        super().__init__()
+        self.dim = dim
+        self.k = k
+        self.heads = heads
+        self.head_dim = dim // heads
+
+        assert self.head_dim * heads == dim, "dim must be divisible by heads"
+
+        # GAT-style linear projections
+        self.to_qkv = nn.Linear(dim, dim * 3, bias=False)
+        self.proj = nn.Linear(dim, dim)
+        self.act = nn.GELU()
+
+    def forward(self, x, coords, mask=None):
+        """
+        Args:
+            x: (B, N, D) Patch features
+            coords: (B, N, 2) Coordinates (absolute physical positions)
+            mask: (B, N) Boolean padding mask (True = padding)
+
+        Returns:
+            (B, N, D) Refined features
+        """
+        B, N, D = x.shape
+        device = x.device
+
+        # 1. Build k-NN graph
+        # Compute pairwise distances (B, N, N)
+        dist = torch.cdist(coords, coords)
+
+        k_actual = min(self.k + 1, N)  # +1 for self-loop, bounded by N
+        dist_for_topk = dist.clone()
+        if mask is not None:
+            dist_for_topk.masked_fill_(mask.unsqueeze(1).expand(B, N, N), float("inf"))
+
+        _, nn_idx = torch.topk(-dist_for_topk, k=k_actual, dim=-1)  # (B, N, K)
+
+        # 2. Extract neighbor features
+        batch_indices = torch.arange(B, device=device).view(-1, 1, 1)  # (B, 1, 1)
+        x_neighbors = x[batch_indices, nn_idx, :]  # (B, N, K, D)
+
+        # 3. Message Passing (GAT-style)
+        # Query comes from the center node, Key/Value come from neighbors
+        qkv_center = self.to_qkv(x)  # (B, N, 3D)
+        q_center, _, _ = qkv_center.chunk(3, dim=-1)  # (B, N, D)
+
+        qkv_neighbors = self.to_qkv(x_neighbors)
+        _, k_neighbors, v_neighbors = qkv_neighbors.chunk(3, dim=-1)  # (B, N, K, D)
+
+        # Reshape for multi-head attention
+        q = q_center.view(B, N, self.heads, self.head_dim)  # (B, N, H, d)
+        k = k_neighbors.view(
+            B, N, k_actual, self.heads, self.head_dim
+        )  # (B, N, K, H, d)
+        v = v_neighbors.view(
+            B, N, k_actual, self.heads, self.head_dim
+        )  # (B, N, K, H, d)
+
+        # Attention scores: Q * K^T
+        q = q.unsqueeze(3)  # (B, N, H, 1, d)
+        k = k.permute(0, 1, 3, 2, 4)  # (B, N, H, K, d)
+
+        # dot product over 'd'
+        attn = (q * k).sum(dim=-1) / (self.head_dim**0.5)  # (B, N, H, K)
+
+        if mask is not None:
+            batch_indices = torch.arange(B, device=device).view(-1, 1, 1)  # (B, 1, 1)
+            neighbor_is_padded = mask[batch_indices, nn_idx]  # (B, N, K)
+            neighbor_is_padded = neighbor_is_padded.unsqueeze(2).expand(
+                -1, -1, self.heads, -1
+            )
+            attn = attn.masked_fill(neighbor_is_padded, float("-inf"))
+
+        attn = F.softmax(attn, dim=-1)  # (B, N, H, K)
+        if mask is not None:
+            attn = torch.nan_to_num(attn, nan=0.0)
+
+        # Weighted sum of values
+        v = v.permute(0, 1, 3, 2, 4)  # (B, N, H, K, d)
+        out = (attn.unsqueeze(-1) * v).sum(dim=-2)  # (B, N, H, d)
+
+        # Reshape back to D
+        out = out.reshape(B, N, D)
+        out = self.proj(self.act(out))
+
+        # 4. Residual Connection
         return x + out
 
 
@@ -178,8 +267,14 @@ class SinusoidalPositionalEncoder(nn.Module):
 
         # Create geometric progression of frequencies
         # div_term = 1 / (temperature ** (2i / d_model))
-        div_term_x = torch.exp(torch.arange(0, dim_x, 2, dtype=torch.float32, device=rel_coords.device) * -(torch.log(torch.tensor(self.temperature)) / dim_x))
-        div_term_y = torch.exp(torch.arange(0, dim_y, 2, dtype=torch.float32, device=rel_coords.device) * -(torch.log(torch.tensor(self.temperature)) / dim_y))
+        div_term_x = torch.exp(
+            torch.arange(0, dim_x, 2, dtype=torch.float32, device=rel_coords.device)
+            * -(torch.log(torch.tensor(self.temperature)) / dim_x)
+        )
+        div_term_y = torch.exp(
+            torch.arange(0, dim_y, 2, dtype=torch.float32, device=rel_coords.device)
+            * -(torch.log(torch.tensor(self.temperature)) / dim_y)
+        )
 
         pe_x = torch.zeros(*x.shape, dim_x, device=rel_coords.device)
         pe_y = torch.zeros(*y.shape, dim_y, device=rel_coords.device)
@@ -198,8 +293,8 @@ class SinusoidalPositionalEncoder(nn.Module):
 
 class EarlyFusionBlock(nn.Module):
     """Generic wrapper for Early Fusion interaction.
-    
-    Handles the common logic for "concatenation -> attention -> slicing" used in 
+
+    Handles the common logic for "concatenation -> attention -> slicing" used in
     multimodal interaction (Jaume et al. mode).
     """
 
@@ -216,7 +311,7 @@ class EarlyFusionBlock(nn.Module):
 
     def _generate_quadrant_mask(self, num_p, num_h, device):
         """Generates Eq 1 quadrant mask to restrict attention between modalities.
-        
+
         [ P2P  P2H ]
         [ H2P  H2H ]
         """
@@ -226,11 +321,11 @@ class EarlyFusionBlock(nn.Module):
         p_slice = slice(0, num_p)
         h_slice = slice(num_p, n_total)
 
-        if 'H2H' in self.masked_quadrants:
+        if "H2H" in self.masked_quadrants:
             mask[h_slice, h_slice] = True
-        if 'H2P' in self.masked_quadrants:
+        if "H2P" in self.masked_quadrants:
             mask[h_slice, p_slice] = True
-        if 'P2H' in self.masked_quadrants:
+        if "P2H" in self.masked_quadrants:
             mask[p_slice, h_slice] = True
 
         return mask
@@ -242,39 +337,39 @@ class EarlyFusionBlock(nn.Module):
             p_tokens: Pathway tokens (B, Np, D)
             h_tokens: Histology tokens (B, Nh, D)
             return_all_tokens: If True, returns full concatenated sequence.
-        
+
         Returns:
             Contextualized tokens.
         """
         np = p_tokens.shape[1]
         nh = h_tokens.shape[1]
-        
+
         x = torch.cat([p_tokens, h_tokens], dim=1)
-        
+
         mask = None
         if self.masked_quadrants:
             mask = self._generate_quadrant_mask(np, nh, p_tokens.device)
-            
+
         # Standard PyTorch MHA and NystromAttention use different mask signatures.
         # We handle the dispatch here to ensure correct mask application.
         out = self.encoder(x, mask=mask)
-            
+
         if return_all_tokens:
             return out
-            
+
         return out[:, :np, :]
 
 
 class MultimodalFusion(EarlyFusionBlock):
     """Standard Transformer-based Early Fusion."""
-    
+
     def __init__(self, dim, n_heads, n_layers, dropout=0.1, masked_quadrants=None):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=dim,
             nhead=n_heads,
-            dim_feedforward=2048,
+            dim_feedforward=dim * 4,
             dropout=dropout,
-            batch_first=True
+            batch_first=True,
         )
         transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         super().__init__(encoder=transformer, masked_quadrants=masked_quadrants)
@@ -289,13 +384,14 @@ class NystromStack(nn.Module):
     standard PyTorch MHA: ``True`` means *keep* (attend), so the mask is
     inverted (``~mask``) before being passed to ``NystromAttention``.
     """
+
     def __init__(self, layers):
         super().__init__()
         self.layers = nn.ModuleList(layers)
-        
+
     def forward(self, x, mask=None):
         attn_mask = ~mask if mask is not None else None
-        
+
         for norm1, attn, norm2, ff in self.layers:
             x = x + attn(norm1(x), mask=attn_mask)
             x = x + ff(norm2(x))
@@ -304,31 +400,43 @@ class NystromStack(nn.Module):
 
 class NystromEncoder(EarlyFusionBlock):
     """Nystrom-based Early Fusion."""
-    
-    def __init__(self, dim, n_heads, n_layers, dropout=0.1, num_landmarks=256, masked_quadrants=None):
+
+    def __init__(
+        self,
+        dim,
+        n_heads,
+        n_layers,
+        dropout=0.1,
+        num_landmarks=256,
+        masked_quadrants=None,
+    ):
         from nystrom_attention import NystromAttention
 
         layers = []
         for _ in range(n_layers):
-            layers.append(nn.ModuleList([
-                nn.LayerNorm(dim),
-                NystromAttention(
-                    dim=dim,
-                    heads=n_heads,
-                    dim_head=dim // n_heads,
-                    num_landmarks=num_landmarks,
-                    dropout=dropout
-                ),
-                nn.LayerNorm(dim),
-                nn.Sequential(
-                    nn.Linear(dim, dim * 4),
-                    nn.GELU(),
-                    nn.Dropout(dropout),
-                    nn.Linear(dim * 4, dim),
-                    nn.Dropout(dropout)
+            layers.append(
+                nn.ModuleList(
+                    [
+                        nn.LayerNorm(dim),
+                        NystromAttention(
+                            dim=dim,
+                            heads=n_heads,
+                            dim_head=dim // n_heads,
+                            num_landmarks=num_landmarks,
+                            dropout=dropout,
+                        ),
+                        nn.LayerNorm(dim),
+                        nn.Sequential(
+                            nn.Linear(dim, dim * 4),
+                            nn.GELU(),
+                            nn.Dropout(dropout),
+                            nn.Linear(dim * 4, dim),
+                            nn.Dropout(dropout),
+                        ),
+                    ]
                 )
-            ]))
-            
+            )
+
         stack = NystromStack(layers)
         super().__init__(encoder=stack, masked_quadrants=masked_quadrants)
 
@@ -338,17 +446,17 @@ class NystromEncoder(EarlyFusionBlock):
 
 class SpatialTranscriptFormer(nn.Module):
     """Transformer for predicting gene expression from histology and spatial context.
-    
+
     Integrates histology feature extraction with pathway-based bottleneck
     attention to predict gene transcript counts. Supports standard decoder-style
     interaction or early fusion multimodal interaction.
-    
+
     Architectural Inspiration:
-        Jaume et al. (2024). "Modeling Dense Multimodal Interactions Between 
+        Jaume et al. (2024). "Modeling Dense Multimodal Interactions Between
         Biological Pathways and Histology for Survival Prediction" (SurvPath).
-        
+
     Benchmark/Framework:
-        Jaume et al. (2024). "HEST-1k: A Dataset for Spatial Transcriptomics 
+        Jaume et al. (2024). "HEST-1k: A Dataset for Spatial Transcriptomics
         and Histology Image Analysis." NeurIPS (Spotlight).
 
     Attributes:
@@ -356,21 +464,26 @@ class SpatialTranscriptFormer(nn.Module):
         use_nystrom (bool): Whether to use efficient Nystrom attention.
     """
 
-    def __init__(self,
-                 num_genes,
-                 num_pathways=50,
-                 backbone_name='resnet50',
-                 pretrained=True,
-                 token_dim=512,
-                 n_heads=8,
-                 n_layers=2,
-                 dropout=0.1,
-                 use_nystrom=False,
-                 mask_radius=None,
-                 masked_quadrants=None,
-                 num_landmarks=256,
-                 pathway_init=None,
-                 use_spatial_pe=True):
+    def __init__(
+        self,
+        num_genes,
+        num_pathways=50,
+        backbone_name="resnet50",
+        pretrained=True,
+        token_dim=512,
+        n_heads=8,
+        n_layers=2,
+        dropout=0.1,
+        use_nystrom=False,
+        mask_radius=None,
+        masked_quadrants=None,
+        num_landmarks=256,
+        pathway_init=None,
+        use_spatial_pe=True,
+        early_mixer="conv",
+        late_refiner=None,
+        k_neighbors=8,
+    ):
         """Initializes the SpatialTranscriptFormer.
 
         Args:
@@ -389,6 +502,9 @@ class SpatialTranscriptFormer(nn.Module):
             pathway_init (Tensor, optional): Biological pathway membership
                 matrix of shape (P, G) to initialize gene_reconstructor.
             use_spatial_pe (bool): Incorporate relative gradients into attention.
+            early_mixer (str, optional): 'conv' or None.
+            late_refiner (str, optional): 'gnn' or None.
+            k_neighbors (int): k-NN for GNN refiner.
         """
         super().__init__()
 
@@ -403,11 +519,22 @@ class SpatialTranscriptFormer(nn.Module):
         self.use_spatial_pe = use_spatial_pe
 
         # 1. Image Encoder Backbone
-        self.backbone, self.image_feature_dim = get_backbone(backbone_name, pretrained=pretrained)
+        self.backbone, self.image_feature_dim = get_backbone(
+            backbone_name, pretrained=pretrained
+        )
 
         # 2. Image Projector & Spatial Modules
         self.image_proj = nn.Linear(self.image_feature_dim, token_dim)
-        self.local_mixer = LocalPatchMixer(token_dim)
+
+        self.early_mixer = None
+        if early_mixer == "conv":
+            self.early_mixer = LocalPatchMixer(token_dim)
+
+        self.late_refiner = None
+        if late_refiner == "gnn":
+            self.late_refiner = GraphPatchMixer(
+                dim=token_dim, k=k_neighbors, heads=n_heads
+            )
 
         self.pathway_tokenizer = PathwayTokenizer(num_pathways, token_dim)
 
@@ -419,13 +546,20 @@ class SpatialTranscriptFormer(nn.Module):
         # 4. Interaction Engine (Unified Early Fusion)
         if use_nystrom:
             self.fusion_engine = NystromEncoder(
-                token_dim, n_heads, n_layers, dropout=dropout, num_landmarks=num_landmarks,
-                masked_quadrants=masked_quadrants
+                token_dim,
+                n_heads,
+                n_layers,
+                dropout=dropout,
+                num_landmarks=num_landmarks,
+                masked_quadrants=masked_quadrants,
             )
         else:
             self.fusion_engine = MultimodalFusion(
-                token_dim, n_heads, n_layers, dropout=dropout,
-                masked_quadrants=masked_quadrants
+                token_dim,
+                n_heads,
+                n_layers,
+                dropout=dropout,
+                masked_quadrants=masked_quadrants,
             )
 
         self.pathway_activator = nn.Linear(token_dim, 1)
@@ -469,38 +603,6 @@ class SpatialTranscriptFormer(nn.Module):
         mask = dists > self.mask_radius
         return mask
 
-    def _normalize_coords(self, coords):
-        """Auto-normalizes coordinates to integer grid indices."""
-        with torch.no_grad():
-            b, n, _ = coords.shape
-            normalized_coords = coords.clone()
-            
-            for i in range(b):
-                c = coords[i] # (N, 2)
-                # Find unique X and Y coordinates
-                x_vals = torch.unique(c[:, 0])
-                y_vals = torch.unique(c[:, 1])
-                
-                # Compute differences between sorted unique values
-                dx = x_vals[1:] - x_vals[:-1]
-                dy = y_vals[1:] - y_vals[:-1]
-                
-                steps = torch.cat([dx, dy])
-                # We assume "1.0" is the target unit step.
-                valid_steps = steps[steps > 0.5]
-                
-                if valid_steps.numel() == 0:
-                    continue # Already normalized or no obvious step geometry
-                    
-                # Use the smallest non-zero step to handle slight gaps robustly
-                step_size = valid_steps.min()
-                
-                # If the step size is effectively 1, do nothing.
-                if step_size >= 2.0:
-                    normalized_coords[i] = (c / step_size).round()
-                    
-        return normalized_coords
-
     def forward(self, x, rel_coords=None, return_pathways=False):
         """Main inference path.
 
@@ -536,10 +638,6 @@ class SpatialTranscriptFormer(nn.Module):
         # 1. Project features into latent interaction space
         memory = self.image_proj(features)
 
-        # Normalize coordinates once for all spatial modules
-        if rel_coords is not None:
-             rel_coords = self._normalize_coords(rel_coords)
-
         # 1b. Inject Spatial Positional Encodings
         if self.use_spatial_pe and rel_coords is not None:
             # Add spatial PE to visual features
@@ -547,9 +645,13 @@ class SpatialTranscriptFormer(nn.Module):
             memory = memory + pe
 
         # 1c. Local Patch Mixing (Conv)
-        if hasattr(self, 'local_mixer') and rel_coords is not None:
+        if (
+            hasattr(self, "early_mixer")
+            and self.early_mixer is not None
+            and rel_coords is not None
+        ):
             # Enforce mixing of histology features before they attend to pathways
-            memory = self.local_mixer(memory, rel_coords)
+            memory = self.early_mixer(memory, rel_coords)
 
         # 2. Retrieve learnable pathway tokens
         tgt = self.pathway_tokenizer(b)
@@ -560,7 +662,9 @@ class SpatialTranscriptFormer(nn.Module):
         # 4. Project focused pathway tokens back to gene space
         # We project each pathway token to a scalar activation, then use these
         # activations to reconstruct gene expression levels (the bottleneck).
-        pathway_activations = self.pathway_activator(out).squeeze(-1)  # (B, num_pathways)
+        pathway_activations = self.pathway_activator(out).squeeze(
+            -1
+        )  # (B, num_pathways)
         gene_expression = self.gene_reconstructor(pathway_activations)  # (B, num_genes)
 
         if return_pathways:
@@ -584,45 +688,52 @@ class SpatialTranscriptFormer(nn.Module):
         """
         if x.dim() == 2:
             x = x.unsqueeze(0)
-        
+
         b = x.shape[0]  # Dynamic batch size
-            
+
         # 1. Project to latent space
         memory = self.image_proj(x)
 
-        # Normalize coordinates once
-        if coords is not None:
-             coords = self._normalize_coords(coords)
-
         # 1b. Inject Spatial Positional Encodings (Global)
         if self.use_spatial_pe and coords is not None:
-             pe = self.spatial_encoder(coords)
-             memory = memory + pe
+            pe = self.spatial_encoder(coords)
+            memory = memory + pe
 
         # 1c. Local Patch Mixing (Conv)
-        if hasattr(self, 'local_mixer') and coords is not None:
-             memory = self.local_mixer(memory, coords)
+        if (
+            hasattr(self, "early_mixer")
+            and self.early_mixer is not None
+            and coords is not None
+        ):
+            memory = self.early_mixer(memory, coords)
 
         # 2. Retrieve learnable pathway tokens (global context)
-        pathway_tokens = self.pathway_tokenizer(b) # (B, P, D)
+        pathway_tokens = self.pathway_tokenizer(b)  # (B, P, D)
 
         # 3. Perform dense interaction (Global Patch-to-Patch + Pathway context)
         # The MultimodalFusion/NystromEncoder class handles the concatenation and quadrant masking.
         all_tokens = self.fusion_engine(
-            p_tokens=pathway_tokens,
-            h_tokens=memory,
-            return_all_tokens=True
+            p_tokens=pathway_tokens, h_tokens=memory, return_all_tokens=True
         )
-        
+
         # Sliced Histology tokens: indices [Np:]
         np = pathway_tokens.shape[1]
         context_features = all_tokens[:, np:, :]
 
+        # 3b. Local GNN Refinement
+        if self.late_refiner is not None and coords is not None:
+            # Explicit skip connection: Inject raw spatial/visual memory back into contextualized tokens
+            context_features = self.late_refiner(
+                context_features + memory, coords, mask=mask
+            )
+
         # 4. Dense prediction head (Pathway Bottleneck enforcement)
         # Project updated patch tokens onto pathway embeddings: (B, N, D) @ (B, D, P) -> (B, N, P)
-        # This yields a dynamic "Pathway Activation" map for every patch.
-        pathway_scores = torch.matmul(context_features, pathway_tokens.transpose(1, 2))
-        
+        # We scale by 1/sqrt(D) to maintain reasonable activation variance, as this is effectively attention.
+        pathway_scores = torch.matmul(
+            context_features, pathway_tokens.transpose(1, 2)
+        ) / (context_features.shape[-1] ** 0.5)
+
         # Reconstruct Genes: (B, N, P) @ (P, G) -> (B, N, G)
         # Reuses the gene_reconstructor for biological consistency.
         if return_pathways:

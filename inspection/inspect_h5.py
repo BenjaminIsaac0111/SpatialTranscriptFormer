@@ -7,7 +7,7 @@ if not os.path.exists(file_path):
     print(f"File not found: {file_path}")
 else:
     try:
-        with h5py.File(file_path, 'r') as f:
+        with h5py.File(file_path, "r") as f:
             print(f"Keys in {file_path}: {list(f.keys())}")
             for key in f.keys():
                 print(f"  Shape of {key}: {f[key].shape}")

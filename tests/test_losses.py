@@ -4,15 +4,20 @@ Tests for loss functions: MaskedMSELoss, PCCLoss, CompositeLoss.
 Verifies correctness of masking, scale invariance, gradients,
 and composite objective decomposition.
 """
+
 import pytest
 import torch
 import torch.nn as nn
-from spatial_transcript_former.training.losses import MaskedMSELoss, PCCLoss, CompositeLoss
-
+from spatial_transcript_former.training.losses import (
+    MaskedMSELoss,
+    PCCLoss,
+    CompositeLoss,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def tensors_2d():
@@ -29,14 +34,15 @@ def tensors_3d():
     preds = torch.randn(B, N, G)
     target = torch.randn(B, N, G)
     mask = torch.zeros(B, N, dtype=torch.bool)
-    mask[0, 80:] = True   # 20 padded positions in sample 0
-    mask[1, 90:] = True   # 10 padded positions in sample 1
+    mask[0, 80:] = True  # 20 padded positions in sample 0
+    mask[1, 90:] = True  # 10 padded positions in sample 1
     return preds, target, mask
 
 
 # ---------------------------------------------------------------------------
 # MaskedMSELoss
 # ---------------------------------------------------------------------------
+
 
 class TestMaskedMSE:
     def test_no_mask_matches_standard(self, tensors_2d):
@@ -80,6 +86,7 @@ class TestMaskedMSE:
 # ---------------------------------------------------------------------------
 # PCCLoss
 # ---------------------------------------------------------------------------
+
 
 class TestPCC:
     def test_perfect_correlation(self):
@@ -129,6 +136,7 @@ class TestPCC:
 # ---------------------------------------------------------------------------
 # CompositeLoss
 # ---------------------------------------------------------------------------
+
 
 class TestCompositeLoss:
     def test_equals_sum_of_parts(self, tensors_2d):

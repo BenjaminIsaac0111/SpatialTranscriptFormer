@@ -14,12 +14,13 @@ class PCCLoss(nn.Module):
     """
     Pearson Correlation Coefficient Loss.
 
-    Computes per-spot PCC across genes, then averages. This measures
-    whether the predicted gene profile at each location matches the
-    shape of the ground truth profile, regardless of scale.
+    Computes **gene-wise** spatial correlation, then averages across genes.
+    This measures whether the predicted spatial pattern (map) for each gene
+    matches the pattern of the ground truth map, regardless of overall intensity.
 
-    PCC is scale-invariant: all genes contribute equally, making
-    this objective robust to gene expression imbalance.
+    PCC is scale-invariant: highly expressed genes and lowly expressed
+    genes contribute equally, making this objective robust to typical
+    spatial transcriptomics expression imbalances.
     """
 
     def __init__(self, eps=1e-8):
@@ -38,11 +39,11 @@ class PCCLoss(nn.Module):
         """
         if preds.dim() == 3:
             B, N, G = preds.shape
-            preds = preds.reshape(-1, G)   # (B*N, G)
+            preds = preds.reshape(-1, G)  # (B*N, G)
             target = target.reshape(-1, G)
 
             if mask is not None:
-                valid = ~mask.reshape(-1)   # (B*N,)
+                valid = ~mask.reshape(-1)  # (B*N,)
                 preds = preds[valid]
                 target = target[valid]
 
@@ -51,10 +52,9 @@ class PCCLoss(nn.Module):
         vy = target - target.mean(dim=0, keepdim=True)
 
         # Correlation
-        cost = (
-            torch.sum(vx * vy, dim=0)
-            / (torch.sqrt(torch.sum(vx ** 2, dim=0) + self.eps)
-               * torch.sqrt(torch.sum(vy ** 2, dim=0) + self.eps))
+        cost = torch.sum(vx * vy, dim=0) / (
+            torch.sqrt(torch.sum(vx**2, dim=0) + self.eps)
+            * torch.sqrt(torch.sum(vy**2, dim=0) + self.eps)
         )
         return 1 - cost.mean()
 
@@ -101,10 +101,10 @@ class CompositeLoss(nn.Module):
         eps:   Numerical stability for PCC. Default 1e-8.
     """
 
-    def __init__(self, alpha=1.0, eps=1e-8, mse_type='mse'):
+    def __init__(self, alpha=1.0, eps=1e-8, mse_type="mse"):
         super().__init__()
         self.alpha = alpha
-        if mse_type == 'huber':
+        if mse_type == "huber":
             self.mse = MaskedHuberLoss()
         else:
             self.mse = MaskedMSELoss()
@@ -130,15 +130,16 @@ class MaskedHuberLoss(nn.Module):
     Huber loss (SmoothL1) with optional masking.
     Robust to outliers.
     """
+
     def __init__(self, delta=1.0):
         super().__init__()
-        self.loss = nn.HuberLoss(delta=delta, reduction='none')
+        self.loss = nn.HuberLoss(delta=delta, reduction="none")
 
     def forward(self, preds, target, mask=None):
         loss = self.loss(preds, target)
-        
+
         if mask is not None and preds.dim() == 3:
             valid = ~mask.unsqueeze(-1).expand_as(loss)
             return (loss * valid.float()).sum() / valid.sum()
-            
+
         return loss.mean()

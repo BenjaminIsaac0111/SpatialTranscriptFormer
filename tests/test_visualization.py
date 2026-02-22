@@ -3,21 +3,29 @@ Tests for visualization utilities.
 
 Verifies pathway lookup, z-score normalization, and plot generation.
 """
+
 import pytest
 import os
 import numpy as np
 import tempfile
-from spatial_transcript_former.predict import BOWEL_CANCER_PATHWAYS, plot_training_summary
-
+from spatial_transcript_former.predict import (
+    BOWEL_CANCER_PATHWAYS,
+    plot_training_summary,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def pathway_names():
     """Realistic MSigDB Hallmark pathway names."""
-    from spatial_transcript_former.data.pathways import download_hallmarks_gmt, parse_gmt
+    from spatial_transcript_former.data.pathways import (
+        download_hallmarks_gmt,
+        parse_gmt,
+    )
+
     gmt_path = download_hallmarks_gmt(".cache")
     return list(parse_gmt(gmt_path).keys())
 
@@ -28,10 +36,12 @@ def mock_data(pathway_names):
     np.random.seed(42)
     N = 200
     P = len(pathway_names)
-    coords = np.column_stack([
-        np.random.uniform(0, 1000, N),
-        np.random.uniform(0, 1000, N),
-    ])
+    coords = np.column_stack(
+        [
+            np.random.uniform(0, 1000, N),
+            np.random.uniform(0, 1000, N),
+        ]
+    )
     pathway_pred = np.random.randn(N, P).astype(np.float32)
     pathway_truth = np.random.randn(N, P).astype(np.float32)
     return coords, pathway_pred, pathway_truth
@@ -41,10 +51,11 @@ def mock_data(pathway_names):
 # Pathway constants
 # ---------------------------------------------------------------------------
 
+
 class TestBowelCancerPathways:
     def test_all_pathways_exist_in_msigdb(self, pathway_names):
         """All 6 bowel cancer pathways should be in the MSigDB Hallmarks."""
-        short_names = [n.replace('HALLMARK_', '') for n in pathway_names]
+        short_names = [n.replace("HALLMARK_", "") for n in pathway_names]
         for pw in BOWEL_CANCER_PATHWAYS:
             assert pw in short_names, f"Missing: {pw}"
 
@@ -57,6 +68,7 @@ class TestBowelCancerPathways:
 # Plot generation
 # ---------------------------------------------------------------------------
 
+
 class TestPlotTrainingSummary:
     def test_saves_file(self, mock_data, pathway_names):
         """Plot should be saved to the specified path."""
@@ -64,8 +76,12 @@ class TestPlotTrainingSummary:
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "test_plot.png")
             plot_training_summary(
-                coords, pred, truth, pathway_names,
-                sample_id="TEST", save_path=save_path
+                coords,
+                pred,
+                truth,
+                pathway_names,
+                sample_id="TEST",
+                save_path=save_path,
             )
             assert os.path.exists(save_path)
             assert os.path.getsize(save_path) > 0
@@ -77,9 +93,13 @@ class TestPlotTrainingSummary:
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "test_histo.png")
             plot_training_summary(
-                coords, pred, truth, pathway_names,
-                sample_id="TEST", histology_img=fake_img,
-                save_path=save_path
+                coords,
+                pred,
+                truth,
+                pathway_names,
+                sample_id="TEST",
+                histology_img=fake_img,
+                save_path=save_path,
             )
             assert os.path.exists(save_path)
 
@@ -88,15 +108,13 @@ class TestPlotTrainingSummary:
         coords, pred, truth = mock_data
         fake_names = [f"UNKNOWN_{i}" for i in range(pred.shape[1])]
         # Should not raise, just print warning
-        plot_training_summary(
-            coords, pred, truth, fake_names,
-            sample_id="TEST"
-        )
+        plot_training_summary(coords, pred, truth, fake_names, sample_id="TEST")
 
 
 # ---------------------------------------------------------------------------
 # Z-score normalization
 # ---------------------------------------------------------------------------
+
 
 class TestZScoreNormalization:
     def test_z_score_properties(self):
