@@ -42,6 +42,23 @@ def download_metadata(local_dir: str, force: bool = False) -> str:
         logger.info(f"Metadata downloaded to {path}")
         return path
     except Exception as e:
+        if "401" in str(e) or "Unauthorized" in str(e):
+            logger.error("\n" + "=" * 60)
+            logger.error("AUTHENTICATION REQUIRED: The HEST dataset is gated.")
+            logger.error(
+                "1. Accept the dataset terms at: https://huggingface.co/datasets/MahmoodLab/hest"
+            )
+            logger.error(
+                "2. Get an access token from: https://huggingface.co/settings/tokens"
+            )
+            logger.error(
+                "3. Run 'huggingface-cli login' OR set the HF_TOKEN environment variable."
+            )
+            logger.error("=" * 60 + "\n")
+            import sys
+
+            sys.exit(1)
+
         logger.error(f"Failed to download metadata: {e}")
         raise
 
@@ -129,6 +146,23 @@ def download_hest_subset(
         )
         logger.info("Download completed successfully.")
     except Exception as e:
+        if "401" in str(e) or "Unauthorized" in str(e):
+            logger.error("\n" + "=" * 60)
+            logger.error("AUTHENTICATION REQUIRED: The HEST dataset is gated.")
+            logger.error(
+                "1. Accept the dataset terms at: https://huggingface.co/datasets/MahmoodLab/hest"
+            )
+            logger.error(
+                "2. Get an access token from: https://huggingface.co/settings/tokens"
+            )
+            logger.error(
+                "3. Run 'huggingface-cli login' OR set the HF_TOKEN environment variable."
+            )
+            logger.error("=" * 60 + "\n")
+            import sys
+
+            sys.exit(1)
+
         logger.error(f"Download failed: {e}")
         raise
 

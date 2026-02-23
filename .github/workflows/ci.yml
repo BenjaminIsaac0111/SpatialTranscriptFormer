@@ -31,9 +31,13 @@ jobs:
         black --check .
 
     - name: Download test data
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         python scripts/download_hest.py --id TENX29 --skip-wsis --skip-patches --yes
 
     - name: Test with pytest
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         pytest tests/
