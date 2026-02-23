@@ -8,6 +8,9 @@ import pytest
 import os
 import numpy as np
 import tempfile
+import matplotlib
+
+matplotlib.use("Agg")
 from spatial_transcript_former.predict import (
     BOWEL_CANCER_PATHWAYS,
     plot_training_summary,
@@ -22,11 +25,14 @@ from spatial_transcript_former.predict import (
 def pathway_names():
     """Realistic MSigDB Hallmark pathway names."""
     from spatial_transcript_former.data.pathways import (
-        download_hallmarks_gmt,
+        download_msigdb_gmt,
         parse_gmt,
+        MSIGDB_URLS,
     )
 
-    gmt_path = download_hallmarks_gmt(".cache")
+    url = MSIGDB_URLS["hallmarks"]
+    filename = url.split("/")[-1]
+    gmt_path = download_msigdb_gmt(url, filename, ".cache")
     return list(parse_gmt(gmt_path).keys())
 
 

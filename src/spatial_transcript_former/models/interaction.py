@@ -543,15 +543,19 @@ class SpatialTranscriptFormer(nn.Module):
         if use_spatial_pe:
             self.spatial_encoder = SinusoidalPositionalEncoder(token_dim)
 
-        # 4. Interaction Engine (Unified Early Fusion)
+        # 4. Interaction Engine (Unified Early Fusion Path)
         if use_nystrom:
+            if masked_quadrants:
+                print(
+                    "Warning: Nystrom attention does not support 2D quadrant masking. Mask will be ignored."
+                )
             self.fusion_engine = NystromEncoder(
                 token_dim,
                 n_heads,
                 n_layers,
                 dropout=dropout,
                 num_landmarks=num_landmarks,
-                masked_quadrants=masked_quadrants,
+                masked_quadrants=None,
             )
         else:
             self.fusion_engine = MultimodalFusion(
@@ -583,6 +587,47 @@ class SpatialTranscriptFormer(nn.Module):
             torch.Tensor: L1 loss value.
         """
         return torch.norm(self.gene_reconstructor.weight, p=1)
+
+    def _normalize_coords(self, coords):
+        """
+        Infer grid scaling from absolute coordinates.
+        (e.g., convert 224-pixel steps into unit steps).
+
+        Args:
+            coords: (B, N, 2) absolute pixel coordinates.
+
+        Returns:
+            (B, N, 2) grid-aligned indices.
+        """
+        if coords is None:
+            return None
+
+        # Zero-base
+        min_c = coords.min(dim=1, keepdim=True)[0]
+        zero_c = coords - min_c
+
+        # Infer step per batch
+        # We use the median of non-zero adjacent differences to find step size
+        B, N, _ = zero_c.shape
+        if N < 2:
+            return torch.zeros_like(zero_c)
+
+        steps = []
+        for i in [0, 1]:  # X and Y
+            c_sorted, _ = torch.sort(zero_c[..., i], dim=1)
+            diffs = c_sorted[:, 1:] - c_sorted[:, :-1]
+            diffs = diffs[diffs > 0]
+            step = diffs.median() if diffs.numel() > 0 else 1.0
+            steps.append(step)
+
+        grid_coords = torch.stack(
+            [
+                torch.round(zero_c[..., 0] / steps[0]),
+                torch.round(zero_c[..., 1] / steps[1]),
+            ],
+            dim=-1,
+        )
+        return grid_coords
 
     def _generate_spatial_mask(self, rel_coords):
         """Generates distance-based masks for neighborhood attention.
@@ -651,7 +696,9 @@ class SpatialTranscriptFormer(nn.Module):
             and rel_coords is not None
         ):
             # Enforce mixing of histology features before they attend to pathways
-            memory = self.early_mixer(memory, rel_coords)
+            # Ensure coords are normalized to grid indices for LocalPatchMixer
+            grid_coords = self._normalize_coords(rel_coords)
+            memory = self.early_mixer(memory, grid_coords)
 
         # 2. Retrieve learnable pathway tokens
         tgt = self.pathway_tokenizer(b)
@@ -705,7 +752,8 @@ class SpatialTranscriptFormer(nn.Module):
             and self.early_mixer is not None
             and coords is not None
         ):
-            memory = self.early_mixer(memory, coords)
+            grid_coords = self._normalize_coords(coords)
+            memory = self.early_mixer(memory, grid_coords)
 
         # 2. Retrieve learnable pathway tokens (global context)
         pathway_tokens = self.pathway_tokenizer(b)  # (B, P, D)

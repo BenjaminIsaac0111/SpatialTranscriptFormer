@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
+from spatial_transcript_former.config import get_config
 from spatial_transcript_former.models import HE2RNA, ViT_ST, SpatialTranscriptFormer
 from spatial_transcript_former.utils import set_seed
 from spatial_transcript_former.training.losses import (
@@ -214,7 +215,10 @@ def parse_args():
     # Data
     g = parser.add_argument_group("Data")
     g.add_argument(
-        "--data-dir", type=str, required=True, help="Root directory of HEST data"
+        "--data-dir",
+        type=str,
+        default=get_config("data_dirs", ["hest_data"])[0],
+        help="Root directory of HEST data",
     )
     g.add_argument(
         "--feature-dir",
@@ -222,7 +226,9 @@ def parse_args():
         default=None,
         help="Explicit feature directory (overrides auto-detection)",
     )
-    g.add_argument("--num-genes", type=int, default=1000)
+    g.add_argument(
+        "--num-genes", type=int, default=get_config("training.num_genes", 1000)
+    )
     g.add_argument(
         "--max-samples", type=int, default=None, help="Limit samples for debugging"
     )
@@ -287,15 +293,23 @@ def parse_args():
 
     # Training
     g = parser.add_argument_group("Training")
-    g.add_argument("--epochs", type=int, default=10)
-    g.add_argument("--batch-size", type=int, default=32)
+    g.add_argument("--epochs", type=int, default=get_config("training.epochs", 10))
+    g.add_argument(
+        "--batch-size", type=int, default=get_config("training.batch_size", 32)
+    )
     g.add_argument("--grad-accum-steps", type=int, default=1)
-    g.add_argument("--lr", type=float, default=1e-4)
+    g.add_argument(
+        "--lr", type=float, default=get_config("training.learning_rate", 1e-4)
+    )
     g.add_argument("--weight-decay", type=float, default=0.0)
     g.add_argument("--sparsity-lambda", type=float, default=0.0)
     g.add_argument("--augment", action="store_true")
     g.add_argument("--use-amp", action="store_true")
-    g.add_argument("--output-dir", type=str, default="./checkpoints")
+    g.add_argument(
+        "--output-dir",
+        type=str,
+        default=get_config("training.output_dir", "./checkpoints"),
+    )
     g.add_argument("--compile", action="store_true")
     g.add_argument("--resume", action="store_true")
 

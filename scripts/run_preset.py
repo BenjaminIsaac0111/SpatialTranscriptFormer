@@ -156,7 +156,10 @@ def main():
         help="Preset configuration",
     )
     parser.add_argument(
-        "--data-dir", type=str, default="A:\\hest_data", help="Data directory"
+        "--data-dir",
+        type=str,
+        default=get_config("data_dirs", ["A:\\hest_data"])[0],
+        help="Data directory",
     )
     parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
     parser.add_argument("--max-samples", type=int, default=None, help="Limit samples")

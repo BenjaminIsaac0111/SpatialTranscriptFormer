@@ -19,15 +19,15 @@ REPO_ID = "MahmoodLab/hest"
 METADATA_FILENAME = "HEST_v1_3_0.csv"
 
 
-def download_metadata(local_dir: str) -> str:
+def download_metadata(local_dir: str, force: bool = False) -> str:
     """
     Ensure the HEST metadata CSV is present locally.
-    Downloads it from Hugging Face if not found.
+    Downloads it from Hugging Face if not found or if force is True.
     """
     logger.info(f"Checking for metadata {METADATA_FILENAME} in {local_dir}...")
     local_path = os.path.join(local_dir, METADATA_FILENAME)
 
-    if os.path.exists(local_path):
+    if os.path.exists(local_path) and not force:
         logger.info(f"Metadata found at {local_path}")
         return local_path
 

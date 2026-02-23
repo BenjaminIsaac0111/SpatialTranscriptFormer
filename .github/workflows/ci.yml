@@ -30,6 +30,10 @@ jobs:
       run: |
         black --check .
 
+    - name: Download test data
+      run: |
+        python scripts/download_hest.py --id TENX29 --skip-wsis --skip-patches --yes
+
     - name: Test with pytest
       run: |
         pytest tests/

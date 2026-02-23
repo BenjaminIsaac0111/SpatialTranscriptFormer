@@ -22,6 +22,7 @@ import json
 import torch
 import pandas as pd
 import numpy as np
+from .io import decode_h5_string, load_h5ad_metadata
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from scipy.sparse import csr_matrix
 from typing import List, Optional, Tuple, Union
@@ -307,39 +308,17 @@ def load_gene_expression_matrix(
               output columns (discovery mode) or the unchanged input list
               (alignment mode).
     """
+    metadata = load_h5ad_metadata(h5ad_path)
+
+    st_barcodes = metadata["barcodes"]
+    st_barcode_to_idx = {b: i for i, b in enumerate(st_barcodes)}
+
+    current_gene_names = metadata["gene_names"]
+    gene_name_to_idx = {name: i for i, name in enumerate(current_gene_names)}
+
     with h5py.File(h5ad_path, "r") as f:
-        # --- Load observation barcodes ---
-        if "obs" in f and "_index" in f["obs"]:
-            st_barcodes = f["obs"]["_index"][:]
-        elif "obs" in f and "index" in f["obs"]:
-            st_barcodes = f["obs"]["index"][:]
-        else:
-            raise ValueError(f"Could not find barcodes in {h5ad_path}")
-
-        st_barcodes = [
-            b.decode("utf-8") if isinstance(b, bytes) else str(b) for b in st_barcodes
-        ]
-        st_barcode_to_idx = {b: i for i, b in enumerate(st_barcodes)}
-
-        # --- Load variable (gene) names ---
-        if "var" in f and "_index" in f["var"]:
-            gene_names_raw = f["var"]["_index"][:]
-        elif "var" in f and "index" in f["var"]:
-            gene_names_raw = f["var"]["index"][:]
-        else:
-            raise ValueError(f"Could not find gene names (var index) in {h5ad_path}")
-
-        current_gene_names = [
-            g.decode("utf-8") if isinstance(g, bytes) else str(g)
-            for g in gene_names_raw
-        ]
-        gene_name_to_idx = {name: i for i, name in enumerate(current_gene_names)}
-
         # --- Map patch barcodes to row indices ---
-        patch_barcodes_decoded = [
-            b.decode("utf-8") if isinstance(b, bytes) else str(b)
-            for b in patch_barcodes
-        ]
+        patch_barcodes_decoded = [decode_h5_string(b) for b in patch_barcodes]
         patch_indices = []
         valid_patch_mask = []
         for pb in patch_barcodes_decoded:

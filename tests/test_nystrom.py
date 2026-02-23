@@ -18,9 +18,11 @@ def test_nystrom_jaume_mode(mock_image_batch):
     assert output.shape == (mock_image_batch.shape[0], num_genes)
 
 
-def test_nystrom_with_masking(mock_image_batch):
+def test_nystrom_no_quadrant_mask_support(mock_image_batch):
     """
-    EDUCATIONAL: Verifies that Nystrom Attention works with quadrant masking.
+    EDUCATIONAL: Nystrom Attention (linear complexity) does not support
+    standard 2D quadrant masking. This test verifies the model still
+    executes without crashing, but we acknowledge the mask is ignored.
     """
     num_genes = 100
     model = SpatialTranscriptFormer(

@@ -102,11 +102,14 @@ def _get_pathway_names():
     """
     try:
         from spatial_transcript_former.data.pathways import (
-            download_hallmarks_gmt,
+            download_msigdb_gmt,
             parse_gmt,
+            MSIGDB_URLS,
         )
 
-        gmt_path = download_hallmarks_gmt(".cache")
+        url = MSIGDB_URLS["hallmarks"]
+        filename = url.split("/")[-1]
+        gmt_path = download_msigdb_gmt(url, filename, ".cache")
         pathway_dict = parse_gmt(gmt_path)
         return list(pathway_dict.keys())
     except Exception:

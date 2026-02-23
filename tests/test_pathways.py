@@ -10,8 +10,9 @@ import numpy as np
 import torch
 from spatial_transcript_former.data.pathways import (
     get_pathway_init,
-    download_hallmarks_gmt,
+    download_msigdb_gmt,
     parse_gmt,
+    MSIGDB_URLS,
 )
 
 # ---------------------------------------------------------------------------
@@ -22,7 +23,9 @@ from spatial_transcript_former.data.pathways import (
 @pytest.fixture(scope="module")
 def hallmarks():
     """Download and parse MSigDB Hallmarks (cached, shared across module)."""
-    gmt_path = download_hallmarks_gmt(".cache")
+    url = MSIGDB_URLS["hallmarks"]
+    filename = url.split("/")[-1]
+    gmt_path = download_msigdb_gmt(url, filename, ".cache")
     return parse_gmt(gmt_path)
 
 
@@ -52,7 +55,9 @@ def gene_list():
 @pytest.fixture(scope="module")
 def pathway_result(gene_list):
     """Pathway initialization result: (matrix, names)."""
-    return get_pathway_init(gene_list, verbose=False)
+    return get_pathway_init(
+        gene_list, gmt_urls=[MSIGDB_URLS["hallmarks"]], verbose=False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -144,15 +149,15 @@ class TestPathwayTruth:
         assert names1 == names2
 
     def test_output_shape(self, gene_list):
-        """Pathway truth should be (N, P) where P=50."""
+        """Pathway truth should be (N, P) where P=236 (Hallmarks + C2 KEGG)."""
         from spatial_transcript_former.visualization import _compute_pathway_truth
 
         N = 150
         gene_truth = np.random.rand(N, len(gene_list)).astype(np.float32)
         result, names = _compute_pathway_truth(gene_truth, gene_list)
 
-        assert result.shape == (N, 50)
-        assert len(names) == 50
+        assert result.shape == (N, 236)
+        assert len(names) == 236
 
     def test_spatial_variation(self, gene_list):
         """Pathway truth should have spatial variation (non-zero std)."""
