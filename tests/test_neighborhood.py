@@ -32,32 +32,5 @@ def test_neighborhood_model_forward():
     print("Neighborhood forward pass test passed!")
 
 
-def test_spatial_masking():
-    B = 1
-    S = 4
-    G = 100
-    # Center at (0,0), neighbors at (10,0), (100,0), (1000,0)
-    rel_coords = torch.tensor(
-        [[[0, 0], [10, 0], [100, 0], [1000, 0]]], dtype=torch.float32
-    )
-
-    # Set mask radius to 50 -> neighbors 2 and 3 should be masked
-    model = SpatialTranscriptFormer(num_genes=G, mask_radius=50)
-
-    mask = model._generate_spatial_mask(rel_coords)
-    # Expected mask: [False, False, True, True] (True means ignore)
-
-    print(f"Rel Coords: {rel_coords}")
-    print(f"Generated Mask: {mask}")
-
-    assert mask[0, 0] == False
-    assert mask[0, 1] == False
-    assert mask[0, 2] == True
-    assert mask[0, 3] == True
-
-    print("Spatial masking logic test passed!")
-
-
 if __name__ == "__main__":
     test_neighborhood_model_forward()
-    test_spatial_masking()

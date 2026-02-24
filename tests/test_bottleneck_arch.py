@@ -16,9 +16,11 @@ def test_interaction_output_shape():
 
     # Dummy input (Batch, Channel, Height, Width)
     x = torch.randn(4, 3, 224, 224)
+    # Single patch => S=1
+    rel_coords = torch.randn(4, 1, 2)
 
     # Forward pass
-    output = model(x)
+    output = model(x, rel_coords=rel_coords)
 
     # Verify shape (Batch, num_genes)
     assert output.shape == (
@@ -32,8 +34,9 @@ def test_interaction_gradient_flow():
     num_genes = 1000
     model = SpatialTranscriptFormer(num_genes=num_genes)
     x = torch.randn(2, 3, 224, 224)
+    rel_coords = torch.randn(2, 1, 2)
 
-    output = model(x)
+    output = model(x, rel_coords=rel_coords)
     loss = output.sum()
     loss.backward()
 

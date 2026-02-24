@@ -1,5 +1,6 @@
 """
-Tests for loss functions: MaskedMSELoss, PCCLoss, CompositeLoss.
+Tests for loss functions: MaskedMSELoss, PCCLoss, CompositeLoss,
+AuxiliaryPathwayLoss.
 
 Verifies correctness of masking, scale invariance, gradients,
 and composite objective decomposition.
@@ -12,6 +13,7 @@ from spatial_transcript_former.training.losses import (
     MaskedMSELoss,
     PCCLoss,
     CompositeLoss,
+    AuxiliaryPathwayLoss,
 )
 
 # ---------------------------------------------------------------------------
@@ -184,3 +186,294 @@ class TestCompositeLoss:
         loss_high = CompositeLoss(alpha=10.0)(preds, target)
         # They should differ since PCC != 0
         assert loss_low.item() != pytest.approx(loss_high.item(), abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# ZINBLoss
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def zinb_tensors():
+    """Tensors for ZINB testing: pi, mu, theta, and counts."""
+    torch.manual_seed(42)
+    B, G = 16, 50
+    pi = torch.rand(B, G)  # [0, 1]
+    mu = torch.rand(B, G) * 10 + 0.1  # > 0
+    theta = torch.rand(B, G) * 5 + 0.1  # > 0
+
+    # Simulate some zero-inflated counts
+    counts = torch.poisson(mu)
+    dropout_mask = torch.rand(B, G) < 0.3
+    counts[dropout_mask] = 0.0
+
+    return (pi, mu, theta), counts
+
+
+class TestZINBLoss:
+    def test_basic_computation(self, zinb_tensors):
+        """ZINBLoss should compute a finite scalar loss."""
+        from spatial_transcript_former.training.losses import ZINBLoss
+
+        preds, target = zinb_tensors
+        loss_fn = ZINBLoss()
+        loss = loss_fn(preds, target)
+
+        assert loss.isfinite()
+        assert loss.item() > 0  # NLL should be positive
+
+    def test_gradient_flow(self, zinb_tensors):
+        """Gradients should flow through all three parameters."""
+        from spatial_transcript_former.training.losses import ZINBLoss
+
+        pi, mu, theta = zinb_tensors[0]
+        pi = pi.clone().requires_grad_(True)
+        mu = mu.clone().requires_grad_(True)
+        theta = theta.clone().requires_grad_(True)
+
+        target = zinb_tensors[1]
+        loss = ZINBLoss()((pi, mu, theta), target)
+        loss.backward()
+
+        assert pi.grad is not None
+        assert mu.grad is not None
+        assert theta.grad is not None
+        assert not torch.isnan(pi.grad).any()
+        assert not torch.isnan(mu.grad).any()
+        assert not torch.isnan(theta.grad).any()
+
+    def test_mask_support(self):
+        """ZINBLoss should handle masks in 3D mode correctly."""
+        from spatial_transcript_former.training.losses import ZINBLoss
+
+        torch.manual_seed(42)
+        B, N, G = 2, 10, 5
+        pi = torch.rand(B, N, G)
+        mu = torch.rand(B, N, G) * 5 + 0.1
+        theta = torch.rand(B, N, G) * 5 + 0.1
+        target = torch.randint(0, 10, (B, N, G)).float()
+
+        mask = torch.zeros(B, N, dtype=torch.bool)
+        mask[0, 5:] = True  # sample 0 half padded
+
+        pi.requires_grad_(True)
+
+        loss_fn = ZINBLoss()
+        loss = loss_fn((pi, mu, theta), target, mask=mask)
+        loss.backward()
+
+        assert loss.isfinite()
+
+        # Gradients in padded regions should be zero
+        padded_grad = pi.grad[0, 5:, :]
+        assert padded_grad.abs().sum() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# AuxiliaryPathwayLoss
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def pathway_tensors():
+    """Tensors for AuxiliaryPathwayLoss testing."""
+    torch.manual_seed(42)
+    B, N, G, P = 2, 100, 50, 10
+    gene_preds = torch.randn(B, N, G)
+    target_genes = torch.randn(B, N, G).abs()  # Positive counts
+    pathway_preds = torch.randn(B, N, P)
+    # Binary MSigDB-like matrix: (P, G)
+    pathway_matrix = (torch.rand(P, G) > 0.8).float()
+    mask = torch.zeros(B, N, dtype=torch.bool)
+    mask[0, 80:] = True
+    return gene_preds, target_genes, pathway_preds, pathway_matrix, mask
+
+
+class TestAuxiliaryPathwayLoss:
+    def test_basic_computation(self, pathway_tensors):
+        """AuxiliaryPathwayLoss should produce a finite scalar."""
+        gene_preds, targets, pw_preds, pw_matrix, mask = pathway_tensors
+        loss_fn = AuxiliaryPathwayLoss(pw_matrix, MaskedMSELoss(), lambda_pathway=0.5)
+        loss = loss_fn(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+        assert loss.isfinite()
+
+    def test_includes_gene_loss(self, pathway_tensors):
+        """Total loss should be >= gene loss alone."""
+        gene_preds, targets, pw_preds, pw_matrix, mask = pathway_tensors
+        base = MaskedMSELoss()
+        aux = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=0.5)
+        gene_only = base(gene_preds, targets, mask=mask)
+        total = aux(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+        # Pathway PCC loss is >= 0, so total >= gene_only
+        assert total.item() >= gene_only.item() - 1e-5
+
+    def test_gradient_flows_to_both(self, pathway_tensors):
+        """Gradients should flow to both gene_preds and pathway_preds."""
+        gene_preds, targets, pw_preds, pw_matrix, mask = pathway_tensors
+        gene_preds = gene_preds.clone().requires_grad_(True)
+        pw_preds = pw_preds.clone().requires_grad_(True)
+        loss_fn = AuxiliaryPathwayLoss(pw_matrix, MaskedMSELoss(), lambda_pathway=0.5)
+        loss = loss_fn(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+        loss.backward()
+        assert gene_preds.grad is not None
+        assert pw_preds.grad is not None
+        assert gene_preds.grad.abs().sum() > 0
+        assert pw_preds.grad.abs().sum() > 0
+
+    def test_fallback_without_pathways(self, pathway_tensors):
+        """When pathway_preds is None, should fall back to gene loss only."""
+        gene_preds, targets, _, pw_matrix, mask = pathway_tensors
+        base = MaskedMSELoss()
+        aux = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=0.5)
+        gene_only = base(gene_preds, targets, mask=mask)
+        fallback = aux(gene_preds, targets, mask=mask, pathway_preds=None)
+        assert torch.allclose(gene_only, fallback)
+
+    def test_lambda_zero_disables(self, pathway_tensors):
+        """lambda_pathway=0 should produce the same result as gene loss."""
+        gene_preds, targets, pw_preds, pw_matrix, mask = pathway_tensors
+        base = MaskedMSELoss()
+        aux = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=0.0)
+        gene_only = base(gene_preds, targets, mask=mask)
+        total = aux(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+        assert torch.allclose(gene_only, total)
+
+    def test_zinb_integration(self):
+        """AuxiliaryPathwayLoss should work with ZINB (pi, mu, theta) output."""
+        from spatial_transcript_former.training.losses import (
+            ZINBLoss,
+            AuxiliaryPathwayLoss,
+            MaskedMSELoss,
+        )
+
+        torch.manual_seed(42)
+        B, N, G, P = 2, 10, 50, 10
+        pi = torch.rand(B, N, G)
+        mu = torch.rand(B, N, G) * 5 + 1.0
+        theta = torch.rand(B, N, G) * 5 + 1.0
+        zinb_preds = (pi, mu, theta)
+
+        targets = torch.randint(0, 10, (B, N, G)).float()
+        pw_preds = torch.randn(B, N, P)
+        pw_matrix = (torch.rand(P, G) > 0.8).float()
+        mask = torch.zeros(B, N, dtype=torch.bool)
+        mask[0, 5:] = True
+
+        loss_fn = AuxiliaryPathwayLoss(pw_matrix, ZINBLoss(), lambda_pathway=1.0)
+        loss = loss_fn(zinb_preds, targets, mask=mask, pathway_preds=pw_preds)
+
+        assert loss.isfinite()
+        assert loss.item() > 0
+
+    def test_perfect_match_zero_aux(self, pathway_tensors):
+        """When pathway preds perfectly correlate with truth, aux loss contribution is 0."""
+        gene_preds, targets, _, pw_matrix, mask = pathway_tensors
+        base = MaskedMSELoss()
+        aux = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=1.0)
+
+        # Compute ground truth pathways
+        with torch.no_grad():
+            target_pathways = torch.matmul(targets, pw_matrix.T)
+
+        gene_loss = base(gene_preds, targets, mask=mask)
+        # Use target_pathways as pathway_preds
+        total_loss = aux(gene_preds, targets, mask=mask, pathway_preds=target_pathways)
+
+        # Total loss should roughly equal gene loss (since 1-PCC should be 0)
+        assert total_loss.item() == pytest.approx(gene_loss.item(), abs=1e-5)
+
+    def test_numerical_stability_empty_spots(self, pathway_tensors):
+        """Test stability when targets for some pathways are all zero."""
+        gene_preds, targets, pw_preds, pw_matrix, mask = pathway_tensors
+
+        # Zero out targets for the first pathway
+        # Matrix is (P, G), so genes involved in pathway 0
+        genes_in_p0 = pw_matrix[0].bool()
+        targets[..., genes_in_p0] = 0.0
+
+        loss_fn = AuxiliaryPathwayLoss(pw_matrix, MaskedMSELoss(), lambda_pathway=1.0)
+        loss = loss_fn(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+
+        assert loss.isfinite()
+        assert not torch.isnan(loss)
+
+    def test_lambda_scaling(self, pathway_tensors):
+        """Doubling lambda_pathway should increase the aux contribution accordingly."""
+        gene_preds, targets, pw_preds, pw_matrix, mask = pathway_tensors
+        base = MaskedMSELoss()
+
+        aux1 = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=0.5)
+        aux2 = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=1.0)
+
+        loss1 = aux1(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+        loss2 = aux2(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+        gene_loss = base(gene_preds, targets, mask=mask)
+
+        term1 = loss1 - gene_loss
+        term2 = loss2 - gene_loss
+
+        # term2 should be approx 2 * term1
+        assert term2.item() == pytest.approx(2 * term1.item(), rel=1e-4)
+
+    def test_hallmark_integration(self):
+        """Test with a real (though small) MSigDB Hallmark matrix."""
+        from spatial_transcript_former.data.pathways import get_pathway_init
+        from spatial_transcript_former.training.losses import (
+            AuxiliaryPathwayLoss,
+            MaskedMSELoss,
+        )
+
+        # Subset of genes known to be in MSigDB Hallmarks
+        gene_list = ["TP53", "MYC", "VEGFA", "VIM", "CDH1", "SNAI1", "AXIN2", "MLH1"]
+        B, N, G = 2, 5, len(gene_list)
+
+        # Get real Hallmark matrix (only for our 8 genes)
+        matrix, names = get_pathway_init(gene_list, verbose=False)
+        P = len(names)
+
+        preds = torch.randn(B, N, G)
+        targets = torch.randn(B, N, G).abs()
+        pw_preds = torch.randn(B, N, P)
+
+        loss_fn = AuxiliaryPathwayLoss(matrix, MaskedMSELoss())
+        loss = loss_fn(preds, targets, pathway_preds=pw_preds)
+
+        assert loss.isfinite()
+        assert len(names) > 0
+
+    def test_hallmark_signal_detection(self):
+        """Verify that gene patterns aligned with a hallmark reduce the aux loss."""
+        from spatial_transcript_former.training.losses import (
+            AuxiliaryPathwayLoss,
+            MaskedMSELoss,
+        )
+
+        # Define 4 genes and 2 pathways
+        # P0: G0, G1
+        # P1: G2, G3
+        pw_matrix = torch.tensor(
+            [[1.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 1.0]], dtype=torch.float32
+        )
+        gene_list = ["G0", "G1", "G2", "G3"]
+        B, N, G = 1, 10, 4
+        P = 2
+
+        # Case 1: Random targets
+        torch.manual_seed(42)
+        targets = torch.randn(B, N, G).abs()
+        # Predictions match targets for genes
+        gene_preds = targets.clone()
+
+        # Pathway preds are random
+        pw_preds_random = torch.randn(B, N, P)
+
+        loss_fn = AuxiliaryPathwayLoss(pw_matrix, MaskedMSELoss(), lambda_pathway=1.0)
+        loss_random = loss_fn(gene_preds, targets, pathway_preds=pw_preds_random)
+
+        # Case 2: Pathway preds perfectly match truth (which is targets @ matrix.T)
+        pw_truth = torch.matmul(targets, pw_matrix.T)
+        loss_perfect = loss_fn(gene_preds, targets, pathway_preds=pw_truth)
+
+        # Case 3: Gene expression is specifically high for P0, and pw_preds are high for P0
+        # If the spatial correlation is high, aux loss should be low.
+        assert loss_perfect.item() < loss_random.item()

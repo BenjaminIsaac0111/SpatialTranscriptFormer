@@ -3,58 +3,163 @@ import pytest
 from unittest.mock import MagicMock
 from spatial_transcript_former.models.interaction import (
     SpatialTranscriptFormer,
-    LocalPatchMixer,
-    GraphPatchMixer,
+    LearnedSpatialEncoder,
+    VALID_INTERACTIONS,
 )
 from spatial_transcript_former.training.engine import train_one_epoch, validate
 
 
-def test_normalize_coords_finds_correct_step():
+def test_n_layers_enforcement():
+    """n_layers < 2 with h2h blocked should raise ValueError."""
+    with pytest.raises(ValueError, match="n_layers must be >= 2"):
+        SpatialTranscriptFormer(
+            num_genes=50, n_layers=1, interactions=["p2p", "p2h", "h2p"]
+        )
+
+
+def test_n_layers_ok_with_full_interactions():
+    """n_layers=1 is allowed when h2h is enabled (full attention)."""
+    model = SpatialTranscriptFormer(
+        num_genes=50,
+        token_dim=64,
+        n_heads=4,
+        n_layers=1,
+        interactions=["p2p", "p2h", "h2p", "h2h"],
+    )
+    assert model is not None
+
+
+def test_invalid_interaction_key():
+    """Unknown interaction keys should raise ValueError."""
+    with pytest.raises(ValueError, match="Unknown interaction keys"):
+        SpatialTranscriptFormer(num_genes=50, interactions=["p2p", "x2y"])
+
+
+@pytest.mark.parametrize(
+    "interactions",
+    [
+        ["p2p", "p2h", "h2p", "h2h"],  # full
+        ["p2p", "p2h", "h2p"],  # bottleneck
+        ["p2p", "p2h"],  # pathway-only
+    ],
+)
+def test_interaction_combinations(interactions):
+    """Various interaction combos should produce correct output shapes."""
+    model = SpatialTranscriptFormer(
+        num_genes=50,
+        token_dim=64,
+        n_heads=4,
+        n_layers=2,
+        interactions=interactions,
+    )
+    B, N, D = 2, 5, 2048
+    features = torch.randn(B, N, D)
+    coords = torch.randn(B, N, 2)
+    out = model(features, rel_coords=coords)
+    assert out.shape == (B, 50)
+
+
+def test_full_interactions_returns_no_mask():
+    """When all interactions are enabled, _build_interaction_mask returns None."""
+    model = SpatialTranscriptFormer(
+        num_genes=50,
+        token_dim=64,
+        n_heads=4,
+        n_layers=2,
+        interactions=["p2p", "p2h", "h2p", "h2h"],
+    )
+    mask = model._build_interaction_mask(p=10, s=20, device=torch.device("cpu"))
+    assert mask is None
+
+
+def test_missing_coords_raises():
+    """use_spatial_pe=True without coords should raise ValueError."""
+    model = SpatialTranscriptFormer(num_genes=50, token_dim=64, n_heads=4, n_layers=2)
+    features = torch.randn(2, 10, 2048)
+    with pytest.raises(ValueError, match="rel_coords was not provided"):
+        model(features)
+
+
+def test_spatial_transcript_former_dense_forward():
+    """Instantiate the model and ensure forward() with return_dense=True executes properly."""
+    model = SpatialTranscriptFormer(
+        num_genes=50,
+        token_dim=64,
+        n_heads=4,
+        n_layers=2,
+    )
+
+    B, N, D = 2, 10, 2048
+    features = torch.randn(B, N, D)
+    coords = torch.randn(B, N, 2)
+
+    # 1. Standard Forward Pass
+    out = model(features, rel_coords=coords)
+    assert out.shape == (
+        B,
+        50,
+    ), f"Expected global output shape {(B, 50)}, got {out.shape}"
+
+    # Reset grads
+    model.zero_grad()
+
+    # 2. Dense Forward Pass
+    out_dense = model.forward(features, rel_coords=coords, return_dense=True)
+    assert out_dense.shape == (
+        B,
+        N,
+        50,
+    ), f"Expected dense output shape {(B, N, 50)}, got {out_dense.shape}"
+
+    out_dense.sum().backward()
+    assert (
+        model.fusion_engine.layers[0].self_attn.in_proj_weight.grad is not None
+    ), "Gradients did not flow through the transformer in dense pass."
+
+
+def test_unified_pathway_scoring():
+    """Both global and dense modes should produce pathway_scores from dot-products."""
+    model = SpatialTranscriptFormer(
+        num_genes=50,
+        token_dim=64,
+        n_heads=4,
+        n_layers=2,
+        num_pathways=10,
+    )
+
+    B, N, D = 2, 5, 2048
+    features = torch.randn(B, N, D)
+    coords = torch.randn(B, N, 2)
+
+    # Global mode returns (gene_expression, pathway_scores)
+    gene_expr, pw_scores = model(features, rel_coords=coords, return_pathways=True)
+    assert gene_expr.shape == (B, 50)
+    assert pw_scores.shape == (B, 10)  # (B, P) from pooled dot-product
+
+    # Dense mode returns (gene_expression, pathway_scores)
+    gene_expr_d, pw_scores_d = model(
+        features, rel_coords=coords, return_pathways=True, return_dense=True
+    )
+    assert gene_expr_d.shape == (B, N, 50)
+    assert pw_scores_d.shape == (B, N, 10)  # (B, S, P) from per-patch dot-product
+
+
+def test_engine_passes_coords_to_forward():
     """
-    Test that _normalize_coords correctly infers the grid spacing (e.g., 224)
-    even when absolute coordinates are very large, which breaks the current median
-    absolute value heuristic.
-    """
-    model = SpatialTranscriptFormer(num_genes=10, use_nystrom=False)
-
-    # Simulate a 2x2 grid of patches with patch size 224 in absolute pixel coords
-    coords = torch.tensor(
-        [[10000.0, 20000.0], [10224.0, 20000.0], [10000.0, 20224.0], [10224.0, 20224.0]]
-    ).unsqueeze(
-        0
-    )  # Output shape: (1, 4, 2)
-
-    normalized = model._normalize_coords(coords)
-
-    # LocalPatchMixer subtracts the minimum coordinate to create a zero-indexed grid.
-    min_c = normalized.min(dim=1, keepdim=True)[0]
-    grid_coords = normalized - min_c
-
-    expected_grid = torch.tensor(
-        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
-    ).unsqueeze(0)
-
-    # The current heuristic fails this because it divides by ~15000 (median)
-    assert torch.allclose(
-        grid_coords, expected_grid
-    ), f"Coordinate normalization failed, returned:\n{grid_coords}"
-
-
-def test_engine_passes_coords_to_dense_forward():
-    """
-    Verify that the training engine passes the generated spatial coordinates to
-    the model in whole_slide mode.
+    Verify that the training engine passes spatial coordinates to
+    model.forward() in whole_slide mode.
     """
     model = SpatialTranscriptFormer(num_genes=10)
 
-    # Mock to track if coords are passed
-    model.forward_dense = MagicMock(return_value=torch.randn(2, 5, 10))
+    # Mock forward to track calls
+    original_forward = model.forward
+    model.forward = MagicMock(return_value=torch.randn(2, 5, 10))
     model.get_sparsity_loss = MagicMock(return_value=torch.tensor(0.0))
 
     fake_coords = torch.randn(2, 5, 2)
     fake_mask = torch.zeros(2, 5).bool()
 
-    # Datloader yielding (feats, genes, coords, mask)
+    # Dataloader yielding (feats, genes, coords, mask)
     loader = [(torch.randn(2, 5, 512), torch.randn(2, 5, 10), fake_coords, fake_mask)]
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -64,12 +169,12 @@ def test_engine_passes_coords_to_dense_forward():
 
     train_one_epoch(model, loader, dummy_criterion, optimizer, "cpu", whole_slide=True)
 
-    model.forward_dense.assert_called_once()
-    kwargs = model.forward_dense.call_args.kwargs
+    model.forward.assert_called_once()
+    kwargs = model.forward.call_args.kwargs
 
-    assert "coords" in kwargs, "Engine did not pass 'coords' kwargs to forward_dense!"
+    assert "rel_coords" in kwargs, "Engine did not pass 'rel_coords' kwargs to forward!"
     assert torch.allclose(
-        kwargs["coords"], fake_coords
+        kwargs["rel_coords"], fake_coords
     ), "Engine passed wrong coordinate tensor!"
 
 
@@ -78,7 +183,7 @@ def test_engine_validate_passes_coords():
     Verify validation loop passes coords.
     """
     model = SpatialTranscriptFormer(num_genes=10)
-    model.forward_dense = MagicMock(return_value=torch.randn(2, 5, 10))
+    model.forward = MagicMock(return_value=torch.randn(2, 5, 10))
 
     fake_coords = torch.randn(2, 5, 2)
     loader = [
@@ -95,79 +200,12 @@ def test_engine_validate_passes_coords():
 
     validate(model, loader, dummy_criterion, "cpu", whole_slide=True)
 
-    model.forward_dense.assert_called_once()
-    kwargs = model.forward_dense.call_args.kwargs
+    model.forward.assert_called_once()
+    kwargs = model.forward.call_args.kwargs
 
     assert (
-        "coords" in kwargs
-    ), "Validate engine did not pass 'coords' kwargs to forward_dense!"
+        "rel_coords" in kwargs
+    ), "Validate engine did not pass 'rel_coords' kwargs to forward!"
     assert torch.allclose(
-        kwargs["coords"], fake_coords
+        kwargs["rel_coords"], fake_coords
     ), "Validate engine passed wrong coordinate tensor!"
-
-
-def test_graph_patch_mixer():
-    """Verify that the GraphPatchMixer correctly performs message passing over a k-NN graph."""
-    B, N, D = 2, 10, 32
-    k = 3
-    mixer = GraphPatchMixer(dim=D, k=k, heads=4)
-
-    x = torch.randn(B, N, D)
-    coords = torch.randn(B, N, 2)
-
-    # 1. Forward Pass
-    out = mixer(x, coords)
-
-    # 2. Shape Verification
-    assert out.shape == (B, N, D), f"Expected shape {(B, N, D)}, got {out.shape}"
-
-    # 3. Gradient Flow Verification
-    out.sum().backward()
-    assert (
-        mixer.to_qkv.weight.grad is not None
-    ), "Gradients did not flow through the GAT layer."
-
-
-def test_spatial_transcript_former_with_gnn_refiner():
-    """Instantiate the model with GNN refiner and ensure forward() and forward_dense() execute properly."""
-    model = SpatialTranscriptFormer(
-        num_genes=50,
-        token_dim=64,
-        n_heads=4,
-        n_layers=1,
-        early_mixer=None,
-        late_refiner="gnn",
-    )
-
-    B, N, D = 2, 10, 2048
-    features = torch.randn(B, N, D)
-    coords = torch.randn(B, N, 2)
-
-    # Check that early_mixer is None and late_refiner is initialized
-    assert model.early_mixer is None, "early_mixer should be None"
-    assert (
-        hasattr(model, "late_refiner") and model.late_refiner is not None
-    ), "late_refiner not initialized"
-
-    # 1. Standard Forward Pass
-    out = model(features, rel_coords=coords)
-    assert out.shape == (
-        B,
-        50,
-    ), f"Expected dense output shape {(B, 50)}, got {out.shape}"
-
-    # Reset grads
-    model.zero_grad()
-
-    # 2. Dense Forward Pass (This is the one that uses the Graph Refiner explicitly)
-    out_dense = model.forward_dense(features, coords=coords)
-    assert out_dense.shape == (
-        B,
-        N,
-        50,
-    ), f"Expected dense output shape {(B, N, 50)}, got {out_dense.shape}"
-
-    out_dense.sum().backward()
-    assert (
-        model.late_refiner.to_qkv.weight.grad is not None
-    ), "Gradients did not flow through the late_refiner in dense pass."

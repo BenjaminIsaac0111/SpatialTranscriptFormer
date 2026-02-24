@@ -3,7 +3,26 @@ import argparse
 import sys
 import os
 
+from spatial_transcript_former.config import get_config
+
+# Common flags for all STF interaction models
+STF_COMMON = [
+    "--model",
+    "interaction",
+    "--backbone",
+    "ctranspath",
+    "--precomputed",
+    "--whole-slide",
+    "--pathway-init",
+    "--use-amp",
+    "--log-transform",
+    "--loss",
+    "mse_pcc",
+    "--resume",
+]
+
 PRESETS = {
+    # --- Baselines ---
     "he2rna_baseline": [
         "--model",
         "he2rna",
@@ -36,15 +55,74 @@ PRESETS = {
         "--batch-size",
         "1",
     ],
-    "stf_pathway_nystrom": [
+    # --- Interaction Models (Layer Scaling) ---
+    "stf_interaction_l2": STF_COMMON
+    + [
+        "--n-layers",
+        "2",
+        "--token-dim",
+        "256",
+        "--n-heads",
+        "4",
+        "--batch-size",
+        "4",
+    ],
+    "stf_interaction_l4": STF_COMMON
+    + [
+        "--n-layers",
+        "4",
+        "--token-dim",
+        "384",
+        "--n-heads",
+        "8",
+        "--batch-size",
+        "4",
+    ],
+    "stf_interaction_l6": STF_COMMON
+    + [
+        "--n-layers",
+        "6",
+        "--token-dim",
+        "512",
+        "--n-heads",
+        "8",
+        "--batch-size",
+        "2",  # Reduced batch size for large model memory
+    ],
+    # --- Specific Configurations ---
+    "stf_interaction_zinb": [
         "--model",
         "interaction",
         "--backbone",
         "ctranspath",
         "--precomputed",
         "--whole-slide",
-        "--use-nystrom",
         "--pathway-init",
+        "--sparsity-lambda",
+        "0",
+        "--lr",
+        "1e-4",
+        "--batch-size",
+        "4",
+        "--epochs",
+        "2000",
+        "--use-amp",
+        "--loss",
+        "zinb",
+        "--log-transform",
+        "--pathway-loss-weight",
+        "0.5",
+        "--interactions",
+        "p2p",
+        "p2h",
+        "h2p",
+        "h2h",
+        "--plot-pathways",
+        "--resume",
+    ],
+    # Legacy / Specialized
+    "stf_pathway_nystrom": STF_COMMON
+    + [
         "--sparsity-lambda",
         "0.05",
         "--lr",
@@ -53,95 +131,15 @@ PRESETS = {
         "8",
         "--epochs",
         "2000",
-        "--log-transform",
-        "--use-amp",
-        "--loss",
-        "mse_pcc",
-        "--resume",
-    ],
-    "stf_pathway": [
-        "--model",
-        "interaction",
-        "--backbone",
-        "ctranspath",
-        "--precomputed",
-        "--whole-slide",
-        "--pathway-init",
-        "--pathways",
-        "KEGG_COLORECTAL_CANCER",
-        "GRADE_COLON_CANCER_UP",
-        "GRADE_COLON_CANCER_DN",
-        "GRADE_COLON_AND_RECTAL_CANCER_UP",
-        "GRADE_COLON_AND_RECTAL_CANCER_DN",
-        "--sparsity-lambda",
-        "0.01",
-        "--lr",
-        "1e-5",
-        "--batch-size",
-        "8",
-        "--epochs",
-        "2000",
-        "--log-transform",
-        "--use-amp",
-        "--loss",
-        "mse_pcc",
-        "--resume",
-    ],
-    "stf_pathway_hybrid": [
-        "--model",
-        "interaction",
-        "--backbone",
-        "ctranspath",
-        "--precomputed",
-        "--whole-slide",
-        "--pathway-init",
-        "--pathways",
-        "KEGG_COLORECTAL_CANCER",
-        "GRADE_COLON_CANCER_UP",
-        "GRADE_COLON_CANCER_DN",
-        "GRADE_COLON_AND_RECTAL_CANCER_UP",
-        "GRADE_COLON_AND_RECTAL_CANCER_DN",
-        "--sparsity-lambda",
-        "0.01",
-        "--lr",
-        "1e-4",
-        "--batch-size",
-        "8",
-        "--epochs",
-        "2000",
-        "--log-transform",
-        "--use-amp",
-        "--loss",
-        "mse_pcc",
-        "--resume",
-    ],
-    "stf_pathway_gnn": [
-        "--model",
-        "interaction",
-        "--backbone",
-        "ctranspath",
-        "--precomputed",
-        "--whole-slide",
-        "--pathway-init",
-        "--sparsity-lambda",
-        "0.01",
-        "--lr",
-        "1e-4",
-        "--batch-size",
-        "8",
-        "--epochs",
-        "2000",
-        "--log-transform",
-        "--use-amp",
-        "--loss",
-        "mse",
-        "--resume",
-        "--early-mixer",
-        "none",
-        "--late-refiner",
-        "gnn",
     ],
 }
+
+# Add alias for the one currently running to ensure backward compatibility for монитор
+PRESETS["stf_interaction_mse_pcc"] = PRESETS["stf_interaction_l2"] + [
+    "--pathway-loss-weight",
+    "0.5",
+    "--plot-pathways",
+]
 
 
 def main():
@@ -161,7 +159,7 @@ def main():
         default=get_config("data_dirs", ["A:\\hest_data"])[0],
         help="Data directory",
     )
-    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
+    parser.add_argument("--epochs", type=int, default=2000, help="Number of epochs")
     parser.add_argument("--max-samples", type=int, default=None, help="Limit samples")
     parser.add_argument(
         "--output-dir", type=str, default=None, help="Override output dir"

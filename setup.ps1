@@ -7,8 +7,8 @@ $EnvName = "SpatialTranscriptFormer"
 # Check if conda environment exists
 $CondaEnv = conda env list | Select-String $EnvName
 if ($null -eq $CondaEnv) {
-      Write-Host "Creating conda environment '$EnvName' with Python 3.10..." -ForegroundColor Yellow
-      conda create -n $EnvName python=3.10 -y
+      Write-Host "Creating conda environment '$EnvName' with Python 3.9..." -ForegroundColor Yellow
+      conda create -n $EnvName python=3.9 -y
 }
 else {
       Write-Host "Conda environment '$EnvName' already exists." -ForegroundColor Green
@@ -22,5 +22,6 @@ Write-Host "Setup Complete!" -ForegroundColor Green
 Write-Host "You can now use the following commands:"
 Write-Host "  stf-download --help"
 Write-Host "  stf-split --help"
+Write-Host "  stf-build-vocab --help"
 Write-Host ""
 Write-Host "To run tests, use: .\test.ps1"

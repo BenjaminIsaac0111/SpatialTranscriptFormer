@@ -4,15 +4,12 @@
 # Data Paths
 # Candidates for the HEST data directory (checked in order)
 data_dirs:
-  - "hest_data"
-  - "../hest_data"
-  - "./data"
   - "A:\\hest_data"
 
 # Training Defaults
 training:
   num_genes: 1000
-  batch_size: 32
+  batch_size: 8
   learning_rate: 0.0001
   output_dir: "./checkpoints"
   
