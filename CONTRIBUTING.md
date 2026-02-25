@@ -55,6 +55,15 @@ bash test.sh # Linux
 3. **Documentation**: Update relevant files in `docs/` and the `README.md` if your change affects usage.
 4. **Verification**: Ensure all CI checks (GitHub Actions) pass.
 
+### Branch Protections
+
+To maintain code quality and stability, the following protections are enforced on the `main` branch:
+
+- **Require Pull Request Reviews**: All merges to `main` require at least one approval from a project maintainer.
+- **Required Status Checks**: The `CI` workflow must pass successfully before a PR can be merged. This includes formatting checks (`black`) and the full test suite (`pytest`).
+- **No Direct Pushes**: Pushing directly to `main` is disabled. All changes must go through the Pull Request process.
+- **Linear History**: We prefer **Squash and Merge** to keep the `main` branch history clean and concise.
+
 ## Contact
 
 For questions regarding commercial licensing or complex architectural changes, please contact the author directly.

@@ -1,0 +1,17 @@
+# Global owners (catch-all for all files)
+*       @BenjaminIsaac0111
+
+# Core Model and Training Logic
+src/spatial_transcript_former/models/    @BenjaminIsaac0111
+src/spatial_transcript_former/training/  @BenjaminIsaac0111
+
+# Data Management and Scripts
+src/spatial_transcript_former/data/      @BenjaminIsaac0111
+scripts/                                 @BenjaminIsaac0111
+
+# Documentation
+docs/                                    @BenjaminIsaac0111
+*.md                                     @BenjaminIsaac0111
+
+# GitHub Actions and Infrastructure
+.github/                                 @BenjaminIsaac0111
