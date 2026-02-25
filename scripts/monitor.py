@@ -90,7 +90,7 @@ app.layout = html.Div(
         ),
         html.Div(
             [
-                # Graph for Losses
+                # Row 1: Losses + Correlation
                 html.Div(
                     [dcc.Graph(id="live-loss-graph", animate=False)],
                     style={
@@ -99,9 +99,25 @@ app.layout = html.Div(
                         "verticalAlign": "top",
                     },
                 ),
-                # Graph for Metrics
                 html.Div(
-                    [dcc.Graph(id="live-metric-graph", animate=False)],
+                    [dcc.Graph(id="live-pcc-graph", animate=False)],
+                    style={
+                        "width": "48%",
+                        "display": "inline-block",
+                        "verticalAlign": "top",
+                    },
+                ),
+                # Row 2: Variance + Learning Rate
+                html.Div(
+                    [dcc.Graph(id="live-variance-graph", animate=False)],
+                    style={
+                        "width": "48%",
+                        "display": "inline-block",
+                        "verticalAlign": "top",
+                    },
+                ),
+                html.Div(
+                    [dcc.Graph(id="live-lr-graph", animate=False)],
                     style={
                         "width": "48%",
                         "display": "inline-block",
@@ -157,80 +173,97 @@ def update_image(n):
     return html.Img(src=url, style={"maxWidth": "100%", "height": "auto"})
 
 
+def _make_traces(df, cols, smoothing_window):
+    """Create Plotly traces for the given columns with optional smoothing."""
+    traces = []
+    for col in cols:
+        if col not in df.columns:
+            continue
+        y_data = df[col].dropna()
+        epochs = df.loc[y_data.index, "epoch"]
+        if smoothing_window and smoothing_window > 1:
+            y_data = y_data.rolling(window=smoothing_window, min_periods=1).mean()
+        traces.append(go.Scatter(x=epochs, y=y_data, mode="lines", name=col))
+    return traces
+
+
 @app.callback(
     [
         Output("live-loss-graph", "figure"),
-        Output("live-metric-graph", "figure"),
+        Output("live-pcc-graph", "figure"),
+        Output("live-variance-graph", "figure"),
+        Output("live-lr-graph", "figure"),
         Output("last-updated", "children"),
     ],
     [Input("interval-component", "n_intervals"), Input("smoothing-slider", "value")],
 )
 def update_graphs(n, smoothing_window):
+    empty = dash.no_update
     if not os.path.exists(log_path):
-        return (
-            dash.no_update,
-            dash.no_update,
-            "Waiting for training_log.csv to be created...",
-        )
+        return empty, empty, empty, empty, "Waiting for training_log.csv..."
 
     try:
         df = pd.read_csv(log_path)
     except Exception as e:
-        return dash.no_update, dash.no_update, f"Error reading log file: {str(e)}"
+        return empty, empty, empty, empty, f"Error reading log: {e}"
 
     if df.empty or "epoch" not in df.columns:
-        return (
-            dash.no_update,
-            dash.no_update,
-            "Log file is empty or missing 'epoch' column.",
-        )
+        return empty, empty, empty, empty, "Log empty or missing 'epoch'."
 
-    # Subplot 1: Losses
+    margin = dict(l=40, r=40, t=40, b=40)
+
+    # Chart 1: Losses (log scale)
     loss_cols = [c for c in df.columns if "loss" in c.lower()]
-    loss_traces = []
-    for col in loss_cols:
-        y_data = df[col]
-        if smoothing_window and smoothing_window > 1:
-            y_data = y_data.rolling(window=smoothing_window, min_periods=1).mean()
+    loss_fig = {
+        "data": _make_traces(df, loss_cols, smoothing_window),
+        "layout": go.Layout(
+            title="Loss",
+            xaxis=dict(title="Epoch"),
+            yaxis=dict(title="Loss", type="log"),
+            margin=margin,
+        ),
+    }
 
-        loss_traces.append(go.Scatter(x=df["epoch"], y=y_data, mode="lines", name=col))
+    # Chart 2: Correlation (PCC, MAE)
+    corr_cols = [c for c in ["val_pcc", "val_mae"] if c in df.columns]
+    pcc_fig = {
+        "data": _make_traces(df, corr_cols, smoothing_window),
+        "layout": go.Layout(
+            title="Correlation & Error",
+            xaxis=dict(title="Epoch"),
+            yaxis=dict(title="Score"),
+            margin=margin,
+        ),
+    }
 
-    loss_layout = go.Layout(
-        title="Training vs Validation Loss",
-        xaxis=dict(title="Epoch"),
-        yaxis=dict(
-            title="Loss", type="log"
-        ),  # Log scale often helps with early MSE spikes
-        margin=dict(l=40, r=40, t=40, b=40),
-    )
+    # Chart 3: Prediction Variance
+    var_cols = [c for c in ["pred_variance"] if c in df.columns]
+    var_fig = {
+        "data": _make_traces(df, var_cols, smoothing_window),
+        "layout": go.Layout(
+            title="Prediction Variance (collapse detector)",
+            xaxis=dict(title="Epoch"),
+            yaxis=dict(title="Variance", type="log"),
+            margin=margin,
+        ),
+    }
 
-    # Subplot 2: Interpretability Metrics
-    metric_cols = [c for c in df.columns if c not in loss_cols and c != "epoch"]
-    metric_traces = []
-    for col in metric_cols:
-        y_data = df[col]
-        if smoothing_window and smoothing_window > 1:
-            y_data = y_data.rolling(window=smoothing_window, min_periods=1).mean()
-
-        metric_traces.append(
-            go.Scatter(x=df["epoch"], y=y_data, mode="lines", name=col)
-        )
-
-    metric_layout = go.Layout(
-        title="Interpretability Metrics (MAE, PCC, Correlation)",
-        xaxis=dict(title="Epoch"),
-        yaxis=dict(title="Score / Error"),
-        margin=dict(l=40, r=40, t=40, b=40),
-    )
+    # Chart 4: Learning Rate
+    lr_cols = [c for c in ["lr"] if c in df.columns]
+    lr_fig = {
+        "data": _make_traces(df, lr_cols, smoothing_window),
+        "layout": go.Layout(
+            title="Learning Rate Schedule",
+            xaxis=dict(title="Epoch"),
+            yaxis=dict(title="LR", type="log"),
+            margin=margin,
+        ),
+    }
 
     last_epoch = df["epoch"].iloc[-1]
     update_text = f"Last updated: Epoch {last_epoch} (Polled automatically)"
 
-    return (
-        {"data": loss_traces, "layout": loss_layout},
-        {"data": metric_traces, "layout": metric_layout},
-        update_text,
-    )
+    return loss_fig, pcc_fig, var_fig, lr_fig, update_text
 
 
 @app.callback(

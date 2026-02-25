@@ -7,8 +7,8 @@ ENV_NAME="SpatialTranscriptFormer"
 
 # Check if conda environment exists
 if ! conda env list | grep -q "$ENV_NAME"; then
-    echo "Creating conda environment '$ENV_NAME' with Python 3.10..."
-    conda create -n $ENV_NAME python=3.10 -y
+    echo "Creating conda environment '$ENV_NAME' with Python 3.9..."
+    conda create -n $ENV_NAME python=3.9 -y
 else
     echo "Conda environment '$ENV_NAME' already exists."
 fi
@@ -20,7 +20,7 @@ echo ""
 echo "Setup Complete!"
 echo "You can now use the following commands (after activating the environment):"
 echo "  stf-download --help"
-echo "  stf-download-bowel"
 echo "  stf-split --help"
+echo "  stf-build-vocab --help"
 echo ""
 echo "To run tests, use: ./test.sh"

@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 from spatial_transcript_former.models import SpatialTranscriptFormer
+from spatial_transcript_former.training.losses import AuxiliaryPathwayLoss
 
 
 def _optimizer_step(
@@ -74,11 +75,29 @@ def train_one_epoch(
             )
 
             with torch.amp.autocast("cuda", enabled=scaler is not None):
-                if hasattr(model, "forward_dense") and not getattr(
+                if isinstance(model, SpatialTranscriptFormer) and not getattr(
                     model, "weak_supervision", False
                 ):
-                    preds = model.forward_dense(feats, mask=mask, coords=coords)
-                    loss = criterion(preds, genes, mask=mask)
+                    # Request pathway scores if criterion can use them
+                    needs_pathways = isinstance(criterion, AuxiliaryPathwayLoss)
+                    output = model(
+                        feats,
+                        return_dense=True,
+                        mask=mask,
+                        rel_coords=coords,
+                        return_pathways=needs_pathways,
+                    )
+                    if needs_pathways:
+                        preds, pathway_preds = output
+                        loss = criterion(
+                            preds,
+                            genes,
+                            mask=mask,
+                            pathway_preds=pathway_preds,
+                        )
+                    else:
+                        preds = output
+                        loss = criterion(preds, genes, mask=mask)
                 else:
                     preds = model(feats)
                     bag_target = _compute_bag_target(genes, mask)
@@ -136,6 +155,7 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
     running_loss = 0.0
     running_mae = 0.0
     pcc_list = []
+    pred_var_list = []
     attn_correlations = []
 
     with torch.no_grad():
@@ -157,10 +177,21 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                 attn = None
 
                 if whole_slide:
-                    if hasattr(model, "forward_dense") and not getattr(
+                    if isinstance(model, SpatialTranscriptFormer) and not getattr(
                         model, "weak_supervision", False
                     ):
-                        outputs = model.forward_dense(feats, mask=mask, coords=coords)
+                        needs_pathways = isinstance(criterion, AuxiliaryPathwayLoss)
+                        output = model(
+                            feats,
+                            return_dense=True,
+                            mask=mask,
+                            rel_coords=coords,
+                            return_pathways=needs_pathways,
+                        )
+                        if needs_pathways:
+                            outputs, pathway_preds = output
+                        else:
+                            outputs = output
                         targets = genes
                     else:
                         # MIL models: extract attention if supported
@@ -179,33 +210,50 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                     else:
                         outputs = model(images)
 
-                loss = (
-                    criterion(outputs, targets, mask=mask)
-                    if whole_slide
-                    and hasattr(model, "forward_dense")
-                    and not getattr(model, "weak_supervision", False)
-                    else criterion(outputs, targets)
-                )
-
-                # --- Interpretability Metrics (MAE & PCC) ---
-                mae_diff = torch.abs(outputs - targets)
+                # Compute loss, passing pathway_preds if available
                 if (
                     whole_slide
-                    and hasattr(model, "forward_dense")
+                    and isinstance(model, SpatialTranscriptFormer)
+                    and not getattr(model, "weak_supervision", False)
+                ):
+                    if isinstance(criterion, AuxiliaryPathwayLoss):
+                        loss = criterion(
+                            outputs,
+                            targets,
+                            mask=mask,
+                            pathway_preds=pathway_preds,
+                        )
+                    else:
+                        loss = criterion(outputs, targets, mask=mask)
+                else:
+                    loss = criterion(outputs, targets)
+
+                # --- Interpretability Metrics (MAE & PCC) ---
+                # Since ZINB loss outputs a tuple (pi, mu, theta), we only use mu (index 1) for evaluations against truth.
+                eval_preds = outputs[1] if isinstance(outputs, tuple) else outputs
+                mae_diff = torch.abs(eval_preds - targets)
+                if (
+                    whole_slide
+                    and isinstance(model, SpatialTranscriptFormer)
                     and not getattr(model, "weak_supervision", False)
                     and mask is not None
                 ):
                     valid_mask = ~mask.unsqueeze(-1).expand_as(mae_diff)
                     mae_val = (mae_diff * valid_mask.float()).sum() / valid_mask.sum()
+                else:
+                    mae_val = mae_diff.mean()
 
-                    if torch.isfinite(outputs).all() and torch.isfinite(targets).all():
+                    if (
+                        torch.isfinite(eval_preds).all()
+                        and torch.isfinite(targets).all()
+                    ):
                         # Calculate Spatial PCC (across spots N, for each gene G independently)
                         # outputs/targets are (B, N, G) for whole_slide or (B, G) for patch
                         if whole_slide:
                             # Iterate over batches to correlate spatially for each slide
-                            B = outputs.shape[0]
+                            B = eval_preds.shape[0]
                             for b_idx in range(B):
-                                p_slide = outputs[b_idx]  # (N, G)
+                                p_slide = eval_preds[b_idx]  # (N, G)
                                 t_slide = targets[b_idx]  # (N, G)
 
                                 valid_idx = ~mask[b_idx]
@@ -231,7 +279,7 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                                             pcc_list.append(valid_corrs.mean().item())
                         else:
                             # Patch level (B, G). Correlate across the batch B (which is spatial patches)
-                            vx = outputs - outputs.mean(dim=0, keepdim=True)
+                            vx = eval_preds - eval_preds.mean(dim=0, keepdim=True)
                             vy = targets - targets.mean(dim=0, keepdim=True)
                             num = torch.sum(vx * vy, dim=0)
                             den = torch.sqrt(
@@ -261,6 +309,23 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
             running_loss += loss.item()
             running_mae += mae_val.item()
 
+            # Track prediction variance (collapse detector)
+            with torch.no_grad():
+                if (
+                    whole_slide
+                    and mask is not None
+                    and isinstance(model, SpatialTranscriptFormer)
+                    and not getattr(model, "weak_supervision", False)
+                ):
+                    for b in range(eval_preds.shape[0]):
+                        valid = ~mask[b]
+                        if valid.sum() >= 2:
+                            pred_var_list.append(
+                                eval_preds[b, valid].var(dim=0).mean().item()
+                            )
+                else:
+                    pred_var_list.append(eval_preds.var(dim=0).mean().item())
+
     avg_loss = running_loss / len(loader)
     avg_mae = running_mae / len(loader)
     avg_pcc = sum(pcc_list) / len(pcc_list) if pcc_list else None
@@ -268,8 +333,12 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
         sum(attn_correlations) / len(attn_correlations) if attn_correlations else None
     )
 
+    avg_pred_var = sum(pred_var_list) / len(pred_var_list) if pred_var_list else None
+
     if avg_pcc is not None:
         print(f"Validation MAE: {avg_mae:.4f} | PCC: {avg_pcc:.4f}")
+    if avg_pred_var is not None:
+        print(f"Prediction Variance: {avg_pred_var:.6f}")
     if avg_corr is not None:
         print(f"Spatial Attention Correlation: {avg_corr:.4f}")
 
@@ -277,5 +346,6 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
         "val_loss": avg_loss,
         "val_mae": avg_mae,
         "val_pcc": avg_pcc,
+        "pred_variance": avg_pred_var,
         "attn_correlation": avg_corr,
     }

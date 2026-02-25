@@ -152,22 +152,11 @@ def run_inference_plot(model, args, sample_id, epoch, device):
             h5_path = os.path.join(patches_dir, f"{sample_id}.h5")
             h5ad_path = os.path.join(st_dir, f"{sample_id}.h5ad")
 
-            with h5py.File(h5_path, "r") as f:
-                patch_barcodes = f["barcode"][:].flatten()
-                coords = f["coords"][:]
-
             # Load global genes
             try:
                 common_gene_names = load_global_genes(args.data_dir, args.num_genes)
             except Exception:
                 common_gene_names = None
-
-            gene_matrix, mask, gene_names = load_gene_expression_matrix(
-                h5ad_path,
-                patch_barcodes,
-                selected_gene_names=common_gene_names,
-                num_genes=args.num_genes,
-            )
 
             # Run inference
             preds = []
@@ -194,18 +183,53 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                     selected_gene_names=common_gene_names,
                     n_neighbors=args.n_neighbors,
                     whole_slide_mode=args.whole_slide,
+                    log1p=log_transform,
                 )
 
                 if args.whole_slide:
-                    feats, _, _ = ds[0]
+                    feats, gene_targets, slide_coords = ds[0]
                     feats = feats.unsqueeze(0).to(device)
-                    if hasattr(model, "forward_dense"):
-                        output = model.forward_dense(feats, return_pathways=True)
+                    slide_coords = slide_coords.unsqueeze(0).to(device)
+                    if isinstance(model, SpatialTranscriptFormer):
+                        output = model(
+                            feats,
+                            return_dense=True,
+                            rel_coords=slide_coords,
+                            return_pathways=True,
+                        )
                         if isinstance(output, tuple):
-                            preds.append(output[0].detach().cpu().squeeze(0))
+                            out_preds = output[0]
+                            if isinstance(out_preds, tuple):
+                                out_preds = out_preds[1]
+                            preds.append(out_preds.detach().cpu().squeeze(0))
                             pathways_list.append(output[1].detach().cpu().squeeze(0))
                         else:
                             preds.append(output.detach().cpu().squeeze(0))
+
+                    # Use raw pixel coords from the .pt file for histology overlay
+                    # These are guaranteed to be in the same order as the features
+                    saved_data = torch.load(
+                        feature_path, map_location="cpu", weights_only=True
+                    )
+                    raw_coords = saved_data["coords"]  # (N, 2)
+                    raw_barcodes = saved_data["barcodes"]
+                    del saved_data
+
+                    # Compute the same mask the dataset used to filter
+                    _, pt_mask, gene_names = load_gene_expression_matrix(
+                        h5ad_path,
+                        raw_barcodes,
+                        selected_gene_names=common_gene_names,
+                        num_genes=args.num_genes,
+                    )
+                    pt_mask_bool = np.array(pt_mask, dtype=bool)
+                    coord_subset = raw_coords[pt_mask_bool].numpy()
+
+                    # Pathway truth from the dataset's aligned gene matrix
+                    gene_truth = gene_targets.numpy()
+                    pathway_truth, pathway_names = _compute_pathway_truth(
+                        gene_truth, gene_names, args=args
+                    )
                 else:
                     dl = DataLoader(ds, batch_size=32, shuffle=False)
                     for feats, _, rel_coords_batch in dl:
@@ -217,13 +241,43 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                             )
                             if isinstance(output, tuple):
                                 pathways_list.append(output[1].cpu())
-                                preds.append(output[0].cpu())
+                                out_preds = output[0]
+                                if isinstance(out_preds, tuple):
+                                    out_preds = out_preds[1]
+                                preds.append(out_preds.cpu())
                             else:
                                 preds.append(output.cpu())
                         else:
                             preds.append(model(feats.to(device)).cpu())
+
+                    # Non-whole-slide: use h5 file coords (same source as DataLoader)
+                    with h5py.File(h5_path, "r") as f:
+                        patch_barcodes = f["barcode"][:].flatten()
+                        h5_coords = f["coords"][:]
+                    gene_matrix, mask, gene_names = load_gene_expression_matrix(
+                        h5ad_path,
+                        patch_barcodes,
+                        selected_gene_names=common_gene_names,
+                        num_genes=args.num_genes,
+                    )
+                    coord_mask = np.array(mask, dtype=bool)
+                    coord_subset = h5_coords[coord_mask]
+                    gene_truth = np.log1p(gene_matrix) if log_transform else gene_matrix
+                    pathway_truth, pathway_names = _compute_pathway_truth(
+                        gene_truth, gene_names, args=args
+                    )
             else:
-                coord_subset = coords[mask]
+                with h5py.File(h5_path, "r") as f:
+                    patch_barcodes = f["barcode"][:].flatten()
+                    h5_coords = f["coords"][:]
+                gene_matrix, mask, gene_names = load_gene_expression_matrix(
+                    h5ad_path,
+                    patch_barcodes,
+                    selected_gene_names=common_gene_names,
+                    num_genes=args.num_genes,
+                )
+                coord_mask = np.array(mask, dtype=bool)
+                coord_subset = h5_coords[coord_mask]
                 ds = HEST_Dataset(
                     h5_path, coord_subset, gene_matrix, indices=np.where(mask)[0]
                 )
@@ -237,28 +291,32 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                         )
                         if isinstance(output, tuple):
                             pathways_list.append(output[1].cpu())
-                            preds.append(output[0].cpu())
+                            out_preds = output[0]
+                            if isinstance(out_preds, tuple):
+                                out_preds = out_preds[1]
+                            preds.append(out_preds.cpu())
                         else:
                             preds.append(output.cpu())
                     else:
                         preds.append(model(imgs.to(device)).cpu())
+                gene_truth = np.log1p(gene_matrix) if log_transform else gene_matrix
+                pathway_truth, pathway_names = _compute_pathway_truth(
+                    gene_truth, gene_names, args=args
+                )
 
-            if not preds or not pathways_list:
-                print("Warning: No predictions/pathways generated. Skipping plot.")
+            if not preds:
+                print("Warning: No predictions generated. Skipping plot.")
                 return
 
-            pathways = torch.cat(pathways_list, dim=0).numpy()
-            coord_mask = np.array(mask, dtype=bool)
-            coord_subset = coords[coord_mask]
-
-            # Compute pathway ground truth from MSigDB membership (fixed across epochs)
-            gene_truth = np.log1p(gene_matrix) if log_transform else gene_matrix
-            pathway_truth, pathway_names = _compute_pathway_truth(
-                gene_truth, gene_names, args=args
+            # Compute pathway activations from gene predictions (same method as truth)
+            # Both truth and pred are now: mean gene expression of pathway members
+            gene_preds_np = torch.cat(preds, dim=0).numpy()
+            pathway_pred, _ = _compute_pathway_truth(
+                gene_preds_np, gene_names, args=args
             )
 
-            if pathway_truth is None:
-                print("Warning: Could not compute pathway truth. Skipping plot.")
+            if pathway_truth is None or pathway_pred is None:
+                print("Warning: Could not compute pathway truth/pred. Skipping plot.")
                 return
 
             # Load histology image
@@ -270,7 +328,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
             )
             plot_training_summary(
                 coord_subset,
-                pathways,
+                pathway_pred,
                 pathway_truth,
                 pathway_names,
                 sample_id=sample_id,

@@ -1,6 +1,16 @@
 # SpatialTranscriptFormer
 
-A transformer-based model for spatial transcriptomics.
+> [!WARNING]
+> **Work in Progress**: This project is under active development. Core architectures, CLI flags, and data formats are subject to major changes.
+
+A transformer-based model for spatial transcriptomics that bridges histology and biological pathways.
+
+## Key Features
+
+- **Quad-Flow Interaction**: Configurable attention between Pathways and Histology patches (`p2p`, `p2h`, `h2p`, `h2h`).
+- **Pathway Bottleneck**: Interpretable gene expression prediction via 50 MSigDB Hallmark tokens.
+- **Spatial Pattern Coherence**: Optimized using a composite **MSE + PCC (Pearson Correlation) loss** to prevent spatial collapse and ensure accurate morphology-expression mapping.
+- **Biologically Informed Initialization**: Gene reconstruction weights derived from known hallmark memberships.
 
 ## License
 
@@ -25,71 +35,66 @@ This project requires [Conda](https://docs.conda.io/en/latest/).
 
 ## Usage
 
-After installation, the following command-line tools are available in your `SpatialTranscriptFormer` environment:
-
 ### Download HEST Data
 
 Download specific subsets using filters or patterns:
 
 ```bash
-# List available organs
-stf-download --list_organs
-
 # Download only the Bowel Cancer subset (including ST data and WSIs)
 stf-download --organ Bowel --disease Cancer --local_dir hest_data
-
-# Download any other organ
-stf-download --organ Kidney
-```
-
-### Split Dataset
-
-Perform patient-stratified splitting on the metadata:
-
-```powershell
-stf-split HEST_v1_3_0.csv --val_ratio 0.2
 ```
 
 ### Train Models
 
-Train baseline models (HE2RNA, ViT) or the proposed interaction model. For a complete list of configurations and examples, see the [Training Guide](docs/TRAINING_GUIDE.md).
+We provide presets for baseline models and scaled versions of the SpatialTranscriptFormer.
 
 ```bash
-# Option 1: Using the standard command
-stf-train --data-dir A:\hest_data --model he2rna --epochs 20
+# Recommended: Run the Interaction model with 4 transformer layers
+python scripts/run_preset.py --preset stf_interaction_l4
 
-# Option 2: Using the preset launcher (recommended for complex models)
-python scripts/run_preset.py --preset stf_interaction --epochs 30
+# Run the lightweight 2-layer version
+python scripts/run_preset.py --preset stf_interaction_l2
+
+# Run baselines
+python scripts/run_preset.py --preset he2rna_baseline
+```
+
+For a complete list of configurations, see the [Training Guide](docs/TRAINING_GUIDE.md).
+
+### Real-Time Monitoring
+
+Monitor training progress, loss curves, and **prediction variance (collapse detector)** via the web dashboard:
+
+```bash
+python scripts/monitor.py --run-dir runs/stf_interaction_l4
 ```
 
 ### Inference & Visualization
 
-Generate spatial maps comparing Ground Truth vs Predictions for specific samples:
+Generate spatial maps comparing Ground Truth vs Predictions:
 
 ```bash
-stf-predict --data-dir A:\hest_data --sample-id MEND29 --model-path checkpoints/best_model_he2rna.pth --model-type he2rna
+stf-predict --data-dir A:\hest_data --sample-id MEND29 --model-path checkpoints/best_model.pth --model-type interaction
 ```
 
 Visualization plots will be saved to the `./results` directory.
 
 ## Documentation
 
-For detailed information on the data and code implementation, see:
-
+- [Models](docs/MODELS.md): Detailed model architectures and scaling parameters.
 - [Data Structure](docs/DATA_STRUCTURE.md): Organization of HEST data on disk.
-- [Dataloader](docs/DATALOADER.md): Technical implementation of the PyTorch dataset and loaders.
-- [Gene Analysis](docs/GENE_ANALYSIS.md): Analysis of available genes and modeling strategies.
-- [Pathway Mapping](docs/PATHWAY_MAPPING.md): Strategies for clinical interpretability and pathway integration.
-- [Latent Discovery](docs/LATENT_DISCOVERY.md): Unsupervised discovery of biological pathways from data.
-- [Models](docs/MODELS.md): Model architectures and literature references.
+- [Pathway Mapping](docs/PATHWAY_MAPPING.md): Clinical interpretability and pathway integration.
+- [Gene Analysis](docs/GENE_ANALYSIS.md): Modeling strategies for high-dimensional gene space.
 
 ## Development
 
 ### Running Tests
 
-Use the included test wrapper:
-
 ```bash
-# Run all tests
+# Run all tests (Pytest wrapper)
 .\test.ps1
 ```
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on our coding standards and the process for submitting pull requests. Note that this project is under a proprietary license; contributions involve an assignment of rights for non-academic use.

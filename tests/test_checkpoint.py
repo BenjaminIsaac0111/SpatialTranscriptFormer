@@ -27,22 +27,7 @@ def small_model():
         num_pathways=10,
         token_dim=64,
         n_heads=4,
-        n_layers=1,
-        use_nystrom=False,
-    )
-
-
-@pytest.fixture
-def small_nystrom_model():
-    """A small SpatialTranscriptFormer with Nystrom attention."""
-    return SpatialTranscriptFormer(
-        num_genes=100,
-        num_pathways=10,
-        token_dim=64,
-        n_heads=4,
-        n_layers=1,
-        use_nystrom=True,
-        num_landmarks=32,
+        n_layers=2,
     )
 
 
@@ -85,8 +70,7 @@ class TestCheckpointRoundtrip:
             num_pathways=10,
             token_dim=64,
             n_heads=4,
-            n_layers=1,
-            use_nystrom=False,
+            n_layers=2,
         )
         fresh_optimizer = optim.Adam(fresh_model.parameters(), lr=1e-4)
 
@@ -125,8 +109,7 @@ class TestCheckpointRoundtrip:
             num_pathways=10,
             token_dim=64,
             n_heads=4,
-            n_layers=1,
-            use_nystrom=False,
+            n_layers=2,
         )
         fresh_optimizer = optim.Adam(fresh_model.parameters(), lr=1e-4)
         fresh_scaler = torch.amp.GradScaler("cuda")
@@ -151,75 +134,3 @@ class TestCheckpointRoundtrip:
         )
         assert start_epoch == 0
         assert best_val == float("inf")
-
-
-# ---------------------------------------------------------------------------
-# Architecture Mismatch
-# ---------------------------------------------------------------------------
-
-
-class TestArchitectureMismatch:
-    def test_nystrom_checkpoint_fails_on_standard(
-        self, small_nystrom_model, checkpoint_dir
-    ):
-        """Nystrom checkpoint should fail to load into standard model."""
-        optimizer = optim.Adam(small_nystrom_model.parameters(), lr=1e-4)
-        save_checkpoint(
-            small_nystrom_model,
-            optimizer,
-            None,
-            epoch=5,
-            best_val_loss=0.3,
-            output_dir=checkpoint_dir,
-            model_name="interaction",
-        )
-
-        # Try loading into non-Nystrom model
-        standard_model = SpatialTranscriptFormer(
-            num_genes=100,
-            num_pathways=10,
-            token_dim=64,
-            n_heads=4,
-            n_layers=1,
-            use_nystrom=False,
-        )
-        standard_optimizer = optim.Adam(standard_model.parameters(), lr=1e-4)
-
-        with pytest.raises(RuntimeError):
-            load_checkpoint(
-                standard_model,
-                standard_optimizer,
-                None,
-                checkpoint_dir,
-                "interaction",
-                "cpu",
-            )
-
-    def test_matching_architecture_loads(self, small_nystrom_model, checkpoint_dir):
-        """Nystrom checkpoint should load into matching Nystrom model."""
-        optimizer = optim.Adam(small_nystrom_model.parameters(), lr=1e-4)
-        save_checkpoint(
-            small_nystrom_model,
-            optimizer,
-            None,
-            epoch=5,
-            best_val_loss=0.3,
-            output_dir=checkpoint_dir,
-            model_name="interaction",
-        )
-
-        fresh = SpatialTranscriptFormer(
-            num_genes=100,
-            num_pathways=10,
-            token_dim=64,
-            n_heads=4,
-            n_layers=1,
-            use_nystrom=True,
-            num_landmarks=32,
-        )
-        fresh_opt = optim.Adam(fresh.parameters(), lr=1e-4)
-
-        start_epoch, _ = load_checkpoint(
-            fresh, fresh_opt, None, checkpoint_dir, "interaction", "cpu"
-        )
-        assert start_epoch == 6  # Resumed correctly

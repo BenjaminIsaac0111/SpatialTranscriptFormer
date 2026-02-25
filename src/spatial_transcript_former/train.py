@@ -19,6 +19,7 @@ from spatial_transcript_former.training.losses import (
     PCCLoss,
     CompositeLoss,
     MaskedMSELoss,
+    ZINBLoss,
 )
 from spatial_transcript_former.training.engine import train_one_epoch, validate
 from spatial_transcript_former.training.experiment_logger import ExperimentLogger
@@ -88,18 +89,14 @@ def setup_model(args, device):
             num_genes=args.num_genes,
             backbone_name=args.backbone,
             pretrained=args.pretrained,
-            use_nystrom=args.use_nystrom,
-            mask_radius=args.mask_radius,
-            masked_quadrants=args.masked_quadrants,
+            token_dim=args.token_dim,
+            n_heads=args.n_heads,
+            n_layers=args.n_layers,
             num_pathways=args.num_pathways,
             pathway_init=pathway_init,
             use_spatial_pe=args.use_spatial_pe,
-            early_mixer=(
-                None if args.early_mixer.lower() == "none" else args.early_mixer
-            ),
-            late_refiner=(
-                None if args.late_refiner.lower() == "none" else args.late_refiner
-            ),
+            output_mode="zinb" if args.loss == "zinb" else "counts",
+            interactions=getattr(args, "interactions", None),
         )
     elif args.model == "attention_mil":
         from spatial_transcript_former.models.mil import AttentionMIL
@@ -133,19 +130,34 @@ def setup_model(args, device):
     return model
 
 
-def setup_criterion(args):
-    """Create loss function from CLI args."""
+def setup_criterion(args, pathway_init=None):
+    """Create loss function from CLI args.
+
+    If ``pathway_init`` is provided and ``--pathway-loss-weight > 0``,
+    wraps the base criterion with :class:`AuxiliaryPathwayLoss`.
+    """
     if args.loss == "pcc":
-        return PCCLoss()
+        base = PCCLoss()
     elif args.loss == "mse_pcc":
-        return CompositeLoss(alpha=args.pcc_weight)
+        base = CompositeLoss(alpha=args.pcc_weight)
+    elif args.loss == "zinb":
+        base = ZINBLoss()
     elif args.loss == "poisson":
-        return nn.PoissonNLLLoss(log_input=True)
+        base = nn.PoissonNLLLoss(log_input=True)
     elif args.loss == "logcosh":
         print("Using HuberLoss as proxy for LogCosh")
-        return nn.HuberLoss()
+        base = nn.HuberLoss()
     else:
-        return MaskedMSELoss()
+        base = MaskedMSELoss()
+
+    pw_weight = getattr(args, "pathway_loss_weight", 0.0)
+    if pathway_init is not None and pw_weight > 0:
+        from spatial_transcript_former.training.losses import AuxiliaryPathwayLoss
+
+        print(f"Wrapping criterion with AuxiliaryPathwayLoss (lambda={pw_weight})")
+        return AuxiliaryPathwayLoss(pathway_init, base, lambda_pathway=pw_weight)
+
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -248,13 +260,19 @@ def parse_args():
         "--loss",
         type=str,
         default="mse",
-        choices=["mse", "pcc", "mse_pcc", "poisson", "logcosh"],
+        choices=["mse", "pcc", "mse_pcc", "zinb", "poisson", "logcosh"],
     )
     parser.add_argument(
         "--pcc-weight",
         type=float,
         default=1.0,
         help="Weight for PCC term in mse_pcc loss",
+    )
+    parser.add_argument(
+        "--pathway-loss-weight",
+        type=float,
+        default=0.0,
+        help="Weight for auxiliary pathway PCC loss (0 = disabled)",
     )
 
     # Model
@@ -269,26 +287,21 @@ def parse_args():
     g.add_argument("--no-pretrained", action="store_false", dest="pretrained")
     g.set_defaults(pretrained=True)
     g.add_argument("--num-pathways", type=int, default=50)
-    g.add_argument("--use-nystrom", action="store_true")
-    g.add_argument("--mask-radius", type=float, default=None)
+    g.add_argument("--token-dim", type=int, default=256)
+    g.add_argument("--n-heads", type=int, default=4)
+    g.add_argument("--n-layers", type=int, default=2)
     g.add_argument(
         "--no-spatial-pe",
         action="store_false",
         dest="use_spatial_pe",
-        help="Disable Spatial Positional Encoding",
+        help="Disable spatial positional encoding",
     )
-    g.set_defaults(use_spatial_pe=True)
+    g.set_defaults(use_spatial_pe=False)
     g.add_argument(
-        "--early-mixer",
-        type=str,
-        default="conv",
-        help="Early spatial mixer ('conv' or 'none')",
-    )
-    g.add_argument(
-        "--late-refiner",
-        type=str,
-        default="none",
-        help="Late spatial refiner ('gnn' or 'none')",
+        "--interactions",
+        nargs="+",
+        default=None,
+        help="Attention interactions to enable: p2p, p2h, h2p, h2h (default: all)",
     )
 
     # Training
@@ -302,6 +315,7 @@ def parse_args():
         "--lr", type=float, default=get_config("training.learning_rate", 1e-4)
     )
     g.add_argument("--weight-decay", type=float, default=0.0)
+    g.add_argument("--warmup-epochs", type=int, default=10)
     g.add_argument("--sparsity-lambda", type=float, default=0.0)
     g.add_argument("--augment", action="store_true")
     g.add_argument("--use-amp", action="store_true")
@@ -319,7 +333,6 @@ def parse_args():
     g.add_argument("--use-global-context", action="store_true")
     g.add_argument("--global-context-size", type=int, default=128)
     g.add_argument("--compile-backend", type=str, default="inductor")
-    g.add_argument("--masked-quadrants", type=str, nargs="+", default=["H2H"])
     g.add_argument("--plot-pathways", action="store_true")
     g.add_argument(
         "--weak-supervision", action="store_true", help="Bag-level training for MIL"
@@ -373,12 +386,29 @@ def main():
 
     # 2. Model, Loss, Optimizer
     model = setup_model(args, device)
-    criterion = setup_criterion(args)
+    # Pass pathway_init to criterion so AuxiliaryPathwayLoss can use it
+    pathway_init = getattr(model, "_pathway_init_matrix", None)
+    criterion = setup_criterion(args, pathway_init=pathway_init).to(device)
     optimizer = optim.Adam(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )
+
+    # LR scheduler: cosine annealing with optional linear warmup
+    warmup_epochs = args.warmup_epochs
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs - warmup_epochs, eta_min=1e-6
+    )
+
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return epoch / max(warmup_epochs, 1)
+        return 1.0  # cosine scheduler handles the rest
+
+    warmup_scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
     scaler = torch.amp.GradScaler("cuda") if args.use_amp else None
     print(f"Loss: {criterion.__class__.__name__}")
+    print(f"LR schedule: {warmup_epochs}-epoch warmup → cosine annealing to 1e-6")
 
     # 3. Output & Logger
     os.makedirs(args.output_dir, exist_ok=True)
@@ -418,14 +448,28 @@ def main():
         )
         val_loss = val_metrics["val_loss"]
 
-        print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        print(
+            f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.2e}"
+        )
+
+        # Step LR scheduler
+        if epoch < warmup_epochs:
+            warmup_scheduler.step()
+        else:
+            cosine_scheduler.step()
 
         # Log epoch
-        epoch_row = {"train_loss": train_loss, "val_loss": val_loss}
+        epoch_row = {
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "lr": optimizer.param_groups[0]["lr"],
+        }
         if val_metrics.get("val_mae") is not None:
             epoch_row["val_mae"] = round(val_metrics["val_mae"], 4)
         if val_metrics.get("val_pcc") is not None:
             epoch_row["val_pcc"] = round(val_metrics["val_pcc"], 4)
+        if val_metrics.get("pred_variance") is not None:
+            epoch_row["pred_variance"] = round(val_metrics["pred_variance"], 6)
         if val_metrics.get("attn_correlation") is not None:
             epoch_row["attn_correlation"] = round(val_metrics["attn_correlation"], 4)
         logger.log_epoch(epoch + 1, epoch_row)

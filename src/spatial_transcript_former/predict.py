@@ -253,17 +253,18 @@ def plot_training_summary(
         if len(label) > 30:
             label = label[:27] + "..."
 
-        truth_raw = pathway_truth[:, pw_idx]
-        pred_raw = pathway_pred[:, pw_idx]
+        truth_vals = pathway_truth[:, pw_idx]
+        pred_vals = pathway_pred[:, pw_idx]
 
-        # Use absolute bounds instead of per-plot z-scored normalized bounds
-        vmin = min(truth_raw.min(), pred_raw.min())
-        vmax = max(truth_raw.max(), pred_raw.max())
+        # Both truth and pred are now in the same units (mean log1p expression
+        # of pathway member genes), so shared bounds give a fair comparison
+        vmin = min(truth_vals.min(), pred_vals.min())
+        vmax = max(truth_vals.max(), pred_vals.max())
 
         sc = None
         for col, vals, suffix in [
-            (col_gt, truth_raw, "Truth"),
-            (col_pred, pred_raw, "Pred"),
+            (col_gt, truth_vals, "Truth"),
+            (col_pred, pred_vals, "Pred"),
         ]:
             ax = fig.add_subplot(inner[row, col])
             ax.set_facecolor("#0d0d1a")
@@ -331,11 +332,9 @@ def main():
     parser.add_argument(
         "--n-neighbors", type=int, default=0, help="Number of spatial neighbors to use"
     )
-    parser.add_argument(
-        "--use-nystrom",
-        action="store_true",
-        help="Use Nystrom attention for linear complexity",
-    )
+    parser.add_argument("--token-dim", type=int, default=256)
+    parser.add_argument("--n-heads", type=int, default=4)
+    parser.add_argument("--n-layers", type=int, default=2)
     parser.add_argument(
         "--num-pathways",
         type=int,
@@ -350,6 +349,13 @@ def main():
     )
     parser.add_argument(
         "--plot-pathways", action="store_true", help="Visualize pathway activations"
+    )
+    parser.add_argument(
+        "--loss",
+        type=str,
+        default="mse",
+        choices=["mse", "pcc", "mse_pcc", "zinb", "poisson", "logcosh"],
+        help="Loss function used for training (needed for model reconstruction)",
     )
 
     args = parser.parse_args()
@@ -372,9 +378,12 @@ def main():
     elif args.model_type == "interaction":
         model = SpatialTranscriptFormer(
             num_genes=args.num_genes,
-            use_nystrom=args.use_nystrom,
+            token_dim=args.token_dim,
+            n_heads=args.n_heads,
+            n_layers=args.n_layers,
             num_pathways=args.num_pathways,
             backbone_name=args.backbone,
+            output_mode="zinb" if args.loss == "zinb" else "counts",
         )
 
     state_dict = torch.load(args.model_path, map_location=device, weights_only=True)
@@ -460,7 +469,7 @@ def main():
                 output = model(
                     images, rel_coords=rel_coords, return_pathways=args.plot_pathways
                 )
-                if isinstance(output, tuple):
+                if isinstance(output, tuple) and args.plot_pathways:
                     preds = output[0]
                     pathways = output[1]
                     all_pathways.append(pathways.cpu().numpy())
@@ -468,6 +477,10 @@ def main():
                     preds = output
             else:
                 preds = model(images)
+
+            # Unpack ZINB tuple if generated
+            if isinstance(preds, tuple):
+                preds = preds[1]  # Use mean component
 
             all_preds.append(preds.cpu().numpy())
             all_truth.append(targets.numpy())

@@ -38,9 +38,10 @@ def test_interaction_model_backbone():
         num_genes=num_genes, backbone_name="resnet50", pretrained=False
     )
 
-    # Test with raw image input
+    # Test with raw image input (single patch => S=1)
     x = torch.randn(4, 3, 224, 224)
-    out = model(x)
+    rel_coords = torch.randn(4, 1, 2)
+    out = model(x, rel_coords=rel_coords)
     assert out.shape == (4, num_genes)
 
 
