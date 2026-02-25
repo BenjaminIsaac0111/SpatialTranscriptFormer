@@ -44,3 +44,13 @@ stf-build-vocab = "spatial_transcript_former.data.build_vocab:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["spatial_transcript_former*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore:FigureCanvasAgg is non-interactive:UserWarning",
+    "ignore:os.fork:RuntimeWarning",
+    "ignore:torch.utils._pytree._register_pytree_node is deprecated:UserWarning",
+]
