@@ -466,7 +466,7 @@ def load_global_genes(root_dir: str, num_genes: int = 1000) -> List[str]:
 def get_hest_dataloader(
     root_dir: str,
     ids: List[str],
-    batch_size: int = 31,
+    batch_size: int = 32,
     shuffle: bool = True,
     num_workers: int = 0,
     transform=None,
