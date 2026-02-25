@@ -152,7 +152,10 @@ class SpatialTranscriptFormer(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-        self.fusion_engine = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+
+        self.fusion_engine = nn.TransformerEncoder(
+            encoder_layer, num_layers=n_layers, enable_nested_tensor=False
+        )
 
         # Learnable temperature for cosine similarity scoring
         # Initialized to log(1/0.07) ≈ 2.66 following CLIP convention
