@@ -134,6 +134,20 @@ class TestPCC:
         loss.backward()
         assert preds.grad is not None
 
+    def test_pcc_fallback_n1(self):
+        """Verify the N=1 fallback (batch-wise correlation) is robust."""
+        # preds/target: (B, 1, G). With B=2, N=1
+        preds = torch.tensor([[[1.0, 2.0]], [[2.0, 3.0]]])
+        target = torch.tensor([[[1.0, 2.0]], [[2.0, 3.0]]])
+
+        # Perfect correlation => loss 0
+        loss = PCCLoss()(preds, target)
+        assert loss.item() == pytest.approx(0.0, abs=1e-5)
+
+        # Anti-correlation => loss 2
+        loss_anti = PCCLoss()(preds, -target)
+        assert loss_anti.item() == pytest.approx(2.0, abs=1e-5)
+
 
 # ---------------------------------------------------------------------------
 # CompositeLoss
@@ -159,6 +173,17 @@ class TestCompositeLoss:
         mse_val = MaskedMSELoss()(preds, target)
         comp_val = CompositeLoss(alpha=0.0)(preds, target)
         assert torch.allclose(mse_val, comp_val, atol=1e-6)
+
+    def test_default_alpha(self, tensors_2d):
+        """Ensure the default alpha is 1.0."""
+        preds, target = tensors_2d
+        loss_default = CompositeLoss()(preds, target)
+        loss_explicit = CompositeLoss(alpha=1.0)(preds, target)
+        assert torch.allclose(loss_default, loss_explicit)
+
+        # Ensure it's NOT 0.0
+        loss_mse = MaskedMSELoss()(preds, target)
+        assert not torch.allclose(loss_default, loss_mse)
 
     def test_mask_support(self, tensors_3d):
         """CompositeLoss should handle masks in 3D mode."""
@@ -186,6 +211,21 @@ class TestCompositeLoss:
         loss_high = CompositeLoss(alpha=10.0)(preds, target)
         # They should differ since PCC != 0
         assert loss_low.item() != pytest.approx(loss_high.item(), abs=0.01)
+
+
+class TestMaskedHuber:
+    def test_3d_mask_impact(self, tensors_3d):
+        """Verify that padding mask works correctly for Huber 3D."""
+        from spatial_transcript_former.training.losses import MaskedHuberLoss
+
+        preds, target, mask = tensors_3d
+
+        loss_fn = MaskedHuberLoss()
+        loss_masked = loss_fn(preds, target, mask=mask)
+        loss_unmasked = loss_fn(preds, target)
+
+        assert not torch.allclose(loss_masked, loss_unmasked)
+        assert loss_masked.isfinite()
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +307,42 @@ class TestZINBLoss:
         # Gradients in padded regions should be zero
         padded_grad = pi.grad[0, 5:, :]
         assert padded_grad.abs().sum() == 0.0
+
+    def test_zinb_zero_vs_nonzero(self):
+        """Verify that ZINB treats 0 and non-zero targets differently (branch coverage)."""
+        from spatial_transcript_former.training.losses import ZINBLoss
+
+        loss_fn = ZINBLoss()
+
+        # B=1, G=2. G0=0 (zero-inflation branch), G1=10 (NB branch)
+        target = torch.tensor([[0.0, 10.0]])
+        # Fix params for predictable results: pi=0.5, mu=1.0, theta=1.0
+        pi = torch.tensor([[0.5, 0.5]])
+        mu = torch.tensor([[1.0, 1.0]])
+        theta = torch.tensor([[1.0, 1.0]])
+
+        # If we change target[0, 1] from 10 to 0, the loss should change significantly
+        loss1 = loss_fn((pi, mu, theta), target)
+        target2 = torch.tensor([[0.0, 0.0]])
+        loss2 = loss_fn((pi, mu, theta), target2)
+        assert not torch.allclose(loss1, loss2)
+
+    def test_zinb_extreme_stability(self):
+        """Verify stability with very large or small parameters (clamping logic)."""
+        from spatial_transcript_former.training.losses import ZINBLoss
+
+        loss_fn = ZINBLoss()
+        target = torch.tensor([[0.0, 10.0]])
+
+        # mu and theta at extremes
+        pi = torch.tensor([[0.1, 0.1]])
+        mu = torch.tensor([[1e-12, 1e12]])
+        theta = torch.tensor([[1e12, 1e-12]])
+
+        loss = loss_fn((pi, mu, theta), target)
+        print(f"DEBUG: ZINB extreme loss value: {loss}")
+        assert torch.isfinite(loss).item(), f"Loss is not finite: {loss}"
+        assert not torch.isnan(loss).item(), f"Loss is NaN: {loss}"
 
 
 # ---------------------------------------------------------------------------
@@ -414,6 +490,26 @@ class TestAuxiliaryPathwayLoss:
 
         # term2 should be approx 2 * term1
         assert term2.item() == pytest.approx(2 * term1.item(), rel=1e-4)
+
+    def test_auxiliary_lambda_sensitivity(self, pathway_tensors):
+        """Verify that changing lambda actually scales the pathway component."""
+        gene_preds, targets, pw_preds, pw_matrix, mask = pathway_tensors
+        base = MaskedMSELoss()
+
+        aux_low = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=0.1)
+        aux_high = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=10.0)
+
+        loss_low = aux_low(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+        loss_high = aux_high(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+
+        # high lambda should force a different loss value
+        assert not torch.allclose(loss_low, loss_high)
+
+        # Verify that lambda=0 exactly matches gene loss
+        aux_zero = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=0.0)
+        loss_zero = aux_zero(gene_preds, targets, mask=mask, pathway_preds=pw_preds)
+        gene_only = base(gene_preds, targets, mask=mask)
+        assert torch.allclose(loss_zero, gene_only)
 
     def test_hallmark_integration(self):
         """Test with a real (though small) MSigDB Hallmark matrix."""
