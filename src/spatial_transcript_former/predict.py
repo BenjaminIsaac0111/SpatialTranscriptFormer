@@ -120,8 +120,8 @@ def plot_histology_overlay(
     plt.close("all")
 
 
-# Fixed bowel-cancer-relevant pathways (MSigDB Hallmark names, without prefix)
-BOWEL_CANCER_PATHWAYS = [
+# Fixed representative pathways for visualization (MSigDB Hallmark names)
+CORE_PATHWAYS = [
     "EPITHELIAL_MESENCHYMAL_TRANSITION",
     "WNT_BETA_CATENIN_SIGNALING",
     "INFLAMMATORY_RESPONSE",
@@ -176,7 +176,7 @@ def plot_training_summary(
                 if short in name_to_idx:
                     display_pathways.append((short, name_to_idx[short]))
         else:
-            for pw in BOWEL_CANCER_PATHWAYS:
+            for pw in CORE_PATHWAYS:
                 if pw in name_to_idx:
                     display_pathways.append((pw, name_to_idx[pw]))
 
@@ -394,9 +394,6 @@ def main():
             new_state_dict[k[len("_orig_mod.") :]] = v
         else:
             new_state_dict[k] = v
-    # Handle legacy checkpoints missing keys? No, usually extra keys are issue or missing
-    # But if we added components (pathways?) no they are same architecture just different forward.
-
     model.load_state_dict(new_state_dict)
     model.to(device)
     model.eval()

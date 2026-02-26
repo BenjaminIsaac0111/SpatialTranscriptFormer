@@ -14,7 +14,6 @@ from typing import Dict, List, Optional
 # MSigDB collections URLs (v2024.1.Hs, gene symbols)
 MSIGDB_URLS = {
     "hallmarks": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/h.all.v2024.1.Hs.symbols.gmt",
-    "c2_kegg": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_legacy.v2024.1.Hs.symbols.gmt",
     "c2_medicus": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_medicus.v2024.1.Hs.symbols.gmt",
     "c2_cgp": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cgp.v2024.1.Hs.symbols.gmt",
 }
@@ -110,7 +109,7 @@ def get_pathway_init(
         tuple: (membership_matrix [Tensor (P, G)], pathway_names [list of str])
     """
     if gmt_urls is None:
-        gmt_urls = [MSIGDB_URLS["hallmarks"], MSIGDB_URLS["c2_kegg"]]
+        gmt_urls = [MSIGDB_URLS["hallmarks"]]
 
     combined_dict = {}
 

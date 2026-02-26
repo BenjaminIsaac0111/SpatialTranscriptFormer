@@ -14,7 +14,7 @@ conda activate SpatialTranscriptFormer
 
 ## 1. Single Patch Regression (Baselines)
 
-Predicts gene expression for a single 224x224 patch.
+Predicts gene expression for a single 224x224 patch. No cross attention interactions between patches or pathways.
 
 ### HE2RNA (ResNet50)
 
@@ -126,6 +126,27 @@ python -m spatial_transcript_former.train \
 
 > **Note**: `--pathway-init` overrides `--num-pathways` to 50 (the number of Hallmark gene sets). The GMT file is cached in `.cache/` after first download.
 
+### Data-Driven Discovery (Latent Pathways)
+
+To allow the model to discover its own spatial-transcriptomic relationships without biological priors, omit `--pathway-init` and apply sparsity regularization (`--sparsity-lambda`). This aims to force the model to identify "canonical" sparse gene sets.
+
+```bash
+python -m spatial_transcript_former.train \
+    --data-dir A:\hest_data \
+    --model interaction \
+    --backbone ctranspath \
+    --use-nystrom \
+    --num-pathways 50 \
+    --sparsity-lambda 0.01 \
+    --precomputed \
+    --whole-slide \
+    --use-amp \
+    --log-transform \
+    --epochs 100
+```
+
+> **Note**: Without `--pathway-init`, the model disables the `AuxiliaryPathwayLoss` and relies entirely on the main reconstruction objectives and the L1 sparsity penalty. (I am yet to obtain results with this method)...
+
 ### Robust Counting: ZINB + Auxiliary Loss
 
 For raw count data with high sparsity, using the ZINB distribution and auxiliary pathway supervision is recommended.
@@ -222,6 +243,7 @@ python -m spatial_transcript_former.train --resume --output-dir runs/my_experime
 | `--feature-dir` | Explicit path to precomputed features directory. | Overrides auto-detection. |
 | `--loss` | Loss function: `mse`, `pcc`, `mse_pcc`, `zinb`. | `mse_pcc` or `zinb` recommended. |
 | `--pathway-loss-weight` | Weight ($\lambda$) for auxiliary pathway supervision. | Set `0.5` or `1.0` with `interaction` model. |
+| `--sparsity-lambda` | L1 regularization weight for discovering latent pathways. | Use `0.01` when `--pathway-init` is NOT used. |
 | `--interactions` | Enabled attention quadrants: `p2p`, `p2h`, `h2p`, `h2h`. | Default: `all` (Full Interaction). |
 | `--log-transform` | Apply log1p to gene expression targets. | Recommended for raw count data. |
 | `--num-genes` | Number of HVGs to predict (default: 1000). | Match your `global_genes.json`. |

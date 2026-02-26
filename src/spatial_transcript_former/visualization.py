@@ -70,12 +70,14 @@ def _compute_pathway_truth(gene_truth, gene_names, args=None):
         filter_names = None
         urls = None
         if args is not None and getattr(args, "pathway_init", False):
-            urls = [
-                MSIGDB_URLS["hallmarks"],
-                MSIGDB_URLS["c2_kegg"],
-                MSIGDB_URLS["c2_medicus"],
-                MSIGDB_URLS["c2_cgp"],
-            ]
+            if getattr(args, "custom_gmt", None):
+                urls = args.custom_gmt
+            else:
+                urls = [
+                    MSIGDB_URLS["hallmarks"],
+                    MSIGDB_URLS["c2_medicus"],
+                    MSIGDB_URLS["c2_cgp"],
+                ]
             filter_names = getattr(args, "pathways", None)
 
         pw_matrix, pw_names = get_pathway_init(
@@ -120,7 +122,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
     """
     Run inference on a single sample and save a unified pathway visualization.
 
-    Produces a single figure per epoch showing histology + fixed bowel-cancer
+    Produces a single figure per epoch showing histology + core
     pathways (ground truth vs prediction), where ground truth is computed by
     projecting true gene expression through the model's gene_reconstructor
     via pseudo-inverse so both live in the same activation space.

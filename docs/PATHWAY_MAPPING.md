@@ -21,49 +21,55 @@ After the model makes predictions (N spots x G genes), we run a statistical test
 - **Tool**: `gseapy` or a custom mapping script.
 - **Use Case**: Generating a "Pathway Activation Map" from a trained model's output.
 
-### B. Pathway Bottleneck (Model Architecture)
+### B. Interaction Model via Multi-Task Learning (MTL)
 
-The **SpatialTranscriptFormer** replaces the standard linear output head with a two-step projection that can be configured in two modes:
+The **SpatialTranscriptFormer** interaction model inherently represents pathway activations as part of its attention mechanism and output process. Rather than a simple linear bottleneck, it utilizes learnable pathway tokens and Multi-Task Learning (MTL).
 
-#### 1. Informed Projection (Prior Knowledge)
+#### 1. Informed Supervision via Auxiliary Loss
 
-In this mode, the **Gene Reconstruction Matrix** $\mathbf{W}_{recon}$ is guided by established biological databases (MSigDB, KEGG).
-
-- **Implementation**: $\mathbf{W}_{recon}$ is initialized as a binary mask $M \in \{0, 1\}^{G \times P}$ where $M_{gk} = 1$ if gene $g$ belongs to pathway $k$.
-- **Benefit**: Predictions are guaranteed to be linear combinations of known biological processes, making them instantly interpretable by clinicians.
-
-#### 2. Data-Driven Projection (Latent Discovery)
-
-In this mode, the model learns its own "latent pathways" based on morphological patterns.
-
-- **Implementation**: $\mathbf{W}_{recon}$ is randomly initialized and learned via backpropagation.
-- **Sparsity Constraint**: We apply an L1 penalty to force the model to identify "canonical" gene sets: $L_{total} = L_{MSE} + \lambda \|\mathbf{W}_{recon}\|_1$.
-- **Benefit**: Can discover novel spatial-transcriptomic relationships that aren't yet captured in curated databases.
+In this mode, the network receives direct supervision on its pathway tokens, guided by established biological databases (e.g., MSigDB):
 
 - **Architecture Flow**:
-    1. **Interaction**: Pathway tokens $P$ query the Histology $H$.
-    2. **Activation**: A linear layer reduces $P_{tokens}$ to activation scores $S \in \mathbb{R}^P$.
-    3. **Reconstruction**: $\hat{y} = S \cdot \mathbf{W}_{recon} + b$.
+    1. **Interaction**: Learnable pathway tokens $P$ interact with Histology patch features $H$ via self-attention (e.g., $p2h$, $h2p$).
+    2. **Activation**: Pathway scores $S \in \mathbb{R}^P$ are computed using a learnable temperature-scaled cosine similarity between the pathway tokens and image patch tokens.
+    3. **Gene Reconstruction**: $\hat{y} = S \cdot \mathbf{W}_{recon} + b$, where $\mathbf{W}_{recon}$ is initialized using the binary pathway membership matrix $M$.
+- **MTL Auxiliary Loss**: To prevent standard bottleneck collapse, an explicit auxiliary loss bridges the spatial representations directly to biological data. The pathway scores $S$ are supervised against a pathway ground truth ($Y_{genes} \cdot M^T$) using a Pearson Correlation Coefficient (PCC) loss.
+  $$L_{total} = L_{gene} + \lambda_{pathway} (1 - PCC(S, Y_{genes} \cdot M^T))$$
+- **Benefit**: The model is forced to explicitly align its internal interaction tokens with concrete biological pathways, granting direct interpretability.
 
-## 3. Clinical Application in Bowel Cancer
+#### 2. Data-Driven Discovery (Latent Projection)
 
-For colorectal cancer, we should prioritize monitoring these specific pathways:
+In the absence of a biological prior, the model can learn its own "latent pathways".
 
-| Pathway | Clinically Relevant Genes | Clinical Significance |
+- **Implementation**: $\mathbf{W}_{recon}$ is randomly initialized and the auxiliary pathway loss is disabled.
+- **Sparsity Constraint**: We apply an L1 penalty to force the model to identify "canonical" sparse gene sets: $L_{total} = L_{gene} + \lambda_{sparsity} \|\mathbf{W}_{recon}\|_1$.
+- **Benefit**: Can discover novel spatial-transcriptomic relationships that aren't yet captured in curated databases.
+
+## 3. Generalizing to HEST1k Tissues
+
+The model supports any dataset within the HEST1k collection (e.g., Breast, Kidney, Lung, Colon). Instead of being bound to a single disease context, users can leverage the `--custom-gmt` flag to map genes to pathways relevant to their specific investigation.
+
+### Example: Profiling the Tumor Microenvironment
+
+Regardless of the tissue of origin (e.g., Kidney versus Breast), researchers often track core functional states within the tumor microenvironment. A user might define a `.gmt` file to explicitly monitor:
+
+| Pathway Concept | Hallmarks / Relevant Genes | Interpretive Value across Tissues |
 | :--- | :--- | :--- |
-| **Wnt Signaling** | `CTNNB1`, `MYC`, `AXIN2` | Common driver in CRC (APC mutations) |
-| **MMR / DNA Repair** | `MLH1`, `MSH2`, `MSH6` | MSI vs MSS status (Immunotherapy response) |
-| **EMT** | `SNAI1`, `VIM`, `ZEB1` | Tumor invasion and metastasis risk |
-| **Angiogenesis** | `VEGFA`, `FLT1` | Potential for anti-angiogenic therapy |
+| **Hypoxia & Angiogenesis** | `VEGFA`, `FLT1`, `HIF1A` | Identifies oxygen-deprived or highly vascularized tumor cores. |
+| **Immune Infiltration** | `CD8A`, `GZMB`, `IFNG` | Maps regions of active anti-tumor immune response. |
+| **Stromal / EMT** | `VIM`, `SNAI1`, `ZEB1` | Highlights desmoplastic stroma and invasion fronts. |
+| **Proliferation** | `MKI67`, `PCNA`, `MYC` | Pinpoints highly active, dividing cell populations. |
+
+By supplying these functional groupings via `--custom-gmt`, the model's MTL process explicitly aligns its spatial interaction tokens to monitor these exact states across any whole-slide image in the HEST1k dataset.
 
 ## 4. Implementation Status
 
 ### Implemented
 
 - **MSigDB Hallmarks Initialization** (`--pathway-init` flag): Downloads the GMT file, matches genes against `global_genes.json`, and initializes `gene_reconstructor.weight` with the binary membership matrix. See [`pathways.py`](../src/spatial_transcript_former/data/pathways.py).
-  - 50 Hallmark pathways (fixed when using `--pathway-init`)
-  - ~54% gene coverage (542/1000 genes mapped to at least one pathway)
-  - GMT file cached in `.cache/` after first download
+  - 50 Hallmark pathways (default fixed fallback when using `--pathway-init`).
+  - GMT file cached in `.cache/` after first download.
+- **Custom Pathway Definitions** (`--custom-gmt` flag): Users can override the default Hallmarks by providing a URL or local path to a `.gmt` file, enabling custom database integrations (e.g., KEGG, Reactome, or highly specific tissue masks).
 
 - **Sparsity Regularization** (`--sparsity-lambda` flag): L1 penalty on `gene_reconstructor` weights to encourage pathway-like groupings when using data-driven (random) initialization.
 
@@ -79,8 +85,9 @@ python -m spatial_transcript_former.train \
     --model interaction --num-pathways 50 --sparsity-lambda 0.01 ...
 ```
 
+- **Spatial Pathway Maps**: Visualize pathway activations as spatial heatmaps overlaid on histology using `stf-predict`. See the [README](../README.md) for inference instructions.
+
 ### Future Work
 
-- **KEGG/Reactome**: More granular pathway databases for finer-grained analysis.
-- **Post-Hoc Enrichment**: `gseapy` integration for pathway activation maps from model outputs.
-- **Spatial Pathway Maps**: Visualize pathway activations as spatial heatmaps overlaid on histology.
+- **Post-Hoc Enrichment**: `gseapy` integration for pathway activation maps from model outputs without architectural bottlenecks.
+- **End-to-End Risk Assessment Module**: Developing a downstream prediction system that takes the spatially-resolved pathway activations and gene expressions derived from the model and maps them directly to clinical risk and survival outcomes.

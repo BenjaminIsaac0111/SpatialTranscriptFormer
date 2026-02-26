@@ -113,8 +113,8 @@ class TestMembershipMatrix:
         _, names = pathway_result
         assert len(names) == 50
 
-    def test_bowel_cancer_pathways_exist(self, pathway_result):
-        """All 6 disease-relevant pathways should be in the names list."""
+    def test_core_pathways_exist(self, pathway_result):
+        """All 6 representative pathways should be in the names list."""
         _, names = pathway_result
         short_names = [n.replace("HALLMARK_", "") for n in names]
         required = [
@@ -149,15 +149,15 @@ class TestPathwayTruth:
         assert names1 == names2
 
     def test_output_shape(self, gene_list):
-        """Pathway truth should be (N, P) where P=236 (Hallmarks + C2 KEGG)."""
+        """Pathway truth should be (N, P) where P=50 (Hallmarks default)."""
         from spatial_transcript_former.visualization import _compute_pathway_truth
 
         N = 150
         gene_truth = np.random.rand(N, len(gene_list)).astype(np.float32)
         result, names = _compute_pathway_truth(gene_truth, gene_list)
 
-        assert result.shape == (N, 236)
-        assert len(names) == 236
+        assert result.shape == (N, 50)
+        assert len(names) == 50
 
     def test_spatial_variation(self, gene_list):
         """Pathway truth should have spatial variation (non-zero std)."""

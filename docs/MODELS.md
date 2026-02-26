@@ -122,7 +122,7 @@ Together, these ensure the model learns *spatially-varying* pathway activation m
 
 #### Frozen Backbone (Feature Extraction)
 
-Pre-computed features from a pathology foundation model. The backbone is never fine-tuned.
+Pre-computed features from a pathology foundation model. (The backbone is never fine-tuned, though this might change!)
 
 | Backbone | Feature Dim | Source |
 | :--- | :--- | :--- |
@@ -214,7 +214,7 @@ The Zero-Inflated Negative Binomial (ZINB) loss is designed for raw, highly disp
 
 The model outputs these parameters, and the loss computes the negative log-likelihood of the ground truth counts given this distribution.
 
-### Auxiliary Pathway Loss
+### Proposed Auxiliary Pathway Loss
 
 To prevent bottleneck collapse and provide a direct gradient signal to the pathway tokens, we use the `AuxiliaryPathwayLoss`. This loss compares the model's internal pathway scores against "ground truth" pathway activations computed from the gene expression targets via MSigDB membership.
 

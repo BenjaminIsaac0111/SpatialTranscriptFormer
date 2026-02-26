@@ -36,40 +36,23 @@ This project requires [Conda](https://docs.conda.io/en/latest/).
 
 ## Usage
 
-**Before running any commands**, you must activate the conda environment:
+### Dataset Access
+
+The model uses the **HEST1k** dataset. You can download specific subsets (by organ, technology, etc.) or the entire dataset using the `stf-download` utility:
 
 ```bash
-conda activate SpatialTranscriptFormer
+# List available filtering options
+stf-download --list-options
+
+# Download a specific subset (e.g., Breast Cancer samples from Visium)
+stf-download --organ Breast --disease Cancer --tech Visium --local_dir hest_data
+
+# Download all human samples
+stf-download --species "Homo sapiens" --local_dir hest_data
 ```
 
-### Download HEST Data
-
-> [!CAUTION]
-> **Authentication Required**: The HEST dataset is gated. You must accept the terms of use at [MahmoodLab/hest](https://huggingface.co/datasets/MahmoodLab/hest) and authenticate with your Hugging Face account to download the data.
-
-Please provide your token using ONE of the following methods before running the download tool:
-
-1. **Persistent Login**: Run `huggingface-cli login` and paste your access token when prompted.
-2. **Environment Variable**: Set the `HF_TOKEN` environment variable in your active terminal session.
-
-Once authenticated, download specific subsets using filters or the entire dataset:
-
-```bash
-# Option 1: Download the ENTIRE HEST dataset (requires confirmation)
-stf-download --local_dir hest_data
-
-# Option 2: Download a specific subset (e.g., Bowel Cancer)
-stf-download --organ Bowel --disease Cancer --local_dir hest_data
-
-# Option 3: Filter by technology (e.g., Visium)
-stf-download --tech Visium --local_dir hest_data
-```
-
-To see all available organs in the metadata:
-
-```bash
-stf-download --list_organs
-```
+> [!NOTE]
+> The HEST dataset is gated on Hugging Face. Ensure you have accepted the terms at [MahmoodLab/hest](https://huggingface.co/datasets/MahmoodLab/hest) and are logged in via `huggingface-cli login`.
 
 ### Train Models
 
@@ -121,6 +104,13 @@ Visualization plots will be saved to the `./results` directory.
 # Run all tests (Pytest wrapper)
 .\test.ps1
 ```
+
+## Future Directions & Clinical Collaborations
+
+A major future direction for **SpatialTranscriptFormer** is to integrate this architecture into an **end-to-end pipeline for patient risk assessment** and prognosis tracking. By leveraging the model's predicted expression and pathway activations, we aim to build a downstream risk prediction module that allows users to directly evaluate how spatially-resolved expression relates to patient survival.
+
+> [!NOTE]
+> **Call for Collaborators:** Rigorous risk assessment models require vast datasets of clinical metadata and survival outcomes, which we currently lack access to. We are open to investigating *any* disease of interest! If you have access to large clinical cohorts and are interested in exploring how spatial pathway activation correlates with patient prognosis, we would love to partner with you.
 
 ## Contributing
 
