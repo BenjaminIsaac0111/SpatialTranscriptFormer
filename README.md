@@ -3,13 +3,14 @@
 > [!WARNING]
 > **Work in Progress**: This project is under active development. Core architectures, CLI flags, and data formats are subject to major changes.
 
-A transformer-based model for spatial transcriptomics that bridges histology and biological pathways.
+**SpatialTranscriptFormer** bridges histology and biological pathways through a high-performance transformer architecture. By modeling the dense interplay between morphological features and gene expression signatures, it provides an interpretable and spatially-coherent mapping of the tissue microenvironment.
 
-## Key Features
+## Key Technical Pillars
 
 - **Quad-Flow Interaction**: Configurable attention between Pathways and Histology patches (`p2p`, `p2h`, `h2p`, `h2h`).
 - **Pathway Bottleneck**: Interpretable gene expression prediction via 50 MSigDB Hallmark tokens.
 - **Spatial Pattern Coherence**: Optimized using a composite **MSE + PCC (Pearson Correlation) loss** to prevent spatial collapse and ensure accurate morphology-expression mapping.
+- **Foundation Model Ready**: Native support for **CTransPath**, **Phikon**, **Hibou**, and **GigaPath**.
 - **Biologically Informed Initialization**: Gene reconstruction weights derived from known hallmark memberships.
 
 ## License
@@ -30,18 +31,44 @@ This project requires [Conda](https://docs.conda.io/en/latest/).
 
 1. Clone the repository.
 2. Run the automated setup script:
-   - On Windows: `.\setup.ps1`
+3. On Windows: `.\setup.ps1`
    - On Linux/HPC: `bash setup.sh`
 
 ## Usage
 
-### Download HEST Data
-
-Download specific subsets using filters or patterns:
+**Before running any commands**, you must activate the conda environment:
 
 ```bash
-# Download only the Bowel Cancer subset (including ST data and WSIs)
+conda activate SpatialTranscriptFormer
+```
+
+### Download HEST Data
+
+> [!CAUTION]
+> **Authentication Required**: The HEST dataset is gated. You must accept the terms of use at [MahmoodLab/hest](https://huggingface.co/datasets/MahmoodLab/hest) and authenticate with your Hugging Face account to download the data.
+
+Please provide your token using ONE of the following methods before running the download tool:
+
+1. **Persistent Login**: Run `huggingface-cli login` and paste your access token when prompted.
+2. **Environment Variable**: Set the `HF_TOKEN` environment variable in your active terminal session.
+
+Once authenticated, download specific subsets using filters or the entire dataset:
+
+```bash
+# Option 1: Download the ENTIRE HEST dataset (requires confirmation)
+stf-download --local_dir hest_data
+
+# Option 2: Download a specific subset (e.g., Bowel Cancer)
 stf-download --organ Bowel --disease Cancer --local_dir hest_data
+
+# Option 3: Filter by technology (e.g., Visium)
+stf-download --tech Visium --local_dir hest_data
+```
+
+To see all available organs in the metadata:
+
+```bash
+stf-download --list_organs
 ```
 
 ### Train Models
