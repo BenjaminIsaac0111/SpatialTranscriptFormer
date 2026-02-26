@@ -5,7 +5,7 @@
 
 **SpatialTranscriptFormer** bridges histology and biological pathways through a high-performance transformer architecture. By modeling the dense interplay between morphological features and gene expression signatures, it provides an interpretable and spatially-coherent mapping of the tissue microenvironment.
 
-## Key Features
+## Key Technical Pillars
 
 - **Quad-Flow Interaction**: Configurable attention between Pathways and Histology patches (`p2p`, `p2h`, `h2p`, `h2h`).
 - **Pathway Bottleneck**: Interpretable gene expression prediction via 50 MSigDB Hallmark tokens.
@@ -31,7 +31,7 @@ This project requires [Conda](https://docs.conda.io/en/latest/).
 
 1. Clone the repository.
 2. Run the automated setup script:
-   - On Windows: `.\setup.ps1`
+3. On Windows: `.\setup.ps1`
    - On Linux/HPC: `bash setup.sh`
 
 ## Usage
