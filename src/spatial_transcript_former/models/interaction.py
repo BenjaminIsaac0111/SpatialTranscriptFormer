@@ -301,23 +301,28 @@ class SpatialTranscriptFormer(nn.Module):
             # Standard nn.TransformerEncoder suppresses weights for performance.
             x_layer = sequence
             for layer in self.fusion_engine.layers:
-                # Multi-head attention bit
+                # 1. Attention Block
+                qkv = layer.norm1(x_layer) if layer.norm_first else x_layer
+
                 # We need to call the internal self_attn with need_weights=True
+                # and average_attn_weights=False to get per-head maps.
                 attn_output, attn_weights = layer.self_attn(
-                    x_layer,
-                    x_layer,
-                    x_layer,
+                    qkv,
+                    qkv,
+                    qkv,
                     attn_mask=interaction_mask,
                     key_padding_mask=pad_mask,
                     need_weights=True,
+                    average_attn_weights=False,
                 )
+                print(
+                    f"DEBUG: Internal attn_weights shape: {attn_weights.shape}"
+                )  # DEBUG
                 attentions.append(attn_weights)
 
-                # Rest of the layer (as per nn.TransformerEncoderLayer)
+                # Continue forward pass (matching nn.TransformerEncoderLayer logic)
                 if layer.norm_first:
-                    x_layer = x_layer + layer._sa_block(
-                        layer.norm1(x_layer), interaction_mask, pad_mask
-                    )
+                    x_layer = x_layer + layer._sa_block(qkv, interaction_mask, pad_mask)
                     x_layer = x_layer + layer._ff_block(layer.norm2(x_layer))
                 else:
                     x_layer = layer.norm1(

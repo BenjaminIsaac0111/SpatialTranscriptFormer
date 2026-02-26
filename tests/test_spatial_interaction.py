@@ -209,3 +209,89 @@ def test_engine_validate_passes_coords():
     assert torch.allclose(
         kwargs["rel_coords"], fake_coords
     ), "Validate engine passed wrong coordinate tensor!"
+
+
+def test_spatial_encoder_normalization():
+    """Verify LearnedSpatialEncoder handles extreme coords and centers them."""
+    encoder = LearnedSpatialEncoder(64)
+    # Extreme coordinates: very far and very close
+    coords = torch.tensor([[[1000.0, 1000.0], [1000.1, 1000.1]]])
+    normed = encoder._normalize_coords(coords)
+
+    # Should be centered (mean 0)
+    assert torch.allclose(normed.mean(dim=1), torch.zeros(1, 2), atol=1e-5)
+    # Should be bounded by [-1, 1]
+    assert normed.abs().max() <= 1.0
+
+    # Verify forward doesn't crash
+    out = encoder(coords)
+    assert out.shape == (1, 2, 64)
+
+
+def test_interaction_mask_bits():
+    """Explicitly verify which bits are blocked in the interaction mask."""
+    model = SpatialTranscriptFormer(
+        num_genes=50, interactions=["p2h", "h2p", "h2h"]
+    )  # No p2p
+    p, s = 2, 3
+    mask = model._build_interaction_mask(p, s, torch.device("cpu"))
+
+    # mask[i, j] is True if blocked
+    # p2p is index [0:p, 0:p]. Should be blocked (True) except diagonal
+    assert mask[0, 1] == True, "p2p interaction [0, 1] should be blocked"
+
+    # p2h is index [0:p, p:]. Should be enabled (False)
+    assert mask[0, 2] == False, "p2h interaction [0, 2] should be enabled"
+
+    # h2p is index [p:, 0:p]. Should be enabled (False)
+    assert mask[2, 0] == False, "h2p interaction [2, 0] should be enabled"
+
+    # h2h is index [p:, p:]. Should be enabled (False)
+    assert mask[2, 3] == False, "h2h interaction [2, 3] should be enabled"
+
+
+def test_temperature_scaling():
+    """Verify log_temperature actually scales the pathway scores."""
+    model = SpatialTranscriptFormer(num_genes=10, token_dim=64)
+    features = torch.randn(1, 4, 2048)
+    coords = torch.randn(1, 4, 2)
+
+    # Initial scores with default temp
+    scores1 = model(features, rel_coords=coords, return_pathways=True)[1]
+
+    # Manually increase log_temperature significantly
+    with torch.no_grad():
+        model.log_temperature.fill_(10.0)  # Massive temp
+
+    scores2 = model(features, rel_coords=coords, return_pathways=True)[1]
+
+    # Scores should be different and typically more extreme
+    assert not torch.allclose(scores1, scores2)
+    assert scores2.abs().max() > scores1.abs().max()
+
+
+def test_return_attention_values():
+    """Validate attention weight extraction logic."""
+    model = SpatialTranscriptFormer(
+        num_genes=10, token_dim=64, n_heads=2, n_layers=2
+    ).eval()
+    B, S, D = 1, 4, 2048
+    features = torch.randn(B, S, D)
+    coords = torch.randn(B, S, 2)
+    P = model.num_pathways
+
+    # [gene_expr, pw_scores, attentions]
+    with torch.no_grad():
+        _, _, attentions = model(
+            features, rel_coords=coords, return_attention=True, return_pathways=True
+        )
+
+    assert len(attentions) == 2  # n_layers
+    for layer_attn in attentions:
+        # Expected shape: (B, n_heads, Total_T, Total_T) where Total_T = P + S
+        expected_shape = (B, 2, P + S, P + S)
+        assert layer_attn.shape == expected_shape
+
+        # In eval mode, attention should sum to 1.0 across the last dimension (softmax)
+        sums = layer_attn.sum(dim=-1)
+        assert torch.allclose(sums, torch.ones_like(sums), atol=1e-6)

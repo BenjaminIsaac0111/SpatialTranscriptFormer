@@ -137,30 +137,34 @@ def test_attention_extraction():
     # attentions is list of weights [layers]
     for i, attn in enumerate(attentions):
         print(f"Testing Layer {i}...")
-        # attn is (B, T, T)
-        assert attn.shape == (1, p + s, p + s)
+        # attn is (B, H, T, T)
+        h = model.fusion_engine.layers[0].self_attn.num_heads
+        assert attn.shape == (1, h, p + s, p + s)
 
-        # We expect blocked regions to have 0 attention
-        h2p_region = attn[0, p:, :p]
-        h2h_region = attn[0, p:, p:]
+        # We expect blocked regions to have 0 attention across all heads
+        # h2p_region is (H, s, p)
+        h2p_region = attn[0, :, p:, :p]
+        h2h_region = attn[0, :, p:, p:]
 
-        # For h2h, we must ignore diagonal
-        h2h_off_diag = h2h_region.clone()
-        h2h_off_diag.fill_diagonal_(0)
+        # For h2h, we must ignore diagonal within each head
+        # We can just check that the entire (H, s, s) block is 0 except the diag
+        h2h_zeroed = h2h_region.clone()
+        for head_idx in range(h):
+            h2h_zeroed[head_idx].fill_diagonal_(0)
 
         print(f"Layer {i} h2p attention max: {h2p_region.max().item():.2e}")
-        print(f"Layer {i} h2h off-diag attention max: {h2h_off_diag.max().item():.2e}")
+        print(f"Layer {i} h2h off-diag attention max: {h2h_zeroed.max().item():.2e}")
 
         assert (
             h2p_region.max() < 1e-10
         ), f"Layer {i} h2p attention should be zero when blocked"
         assert (
-            h2h_off_diag.max() < 1e-10
+            h2h_zeroed.max() < 1e-10
         ), f"Layer {i} h2h attention should be zero when blocked"
 
-        # Check that allowed regions have non-zero attention
-        p2p_region = attn[0, :p, :p]
-        p2h_region = attn[0, :p, p:]
+        # Check that allowed regions have non-zero attention in at least one head
+        p2p_region = attn[0, :, :p, :p]
+        p2h_region = attn[0, :, :p, p:]
         print(f"Layer {i} p2p attention max: {p2p_region.max().item():.2e}")
         print(f"Layer {i} p2h attention max: {p2h_region.max().item():.2e}")
 
