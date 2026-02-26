@@ -66,11 +66,12 @@ def setup_model(args, device):
             with open(genes_path) as f:
                 gene_list = json.load(f)
 
-            if getattr(args, "pathways", None):
-                # If specific pathways requested, search all collections
+            if getattr(args, "custom_gmt", None):
+                urls = args.custom_gmt
+            elif getattr(args, "pathways", None):
+                # If specific pathways requested but no custom GMT, search standard collections
                 urls = [
                     MSIGDB_URLS["hallmarks"],
-                    MSIGDB_URLS["c2_kegg"],
                     MSIGDB_URLS["c2_medicus"],
                     MSIGDB_URLS["c2_cgp"],
                 ]
@@ -196,21 +197,14 @@ def load_checkpoint(model, optimizer, scaler, output_dir, model_name, device):
     print(f"Resuming from {ckpt_path}...")
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
 
-    if "model_state_dict" in checkpoint:
-        model.load_state_dict(checkpoint["model_state_dict"])
-        if "optimizer_state_dict" in checkpoint:
-            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        if "scaler_state_dict" in checkpoint and scaler is not None:
-            scaler.load_state_dict(checkpoint["scaler_state_dict"])
+    model.load_state_dict(checkpoint["model_state_dict"])
+    if "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if "scaler_state_dict" in checkpoint and scaler is not None:
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
 
-        start_epoch = checkpoint.get("epoch", -1) + 1
-        best_val_loss = checkpoint.get("best_val_loss", float("inf"))
-    else:
-        # Legacy checkpoint (raw state dict)
-        model.load_state_dict(checkpoint)
-        start_epoch = 0
-        best_val_loss = float("inf")
-        print("Loaded weights only (legacy checkpoint).")
+    start_epoch = checkpoint.get("epoch", -1) + 1
+    best_val_loss = checkpoint.get("best_val_loss", float("inf"))
 
     print(f"Resumed at epoch {start_epoch + 1}")
     return start_epoch, best_val_loss
@@ -346,7 +340,13 @@ def parse_args():
         "--pathways",
         nargs="+",
         default=None,
-        help="List of MSigDB pathway names to explicitly instantiate (e.g. KEGG_COLORECTAL_CANCER)",
+        help="List of MSigDB pathway names to explicitly instantiate (e.g. HALLMARK_APOPTOSIS). If none are provided but --pathway-init is enabled, all pathways in the provided GMTs will be loaded.",
+    )
+    g.add_argument(
+        "--custom-gmt",
+        nargs="+",
+        default=None,
+        help="List of URLs or local paths to custom .gmt files for pathway initialization. Overrides standard MSigDB defaults if provided.",
     )
 
     return parser.parse_args()

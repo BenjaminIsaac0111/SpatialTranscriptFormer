@@ -105,7 +105,7 @@ PRESETS = {
         "--batch-size",
         "4",
         "--epochs",
-        "2000",
+        "2500",
         "--use-amp",
         "--loss",
         "zinb",
@@ -120,26 +120,7 @@ PRESETS = {
         "--plot-pathways",
         "--resume",
     ],
-    # Legacy / Specialized
-    "stf_pathway_nystrom": STF_COMMON
-    + [
-        "--sparsity-lambda",
-        "0.05",
-        "--lr",
-        "1e-4",
-        "--batch-size",
-        "8",
-        "--epochs",
-        "2000",
-    ],
 }
-
-# Add alias for the one currently running to ensure backward compatibility for монитор
-PRESETS["stf_interaction_mse_pcc"] = PRESETS["stf_interaction_l2"] + [
-    "--pathway-loss-weight",
-    "0.5",
-    "--plot-pathways",
-]
 
 
 def main():

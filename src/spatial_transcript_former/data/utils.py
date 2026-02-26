@@ -42,18 +42,7 @@ def get_sample_ids(
         df_human = df_filtered[df_filtered["species"] == "Homo sapiens"]
         human_ids = df_human["id"].tolist()
 
-        # Filter for Human Bowel
-        df_bowel = df_human[
-            df_human["organ"].str.contains("Bowel", case=False, na=False)
-        ]
-
-        if not df_bowel.empty:
-            print(f"Filtering for Human Bowel samples ({len(df_bowel)} found)...")
-            final_ids = df_bowel["id"].tolist()
-        else:
-            print("No Human Bowel samples found, falling back to all Human samples...")
-            final_ids = human_ids
-
+        final_ids = human_ids
         if not final_ids:
             print("Warning: No Human samples found. Using all files.")
             final_ids = all_ids

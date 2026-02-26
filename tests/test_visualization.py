@@ -12,7 +12,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 from spatial_transcript_former.predict import (
-    BOWEL_CANCER_PATHWAYS,
+    CORE_PATHWAYS,
     plot_training_summary,
 )
 
@@ -58,16 +58,16 @@ def mock_data(pathway_names):
 # ---------------------------------------------------------------------------
 
 
-class TestBowelCancerPathways:
+class TestRepresentativePathways:
     def test_all_pathways_exist_in_msigdb(self, pathway_names):
-        """All 6 bowel cancer pathways should be in the MSigDB Hallmarks."""
+        """All 6 representative pathways should be in the MSigDB Hallmarks."""
         short_names = [n.replace("HALLMARK_", "") for n in pathway_names]
-        for pw in BOWEL_CANCER_PATHWAYS:
+        for pw in CORE_PATHWAYS:
             assert pw in short_names, f"Missing: {pw}"
 
     def test_pathway_count(self):
         """Should have exactly 6 fixed pathways."""
-        assert len(BOWEL_CANCER_PATHWAYS) == 6
+        assert len(CORE_PATHWAYS) == 6
 
 
 # ---------------------------------------------------------------------------

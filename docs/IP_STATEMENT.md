@@ -14,6 +14,18 @@ The primary innovation is the **multimodal bottleneck transformer** designed for
 - **Quadrant-Based Interaction Masking**: The logic used to zero out specific attention quadrants (e.g., $A_{H \to H}$) to optimize memory while maintaining multimodal context.
 - **Biologically-Informed Reconstruction Bottleneck**: The specific matrix decomposition approach where gene expression is reconstructed from a linear combination of pathway activations.
 
+### Proposed Auxiliary Pathway Loss
+
+To prevent bottleneck collapse and provide a direct gradient signal to the pathway tokens, we use the `AuxiliaryPathwayLoss`. This loss compares the model's internal pathway scores against "ground truth" pathway activations computed from the gene expression targets via MSigDB membership.
+
+The total objective becomes:
+$$\mathcal{L} = \mathcal{L}_{gene} + \lambda_{aux} (1 - \text{PCC}(\text{pathway\_scores}, \text{target\_pathways}))$$
+
+The `--log-transform` flag applies `log1p` to targets, mitigating the heavy-tailed gene expression distribution where housekeeping genes dominate MSE.
+
+The full training objective with pathway sparsity regularisation:
+$$\mathcal{L} = \mathcal{L}_{task} + \lambda \|W_{recon}\|_1$$
+
 ## 2. Spatial Context Methodologies
 
 - **Euclidean-Gated Attention**: The implementation of spatial distance-based masking ($M_{spatial}$) to constrain model focus to local morphological regions.

@@ -3,13 +3,14 @@
 > [!WARNING]
 > **Work in Progress**: This project is under active development. Core architectures, CLI flags, and data formats are subject to major changes.
 
-A transformer-based model for spatial transcriptomics that bridges histology and biological pathways.
+**SpatialTranscriptFormer** bridges histology and biological pathways through a high-performance transformer architecture. By modeling the dense interplay between morphological features and gene expression signatures, it provides an interpretable and spatially-coherent mapping of the tissue microenvironment.
 
 ## Key Features
 
 - **Quad-Flow Interaction**: Configurable attention between Pathways and Histology patches (`p2p`, `p2h`, `h2p`, `h2h`).
 - **Pathway Bottleneck**: Interpretable gene expression prediction via 50 MSigDB Hallmark tokens.
 - **Spatial Pattern Coherence**: Optimized using a composite **MSE + PCC (Pearson Correlation) loss** to prevent spatial collapse and ensure accurate morphology-expression mapping.
+- **Foundation Model Ready**: Native support for **CTransPath**, **Phikon**, **Hibou**, and **GigaPath**.
 - **Biologically Informed Initialization**: Gene reconstruction weights derived from known hallmark memberships.
 
 ## License
@@ -35,14 +36,23 @@ This project requires [Conda](https://docs.conda.io/en/latest/).
 
 ## Usage
 
-### Download HEST Data
+### Dataset Access
 
-Download specific subsets using filters or patterns:
+The model uses the **HEST1k** dataset. You can download specific subsets (by organ, technology, etc.) or the entire dataset using the `stf-download` utility:
 
 ```bash
-# Download only the Bowel Cancer subset (including ST data and WSIs)
-stf-download --organ Bowel --disease Cancer --local_dir hest_data
+# List available filtering options
+stf-download --list-options
+
+# Download a specific subset (e.g., Breast Cancer samples from Visium)
+stf-download --organ Breast --disease Cancer --tech Visium --local_dir hest_data
+
+# Download all human samples
+stf-download --species "Homo sapiens" --local_dir hest_data
 ```
+
+> [!NOTE]
+> The HEST dataset is gated on Hugging Face. Ensure you have accepted the terms at [MahmoodLab/hest](https://huggingface.co/datasets/MahmoodLab/hest) and are logged in via `huggingface-cli login`.
 
 ### Train Models
 
@@ -94,6 +104,13 @@ Visualization plots will be saved to the `./results` directory.
 # Run all tests (Pytest wrapper)
 .\test.ps1
 ```
+
+## Future Directions & Clinical Collaborations
+
+A major future direction for **SpatialTranscriptFormer** is to integrate this architecture into an **end-to-end pipeline for patient risk assessment** and prognosis tracking. By leveraging the model's predicted expression and pathway activations, we aim to build a downstream risk prediction module that allows users to directly evaluate how spatially-resolved expression relates to patient survival.
+
+> [!NOTE]
+> **Call for Collaborators:** Rigorous risk assessment models require vast datasets of clinical metadata and survival outcomes, which we currently lack access to. We are open to investigating *any* disease of interest! If you have access to large clinical cohorts and are interested in exploring how spatial pathway activation correlates with patient prognosis, we would love to partner with you.
 
 ## Contributing
 

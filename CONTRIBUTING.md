@@ -35,18 +35,23 @@ We use `black` for formatting and `flake8` for linting. Please ensure your code 
 
 ```bash
 black .
-flake8 src/
 ```
 
-### 3. Testing
+### 4. AI-Assisted Development
 
-All new features must include unit tests in the `tests/` directory. We use `pytest` for our test suite.
+We welcome contributions developed with the assistance of AI tools (e.g., Copilot, ChatGPT, Claude, or agentic frameworks). However, to ensure the long-term maintainability and integrity of the project:
 
-```bash
-# Run all tests
-.\test.ps1  # Windows
-bash test.sh # Linux
-```
+- **Ownership**: You are ultimately responsible for the code you submit. Do not commit code you do not fully understand.
+- **Explainability**: During the review process, you must be able to explain the logic, design decisions, and any subtle side effects of the AI-suggested changes.
+- **Verification**: AI-generated code must strictly follow our coding standards, naming conventions, and architectural patterns. It must be accompanied by robust tests (see our [Testing Guide](docs/TESTING.md)).
+
+### 3. Testing & Quality Assurance
+
+All new features must be accompanied by relevant tests in the `tests/` directory natively using `pytest`.
+
+We highly encourage rigorous testing approaches such as **Mutation Testing** (via `cosmic-ray`) for critical model components to prevent surviving mutants.
+
+For full details on our testing requirements, how to run the test suites locally, and our guidelines on mutation testing, please read the [Testing Guide](docs/TESTING.md).
 
 ## Pull Request Process
 
