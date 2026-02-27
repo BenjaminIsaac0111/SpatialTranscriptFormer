@@ -286,12 +286,10 @@ def parse_args():
     g.add_argument("--n-heads", type=int, default=4)
     g.add_argument("--n-layers", type=int, default=2)
     g.add_argument(
-        "--no-spatial-pe",
-        action="store_false",
-        dest="use_spatial_pe",
-        help="Disable spatial positional encoding",
+        "--use-spatial-pe",
+        action="store_true",
+        help="Enable spatial positional encoding",
     )
-    g.set_defaults(use_spatial_pe=False)
     g.add_argument(
         "--interactions",
         nargs="+",
