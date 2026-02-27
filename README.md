@@ -21,6 +21,7 @@ This project is protected by a **Proprietary Source Code License**. See the [LIC
 - 🤝 **For-Profit Use**: Permitted only under a **negotiated agreement** with the author.
   - **Note on Foundation Models**: This architecture is backbone-agnostic. Any negotiated commercial agreement covers *only* the SpatialTranscriptFormer source code and IP. It does **not** grant commercial rights to use restricted third-party weights (e.g., CTransPath, Phikon). To use this system commercially, you must select a foundation model with a compatible open or commercial license (e.g., Hibou, Virchow, or H-Optimus-0).
   - **Note on HEST-1k Dataset**: The benchmark data used in this project is sourced from the **HEST-1k** dataset (Mahmood Lab), which is licensed under **CC BY-NC-SA 4.0**. This data is strictly for non-commercial research and cannot be used for commercial training or clinical deployment without explicit permission from the original authors.
+  - **Note on MSigDB**: This project uses data from the **Molecular Signatures Database (MSigDB)** (versions v6.0–v7.5.1, and v2022.1+). The contents are protected by copyright © 2004–2025 Broad Institute, Inc., MIT, and Regents of the University of California, and are distributed under the **CC BY 4.0** license. While this allows for commercial use, users must provide appropriate attribution. Note that individual gene sets within MSigDB may be subject to additional terms from third-party sources (e.g., KEGG).
 - ❌ **Prohibited**: Redistribution and unauthorized commercial exploitation.
 
 ## Intellectual Property

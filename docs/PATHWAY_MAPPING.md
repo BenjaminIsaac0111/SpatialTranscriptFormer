@@ -7,6 +7,8 @@ Mapping predicted gene expression into biological pathways is key to making the 
 We recommend using the following curated databases for mapping:
 
 - **MSigDB Hallmark**: 50 gene sets that summarize specific biological states or processes. This is the "gold standard" for general cancer research because it's non-redundant and well-defined.
+  - **License**: MSigDB Hallmark sets (v6.0–v7.5.1, v2022.1+) are subject to the **CC BY 4.0** license.
+  - **Copyright**: © 2004–2025 Broad Institute, Inc., MIT, and Regents of the University of California.
 - **KEGG & Reactome**: More detailed, hierarchical pathways that describe specific biochemical reactions.
 - **Gene Ontology (GO)**: Useful for finding genes associated with specific molecular functions or cellular components.
 

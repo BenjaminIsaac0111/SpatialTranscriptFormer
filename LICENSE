@@ -13,6 +13,10 @@ Use of this software, its source code, or derivative works by for-profit entitie
 
 Foundation Model Disclaimer: This software is designed to be backbone-agnostic and relies on third-party foundation models for feature extraction. A commercial agreement with the Author covers ONLY the SpatialTranscriptFormer source code, architecture, and intellectual property. It DOES NOT grant commercial use rights for restricted third-party models (e.g., CTransPath or Phikon). To use this software commercially, you must pair it with a backbone model that has a compatible commercial-friendly license (e.g., Apache 2.0 models like Hibou, Virchow, or H-Optimus-0).
 
+Dataset Disclaimer: This project utilizes third-party datasets, primarily HEST-1k. These datasets are subject to their own respective licenses (e.g., CC BY-NC-SA 4.0 for HEST-1k). A commercial agreement with the Author DOES NOT grant any rights to use, redistribute, or commercially exploit restricted third-party data. Commercial users must ensure they have independent legal rights to any training or evaluation data used within this framework.
+
+MSigDB Disclaimer: The Pathway Bottleneck and Reconstruction components utilize MSigDB Hallmark gene sets (Broad Institute). Content from MSigDB (v6.0-v7.5.1, v2022.1+) is protected by copyright (c) 2004-2025 Broad Institute, Inc., MIT, and Regents of the University of California, and is provided under CC BY 4.0. Users are responsible for complying with attribution requirements and any third-party restrictions (e.g., KEGG, BioCarta) that may apply to specific subsets of the data.
+
 Interested parties should contact the Author directly to discuss commercial licensing terms.
 
 1. ATTRIBUTION
