@@ -33,21 +33,6 @@ from spatial_transcript_former.data.utils import get_sample_ids, setup_dataloade
 
 def setup_model(args, device):
     """Initialize and optionally compile the model."""
-    # Ensure num_genes is consistent with the global gene list
-    genes_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "global_genes.json",
-    )
-    if not os.path.exists(genes_path):
-        genes_path = "global_genes.json"
-    if os.path.exists(genes_path):
-        import json
-
-        with open(genes_path) as f:
-            gene_list = json.load(f)
-        args.num_genes = min(args.num_genes, len(gene_list))
-        print(f"Validated num_genes: {args.num_genes}")
-
     if args.model == "he2rna":
         model = HE2RNA(
             num_genes=args.num_genes, backbone=args.backbone, pretrained=args.pretrained
@@ -377,6 +362,25 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     set_seed(args.seed)
+
+    # Global gene count synchronization
+    genes_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "global_genes.json",
+    )
+    if not os.path.exists(genes_path):
+        genes_path = "global_genes.json"
+    if os.path.exists(genes_path):
+        import json
+
+        with open(genes_path, "r") as f:
+            gene_list = json.load(f)
+        args.num_genes = min(args.num_genes, len(gene_list))
+        print(f"Validated global gene count: {args.num_genes}")
+    else:
+        print(
+            f"Warning: global_genes.json not found. Using requested num_genes={args.num_genes}"
+        )
 
     # 1. Data
     final_ids = get_sample_ids(
