@@ -19,6 +19,7 @@ This project is protected by a **Proprietary Source Code License**. See the [LIC
 
 - ✅ **Permitted**: Evaluation for employment, Academic Research, and Non-Profit use.
 - 🤝 **For-Profit Use**: Permitted only under a **negotiated agreement** with the author.
+  - **Note on Foundation Models**: This architecture is backbone-agnostic. Any negotiated commercial agreement covers *only* the SpatialTranscriptFormer source code and IP. It does **not** grant commercial rights to use restricted third-party weights (e.g., CTransPath, Phikon). To use this system commercially, you must select a foundation model with a compatible open or commercial license (e.g., Hibou, Virchow, or H-Optimus-0).
 - ❌ **Prohibited**: Redistribution and unauthorized commercial exploitation.
 
 ## Intellectual Property

@@ -11,6 +11,8 @@ This software and its source code are provided for the following purposes:
 2. COMMERCIAL USE (NEGOTIATED AGREEMENT REQUIRED)
 Use of this software, its source code, or derivative works by for-profit entities, or for any commercial or revenue-generating purposes, is strictly prohibited without a separate, written license agreement negotiated with and signed by the Author.
 
+Foundation Model Disclaimer: This software is designed to be backbone-agnostic and relies on third-party foundation models for feature extraction. A commercial agreement with the Author covers ONLY the SpatialTranscriptFormer source code, architecture, and intellectual property. It DOES NOT grant commercial use rights for restricted third-party models (e.g., CTransPath or Phikon). To use this software commercially, you must pair it with a backbone model that has a compatible commercial-friendly license (e.g., Apache 2.0 models like Hibou, Virchow, or H-Optimus-0).
+
 Interested parties should contact the Author directly to discuss commercial licensing terms.
 
 1. ATTRIBUTION
