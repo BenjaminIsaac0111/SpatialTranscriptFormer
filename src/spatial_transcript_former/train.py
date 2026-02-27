@@ -248,6 +248,7 @@ def parse_args():
     g.add_argument(
         "--log-transform", action="store_true", help="Log1p transform targets"
     )
+    g.add_argument("--organ", type=str, default=None, help="Filter samples by organ")
 
     # Loss
     parser.add_argument(
@@ -328,6 +329,7 @@ def parse_args():
     g.add_argument("--global-context-size", type=int, default=128)
     g.add_argument("--compile-backend", type=str, default="inductor")
     g.add_argument("--plot-pathways", action="store_true")
+    g.add_argument("--plot-attention", action="store_true")
     g.add_argument(
         "--weak-supervision", action="store_true", help="Bag-level training for MIL"
     )
@@ -370,6 +372,7 @@ def main():
         backbone=args.backbone,
         feature_dir=args.feature_dir,
         max_samples=args.max_samples,
+        organ=args.organ,
     )
     np.random.shuffle(final_ids)
 

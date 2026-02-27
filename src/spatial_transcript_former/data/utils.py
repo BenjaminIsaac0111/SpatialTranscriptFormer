@@ -6,7 +6,12 @@ from .dataset import get_hest_dataloader, get_hest_feature_dataloader
 
 
 def get_sample_ids(
-    data_dir, precomputed=False, backbone="resnet50", feature_dir=None, max_samples=None
+    data_dir,
+    precomputed=False,
+    backbone="resnet50",
+    feature_dir=None,
+    max_samples=None,
+    organ=None,
 ):
     """
     Find and filter HEST sample IDs based on metadata and data availability.
@@ -40,8 +45,14 @@ def get_sample_ids(
         # Filter for existing files and Homo sapiens
         df_filtered = df[df["id"].isin(available_ids)]
         df_human = df_filtered[df_filtered["species"] == "Homo sapiens"]
-        human_ids = df_human["id"].tolist()
 
+        if organ:
+            print(f"Filtering for organ: {organ}")
+            df_human = df_human[df_human["organ"] == organ]
+            if df_human.empty:
+                print(f"Warning: No samples found for organ '{organ}'.")
+
+        human_ids = df_human["id"].tolist()
         final_ids = human_ids
         if not final_ids:
             print("Warning: No Human samples found. Using all files.")

@@ -10,7 +10,11 @@ from spatial_transcript_former.data.dataset import (
     load_global_genes,
 )
 from spatial_transcript_former.models import SpatialTranscriptFormer
-from spatial_transcript_former.predict import plot_training_summary
+from spatial_transcript_former.predict import (
+    plot_training_summary,
+    plot_spatial_genes,
+    plot_histology_overlay,
+)
 
 
 def _load_histology(h5ad_path):
@@ -337,10 +341,114 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                 histology_img=histology_img,
                 scalef=scalef,
                 save_path=save_path,
+                cmap=cmap,
             )
+
+            # --- Optional Attention Map Visualization ---
+            if getattr(args, "plot_attention", False):
+                # Request attention maps from the model
+                # We need features and rel_coords again
+                if args.precomputed:
+                    # Reuse feats and slide_coords from above
+                    # This logic only works if whole_slide=True for now for simplicity
+                    if args.whole_slide:
+                        _, _, attn_maps = model(
+                            feats,
+                            rel_coords=slide_coords,
+                            return_pathways=True,
+                            return_attention=True,
+                        )
+                        save_attn_path = save_path.replace(".png", "_attention.png")
+                        plot_attention_maps(
+                            coord_subset,
+                            attn_maps,
+                            pathway_names,
+                            sample_id,
+                            histology_img=histology_img,
+                            scalef=scalef,
+                            save_path=save_attn_path,
+                        )
 
     except Exception as e:
         print(f"Warning: Failed to generate validation plot: {e}")
         import traceback
 
         traceback.print_exc()
+
+
+def plot_attention_maps(
+    coords,
+    attentions,
+    pathway_names,
+    sample_id,
+    histology_img=None,
+    scalef=1.0,
+    save_path=None,
+    cmap="magma",
+):
+    """
+    Visualize attention maps for pathway tokens.
+
+    Args:
+        attentions: List of [B, H, T, T] tensors (one per layer).
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+
+    # attentions[-1] is the last layer: (1, n_heads, T, T)
+    # T = num_pathways + num_patches
+    # We want attention from pathways to patches: attn[:, :, :P, P:]
+    last_layer_attn = attentions[-1][0]  # (n_heads, T, T)
+    n_heads = last_layer_attn.shape[0]
+    p = len(pathway_names)
+
+    # Average across heads or pick first head? Let's average for "publishable" stability.
+    # (P, S) where S is num patches
+    pathway_to_patch_attn = last_layer_attn[:, :p, p:].mean(dim=0).cpu().numpy()
+
+    # Pick top 4 pathways to visualize
+    display_idxs = [0, 1, 2, 3] if p >= 4 else list(range(p))
+
+    fig = plt.figure(figsize=(18, 5 * len(display_idxs)))
+    fig.patch.set_facecolor("#ffffff")
+    gs = gridspec.GridSpec(len(display_idxs), 2, width_ratios=[1, 1.2])
+
+    for i, pw_idx in enumerate(display_idxs):
+        name = pathway_names[pw_idx].replace("HALLMARK_", "").replace("_", " ").title()
+        weights = pathway_to_patch_attn[pw_idx]
+
+        # Left: Attention Map
+        ax = fig.add_subplot(gs[i, 0])
+        if histology_img is not None:
+            ax.imshow(histology_img, alpha=0.3)
+            vis_coords = coords * scalef
+        else:
+            vis_coords = coords
+
+        sc = ax.scatter(
+            vis_coords[:, 0],
+            vis_coords[:, 1],
+            c=weights,
+            cmap=cmap,
+            s=8,
+            alpha=0.8,
+            edgecolors="none",
+        )
+        ax.set_title(f"Attention: {name}", fontsize=14)
+        ax.axis("off")
+        plt.colorbar(sc, ax=ax, shrink=0.8)
+
+        # Right: Histology Detail (zoom into top attention region?)
+        # For now, just show histology again with a different overlay or just histological context.
+        ax2 = fig.add_subplot(gs[i, 1])
+        if histology_img is not None:
+            ax2.imshow(histology_img)
+        ax2.set_title("Histological Context", fontsize=14)
+        ax2.axis("off")
+
+    plt.suptitle(f"Pathway Attention Maps - {sample_id}", fontsize=18, y=1.02)
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+        print(f"Attention maps saved to {save_path}")
+    plt.close(fig)

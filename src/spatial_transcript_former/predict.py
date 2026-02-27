@@ -140,7 +140,7 @@ def plot_training_summary(
     histology_img=None,
     scalef=1.0,
     save_path=None,
-    cmap="jet",
+    cmap="magma",
 ):
     """
     Compact landscape training visualization dashboard without z-scoring.
@@ -199,8 +199,8 @@ def plot_training_summary(
 
     # Create figure: Width accommodates 1 Histology + (2 pathways * 3 cols each (Truth, Pred, Cbar))
     # Total ~7 logical columns
-    fig = plt.figure(figsize=(24, 6 * n_rows), constrained_layout=False)
-    fig.patch.set_facecolor("#1a1a2e")
+    fig = plt.figure(figsize=(26, 6 * n_rows), constrained_layout=False)
+    fig.patch.set_facecolor("#ffffff")  # Publication white background
 
     # Outer Grid: 1 col for Histology, 1 for all pathways
     outer = gridspec.GridSpec(
@@ -219,9 +219,9 @@ def plot_training_summary(
     ax_hist = fig.add_subplot(outer[0, 0])
     if has_histology:
         ax_hist.imshow(histology_img)
-    ax_hist.set_title("Histology", fontsize=16, color="white", pad=12)
+    ax_hist.set_title("Histology", fontsize=16, color="black", pad=12)
     ax_hist.axis("off")
-    ax_hist.set_facecolor("#0d0d1a")
+    ax_hist.set_facecolor("#ffffff")
     # Anchor to top so it doesn't float randomly if pathways are tall
     ax_hist.set_anchor("N")
 
@@ -299,7 +299,7 @@ def plot_training_summary(
         f"{sample_id}  —  Pathway Activation Summary",
         fontsize=20,
         fontweight="bold",
-        color="white",
+        color="black",
         y=0.98,
     )
 
