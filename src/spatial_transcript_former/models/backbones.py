@@ -48,6 +48,10 @@ class ConvStem(nn.Module):
         norm_layer=None,
         flatten=True,
     ):
+        """
+        Note: architecture adapted from CTransPath (Wang et al., 2022)
+        Original source: https://github.com/Xiyue-Wang/CTransPath (GPLv3)
+        """
         super().__init__()
 
         assert patch_size == 4
@@ -139,6 +143,8 @@ def get_backbone(name, pretrained=True, num_classes=None):
             raise ImportError("timm is required for ctranspath")
 
         # CTransPath: Swin-T with ConvStem
+        # Note: Weights are fetched from a community mirror (1aurent) on HF.
+        # Original License: Academic/Non-commercial use only.
         model = timm.create_model(
             "swin_tiny_patch4_window7_224",
             pretrained=False,
