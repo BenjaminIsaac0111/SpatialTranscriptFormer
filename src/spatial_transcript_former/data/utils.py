@@ -119,56 +119,72 @@ def setup_dataloaders(args, train_ids, val_ids):
                 feat_dir = os.path.join(args.data_dir, "patches", feat_dir_name)
 
         if args.whole_slide:
-            train_loader = get_hest_feature_dataloader(
-                args.data_dir,
-                train_ids,
-                batch_size=args.batch_size,
-                shuffle=True,
-                num_genes=args.num_genes,
-                n_neighbors=args.n_neighbors,
-                whole_slide_mode=True,
-                augment=args.augment,
-                feature_dir=feat_dir,
-                log1p=args.log_transform,
+            train_loader = (
+                get_hest_feature_dataloader(
+                    args.data_dir,
+                    train_ids,
+                    batch_size=args.batch_size,
+                    shuffle=True,
+                    num_genes=args.num_genes,
+                    n_neighbors=args.n_neighbors,
+                    whole_slide_mode=True,
+                    augment=args.augment,
+                    feature_dir=feat_dir,
+                    log1p=args.log_transform,
+                )
+                if train_ids
+                else None
             )
-            val_loader = get_hest_feature_dataloader(
-                args.data_dir,
-                val_ids,
-                batch_size=args.batch_size,
-                shuffle=False,
-                num_genes=args.num_genes,
-                n_neighbors=args.n_neighbors,
-                whole_slide_mode=True,
-                augment=False,
-                feature_dir=feat_dir,
-                log1p=args.log_transform,
+            val_loader = (
+                get_hest_feature_dataloader(
+                    args.data_dir,
+                    val_ids,
+                    batch_size=args.batch_size,
+                    shuffle=False,
+                    num_genes=args.num_genes,
+                    n_neighbors=args.n_neighbors,
+                    whole_slide_mode=True,
+                    augment=False,
+                    feature_dir=feat_dir,
+                    log1p=args.log_transform,
+                )
+                if val_ids
+                else None
             )
         else:
-            train_loader = get_hest_feature_dataloader(
-                args.data_dir,
-                train_ids,
-                batch_size=args.batch_size,
-                shuffle=True,
-                num_genes=args.num_genes,
-                n_neighbors=args.n_neighbors,
-                use_global_context=args.use_global_context,
-                global_context_size=args.global_context_size,
-                augment=args.augment,
-                feature_dir=feat_dir,
-                log1p=args.log_transform,
+            train_loader = (
+                get_hest_feature_dataloader(
+                    args.data_dir,
+                    train_ids,
+                    batch_size=args.batch_size,
+                    shuffle=True,
+                    num_genes=args.num_genes,
+                    n_neighbors=args.n_neighbors,
+                    use_global_context=args.use_global_context,
+                    global_context_size=args.global_context_size,
+                    augment=args.augment,
+                    feature_dir=feat_dir,
+                    log1p=args.log_transform,
+                )
+                if train_ids
+                else None
             )
-            val_loader = get_hest_feature_dataloader(
-                args.data_dir,
-                val_ids,
-                batch_size=args.batch_size,
-                shuffle=False,
-                num_genes=args.num_genes,
-                n_neighbors=args.n_neighbors,
-                use_global_context=args.use_global_context,
-                global_context_size=args.global_context_size,
-                augment=False,
-                feature_dir=feat_dir,
-                log1p=args.log_transform,
+            val_loader = (
+                get_hest_feature_dataloader(
+                    args.data_dir,
+                    val_ids,
+                    batch_size=args.batch_size,
+                    shuffle=False,
+                    num_genes=args.num_genes,
+                    n_neighbors=args.n_neighbors,
+                    use_global_context=args.use_global_context,
+                    global_context_size=args.global_context_size,
+                    augment=False,
+                    feature_dir=feat_dir,
+                    log1p=args.log_transform,
+                )
+                if val_ids
+                else None
             )
     else:
         # Base normalization
@@ -191,26 +207,34 @@ def setup_dataloaders(args, train_ids, val_ids):
 
         if args.use_global_context:
             print("Warning: Global context only supported with pre-computed features.")
-        train_loader = get_hest_dataloader(
-            args.data_dir,
-            train_ids,
-            batch_size=args.batch_size,
-            shuffle=True,
-            num_genes=args.num_genes,
-            n_neighbors=args.n_neighbors,
-            transform=train_transform,
-            augment=args.augment,
-            log1p=args.log_transform,
+        train_loader = (
+            get_hest_dataloader(
+                args.data_dir,
+                train_ids,
+                batch_size=args.batch_size,
+                shuffle=True,
+                num_genes=args.num_genes,
+                n_neighbors=args.n_neighbors,
+                transform=train_transform,
+                augment=args.augment,
+                log1p=args.log_transform,
+            )
+            if train_ids
+            else None
         )
-        val_loader = get_hest_dataloader(
-            args.data_dir,
-            val_ids,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_genes=args.num_genes,
-            n_neighbors=args.n_neighbors,
-            transform=val_transform,
-            log1p=args.log_transform,
+        val_loader = (
+            get_hest_dataloader(
+                args.data_dir,
+                val_ids,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_genes=args.num_genes,
+                n_neighbors=args.n_neighbors,
+                transform=val_transform,
+                log1p=args.log_transform,
+            )
+            if val_ids
+            else None
         )
 
     return train_loader, val_loader

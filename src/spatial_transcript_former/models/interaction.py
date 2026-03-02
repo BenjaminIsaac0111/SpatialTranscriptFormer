@@ -154,12 +154,11 @@ class SpatialTranscriptFormer(nn.Module):
         )
 
         self.fusion_engine = nn.TransformerEncoder(
-            encoder_layer, num_layers=n_layers, enable_nested_tensor=False
+            encoder_layer,
+            num_layers=n_layers,
+            norm=nn.LayerNorm(token_dim),
+            enable_nested_tensor=False,
         )
-
-        # Learnable temperature for cosine similarity scoring
-        # Initialized to log(1/0.07) ≈ 2.66 following CLIP convention
-        self.log_temperature = nn.Parameter(torch.tensor(2.6593))
 
         self.gene_reconstructor = nn.Linear(num_pathways, num_genes)
 
@@ -167,7 +166,12 @@ class SpatialTranscriptFormer(nn.Module):
             with torch.no_grad():
                 # gene_reconstructor.weight is (num_genes, num_pathways)
                 # pathway_init is (num_pathways, num_genes)
-                self.gene_reconstructor.weight.copy_(pathway_init.T)
+                # L1 normalization roughly matches variance scale of Kaiming initialization
+                # so that outputs don't explode before Softplus is applied.
+                pathway_init_norm = pathway_init / (
+                    pathway_init.sum(dim=1, keepdim=True) + 1e-6
+                )
+                self.gene_reconstructor.weight.copy_(pathway_init_norm.T)
                 self.gene_reconstructor.bias.zero_()
             # Expose the MSigDB matrix for AuxiliaryPathwayLoss
             self._pathway_init_matrix = pathway_init.clone()
@@ -341,27 +345,22 @@ class SpatialTranscriptFormer(nn.Module):
         # Extract processed patch tokens
         processed_patch_tokens = out[:, p:, :]  # (B, S, D)
 
-        # 5. Compute pathway scores via cosine similarity with learnable temperature
+        # 5. Compute pathway scores via cosine similarity
         # L2-normalize both sets of tokens to produce cosine similarities in [-1, 1]
         norm_pathway = F.normalize(processed_pathway_tokens, dim=-1)  # (B, P, D)
-        temperature = self.log_temperature.exp()  # scalar
 
         if return_dense:
             # Dense prediction: per-patch cosine similarity with pathway tokens
             norm_patch = F.normalize(processed_patch_tokens, dim=-1)  # (B, S, D)
             # (B, S, D) @ (B, D, P) -> (B, S, P)
-            pathway_scores = (
-                torch.matmul(norm_patch, norm_pathway.transpose(1, 2)) * temperature
-            )
+            pathway_scores = torch.matmul(norm_patch, norm_pathway.transpose(1, 2))
         else:
             # Global prediction: pool patches first, then compute scores
             global_patch_token = processed_patch_tokens.mean(
                 dim=1, keepdim=True
             )  # (B, 1, D)
             norm_global = F.normalize(global_patch_token, dim=-1)  # (B, 1, D)
-            pathway_scores = (
-                torch.matmul(norm_global, norm_pathway.transpose(1, 2)) * temperature
-            )
+            pathway_scores = torch.matmul(norm_global, norm_pathway.transpose(1, 2))
             pathway_scores = pathway_scores.squeeze(1)  # (B, P)
 
         # Gene reconstruction (unified for both modes)
@@ -372,7 +371,8 @@ class SpatialTranscriptFormer(nn.Module):
             theta = F.softplus(self.theta_reconstructor(pathway_scores)) + 1e-6
             gene_expression = (pi, mu, theta)
         else:
-            gene_expression = self.gene_reconstructor(pathway_scores)
+            # Enforce non-negativity for gene counts (log1p or raw)
+            gene_expression = F.softplus(self.gene_reconstructor(pathway_scores))
 
         results = [gene_expression]
         if return_pathways:

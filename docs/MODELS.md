@@ -34,12 +34,8 @@ The SpatialTranscriptFormer models the **interaction between biological pathways
 By default, the model operates in **Full Interaction** mode where all four information flows are active. Users can selectively disable any combination using the `--interactions` flag to explore architectural variants:
 
 ```bash
-# Default: Full Interaction (all quadrants enabled)
---interactions p2p p2h h2p h2h
-
-# Pathway Bottleneck: block H↔H to force all inter-patch
-# communication through the pathway bottleneck
---interactions p2p p2h h2p
+# Default: Small Interaction (CTransPath, 4 layers)
+python scripts/run_preset.py --preset stf_small
 ```
 
 > [!TIP]
@@ -53,7 +49,7 @@ Three additional design principles support these interactions:
 
 - **Biological Initialisation** — The gene reconstruction weights are initialised from MSigDB Hallmark gene sets, providing a biologically-grounded starting point that the model refines during training.
 
-### 2.2 Spatial Learning
+## 2.2 Spatial Learning
 
 The spatial relationships of gene expression are central to this model. It is not sufficient to predict correct expression magnitudes at each spot independently — the model must capture **where** on the tissue pathways are active and how that spatial pattern varies across the slide. Two mechanisms enforce this:
 

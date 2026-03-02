@@ -147,23 +147,22 @@ python -m spatial_transcript_former.train \
 
 > **Note**: Without `--pathway-init`, the model disables the `AuxiliaryPathwayLoss` and relies entirely on the main reconstruction objectives and the L1 sparsity penalty. (I am yet to obtain results with this method)...
 
-### Robust Counting: ZINB + Auxiliary Loss
+### Recommended: Using Presets
 
-For raw count data with high sparsity, using the ZINB distribution and auxiliary pathway supervision is recommended.
+For most cases, it is recommended to use the provided presets:
 
 ```bash
-python -m spatial_transcript_former.train \
-    --data-dir A:\hest_data \
-    --model interaction \
-    --backbone ctranspath \
-    --pathway-init \
-    --loss zinb \
-    --pathway-loss-weight 0.5 \
-    --lr 5e-5 \
-    --batch-size 4 \
-    --whole-slide \
-    --precomputed \
-    --epochs 200
+# Tiny (2 layers, 256 dim)
+python scripts/run_preset.py --preset stf_tiny
+
+# Small (4 layers, 384 dim) - Recommended
+python scripts/run_preset.py --preset stf_small
+
+# Medium (6 layers, 512 dim)
+python scripts/run_preset.py --preset stf_medium
+
+# Large (12 layers, 768 dim)
+python scripts/run_preset.py --preset stf_large
 ```
 
 ### Choosing Interaction Modes
@@ -201,7 +200,7 @@ Submit with:
 sbatch hpc/array_train.slurm
 ```
 
-### Collecting Results
+### Collecting Results (Currently broken!)
 
 After experiments complete, aggregate all `results_summary.json` files into a comparison table:
 
