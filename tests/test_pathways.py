@@ -138,12 +138,16 @@ class TestPathwayTruth:
     def test_consistent_across_calls(self, gene_list):
         """Ground truth from MSigDB membership should be identical across calls."""
         from spatial_transcript_former.visualization import _compute_pathway_truth
+        from unittest.mock import MagicMock
+
+        args = MagicMock()
+        args.sparsity_lambda = 0.0
 
         np.random.seed(42)
         gene_truth = np.random.rand(200, len(gene_list)).astype(np.float32)
 
-        result1, names1 = _compute_pathway_truth(gene_truth, gene_list)
-        result2, names2 = _compute_pathway_truth(gene_truth, gene_list)
+        result1, names1 = _compute_pathway_truth(gene_truth, gene_list, args)
+        result2, names2 = _compute_pathway_truth(gene_truth, gene_list, args)
 
         np.testing.assert_array_equal(result1, result2)
         assert names1 == names2
@@ -151,10 +155,14 @@ class TestPathwayTruth:
     def test_output_shape(self, gene_list):
         """Pathway truth should be (N, P) where P=50 (Hallmarks default)."""
         from spatial_transcript_former.visualization import _compute_pathway_truth
+        from unittest.mock import MagicMock
+
+        args = MagicMock()
+        args.sparsity_lambda = 0.0
 
         N = 150
         gene_truth = np.random.rand(N, len(gene_list)).astype(np.float32)
-        result, names = _compute_pathway_truth(gene_truth, gene_list)
+        result, names = _compute_pathway_truth(gene_truth, gene_list, args)
 
         assert result.shape == (N, 50)
         assert len(names) == 50
@@ -162,6 +170,10 @@ class TestPathwayTruth:
     def test_spatial_variation(self, gene_list):
         """Pathway truth should have spatial variation (non-zero std)."""
         from spatial_transcript_former.visualization import _compute_pathway_truth
+        from unittest.mock import MagicMock
+
+        args = MagicMock()
+        args.sparsity_lambda = 0.0
 
         # Create gene expression with spatial patterns
         N = 200
@@ -170,7 +182,7 @@ class TestPathwayTruth:
         gene_truth[:100, 0] += 5.0
         gene_truth[100:, 1] += 5.0
 
-        result, _ = _compute_pathway_truth(gene_truth, gene_list)
+        result, _ = _compute_pathway_truth(gene_truth, gene_list, args)
 
         # At least some pathways should have non-trivial spatial variation
         stds = np.std(result, axis=0)
