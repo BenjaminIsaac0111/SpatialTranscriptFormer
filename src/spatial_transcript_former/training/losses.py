@@ -327,10 +327,51 @@ class AuxiliaryPathwayLoss(nn.Module):
             return gene_loss
 
         # Compute pathway ground truth from gene expression
-        # target_genes: (B, [N,] G), pathway_matrix: (P, G)
-        # result: (B, [N,] P)
+        # 1. Spatially standardize (Z-score) the target genes to ensure equal weighting
         with torch.no_grad():
-            target_pathways = torch.matmul(target_genes, self.pathway_matrix.T)
+            if target_genes.dim() == 2:
+                # Patch level: (B, G). Normalize across the batch dimension (which acts as spatial context)
+                if target_genes.shape[0] > 1:
+                    means = target_genes.mean(dim=0, keepdim=True)
+                    stds = target_genes.std(dim=0, keepdim=True).clamp(min=1e-6)
+                    norm_genes = (target_genes - means) / stds
+                else:
+                    norm_genes = torch.zeros_like(target_genes)
+            else:
+                # Whole slide: (B, N, G). Normalize across valid spatial positions N
+                if mask is not None:
+                    valid_mask = ~mask.unsqueeze(-1)  # (B, N, 1)
+                    valid_counts = valid_mask.sum(dim=1, keepdim=True).clamp(
+                        min=1.0
+                    )  # (B, 1, 1)
+
+                    means = (target_genes * valid_mask.float()).sum(
+                        dim=1, keepdim=True
+                    ) / valid_counts
+
+                    # Compute variance explicitly to handle masking correctly
+                    diffs = (target_genes - means) * valid_mask.float()
+                    vars = (diffs**2).sum(dim=1, keepdim=True) / (
+                        valid_counts - 1
+                    ).clamp(min=1.0)
+                    stds = torch.sqrt(vars).clamp(min=1e-6)
+
+                    norm_genes = diffs / stds
+                    norm_genes = norm_genes * valid_mask.float()
+                else:
+                    means = target_genes.mean(dim=1, keepdim=True)
+                    stds = target_genes.std(dim=1, keepdim=True).clamp(min=1e-6)
+                    norm_genes = (target_genes - means) / stds
+
+            # 2. Project normalized genes onto the pathway matrix
+            # target_pathways: (B, P) or (B, N, P)
+            target_pathways = torch.matmul(norm_genes, self.pathway_matrix.T)
+
+            # 3. Average by the number of genes in each pathway
+            member_counts = self.pathway_matrix.sum(dim=1, keepdim=True).T.clamp(
+                min=1.0
+            )
+            target_pathways = target_pathways / member_counts
 
         pathway_loss = self.pcc(pathway_preds, target_pathways, mask=mask)
 

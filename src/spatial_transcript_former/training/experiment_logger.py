@@ -6,19 +6,19 @@ without requiring network access (e.g., no wandb dependency).
 """
 
 import os
-import csv
 import json
 import time
+import sqlite3
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 
 class ExperimentLogger:
     """
-    Logs training metrics to CSV and writes a JSON summary at the end.
+    Logs training metrics to a SQLite database and writes a JSON summary at the end.
 
     Output files:
-        - training_log.csv: Per-epoch metrics (epoch, train_loss, val_loss, ...)
+        - training_logs.sqlite: Per-epoch metrics (epoch, train_loss, val_loss, ...) stored in a table `metrics`.
         - results_summary.json: Full config + final metrics
     """
 
@@ -30,15 +30,47 @@ class ExperimentLogger:
         """
         self.output_dir = output_dir
         self.config = config
-        self.csv_path = os.path.join(output_dir, "training_log.csv")
+        self.db_path = os.path.join(output_dir, "training_logs.sqlite")
         self.json_path = os.path.join(output_dir, "results_summary.json")
         self.start_time = time.time()
         self.epoch_metrics = []
-        self._csv_header_written = os.path.exists(self.csv_path)
+
+        self._init_db()
+
+    def _init_db(self):
+        """Initializes the SQLite database and metric table if it doesn't exist."""
+        # Using connect as a context manager ensures commits
+        with sqlite3.connect(self.db_path) as conn:
+            # We use a dynamic schema where columns are added as needed.
+            # Start with just 'epoch' as the primary key.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS metrics (
+                    epoch INTEGER PRIMARY KEY
+                )
+                """
+            )
+
+    def _ensure_columns(self, metrics: Dict[str, float]):
+        """Ensures all metric keys exist as columns in the metrics table."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(metrics)")
+            existing_columns = {col[1] for col in cursor.fetchall()}
+
+            for key in metrics.keys():
+                if key not in existing_columns:
+                    # SQLite alters don't fail if concurrent unless locked.
+                    # Try to add missing column as REAL (float)
+                    try:
+                        cursor.execute(f"ALTER TABLE metrics ADD COLUMN {key} REAL")
+                    except sqlite3.OperationalError:
+                        # Might have been added by another process if we are running distributed
+                        pass
 
     def log_epoch(self, epoch: int, metrics: Dict[str, float]):
         """
-        Append one row to training_log.csv.
+        Insert one row into training_logs.sqlite -> metrics table.
 
         Args:
             epoch: Current epoch number (1-indexed).
@@ -47,15 +79,19 @@ class ExperimentLogger:
         row = {"epoch": epoch, **metrics}
         self.epoch_metrics.append(row)
 
-        # Determine fieldnames from first row
-        fieldnames = list(row.keys())
+        # Ensure all columns exist before inserting
+        self._ensure_columns(metrics)
 
-        with open(self.csv_path, "a", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if not self._csv_header_written:
-                writer.writeheader()
-                self._csv_header_written = True
-            writer.writerow(row)
+        columns = ", ".join(row.keys())
+        placeholders = ", ".join(["?"] * len(row))
+        values = tuple(row.values())
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"INSERT OR REPLACE INTO metrics ({columns}) VALUES ({placeholders})",
+                values,
+            )
 
     def finalize(
         self, best_val_loss: float, extra_metrics: Optional[Dict[str, Any]] = None

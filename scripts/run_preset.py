@@ -5,122 +5,71 @@ import os
 
 from spatial_transcript_former.config import get_config
 
-# Common flags for all STF interaction models
-STF_COMMON = [
-    "--model",
-    "interaction",
-    "--backbone",
-    "ctranspath",
-    "--precomputed",
-    "--whole-slide",
-    "--pathway-init",
-    "--use-amp",
-    "--log-transform",
-    "--loss",
-    "mse_pcc",
-    "--resume",
-]
+
+def make_stf_params(n_layers: int, token_dim: int, n_heads: int, batch_size: int):
+    """Helper to create standard SpatialTranscriptFormer parameters."""
+    return {
+        "model": "interaction",
+        "backbone": "ctranspath",
+        "precomputed": True,
+        "whole-slide": True,
+        "pathway-init": True,
+        "use-amp": True,
+        "log-transform": True,
+        "loss": "mse_pcc",
+        "resume": True,
+        "n-layers": n_layers,
+        "token-dim": token_dim,
+        "n-heads": n_heads,
+        "batch-size": batch_size,
+        "vis_sample": "TENX29",
+    }
+
 
 PRESETS = {
     # --- Baselines ---
-    "he2rna_baseline": [
-        "--model",
-        "he2rna",
-        "--backbone",
-        "resnet50",
-        "--batch-size",
-        "64",
-    ],
-    "vit_baseline": [
-        "--model",
-        "vit_st",
-        "--backbone",
-        "vit_b_16",
-        "--batch-size",
-        "32",
-    ],
-    "attention_mil": [
-        "--model",
-        "attention_mil",
-        "--whole-slide",
-        "--precomputed",
-        "--batch-size",
-        "1",
-    ],
-    "transmil": [
-        "--model",
-        "transmil",
-        "--whole-slide",
-        "--precomputed",
-        "--batch-size",
-        "1",
-    ],
-    # --- Interaction Models (Layer Scaling) ---
-    "stf_interaction_l2": STF_COMMON
-    + [
-        "--n-layers",
-        "2",
-        "--token-dim",
-        "256",
-        "--n-heads",
-        "4",
-        "--batch-size",
-        "4",
-    ],
-    "stf_interaction_l4": STF_COMMON
-    + [
-        "--n-layers",
-        "4",
-        "--token-dim",
-        "384",
-        "--n-heads",
-        "8",
-        "--batch-size",
-        "4",
-    ],
-    "stf_interaction_l6": STF_COMMON
-    + [
-        "--n-layers",
-        "6",
-        "--token-dim",
-        "512",
-        "--n-heads",
-        "8",
-        "--batch-size",
-        "2",  # Reduced batch size for large model memory
-    ],
-    # --- Specific Configurations ---
-    "stf_interaction_zinb": [
-        "--model",
-        "interaction",
-        "--backbone",
-        "ctranspath",
-        "--precomputed",
-        "--whole-slide",
-        "--pathway-init",
-        "--sparsity-lambda",
-        "0",
-        "--lr",
-        "1e-4",
-        "--batch-size",
-        "4",
-        "--epochs",
-        "2500",
-        "--use-amp",
-        "--loss",
-        "zinb",
-        "--log-transform",
-        "--pathway-loss-weight",
-        "0.5",
-        "--interactions",
-        "p2p",
-        "p2h",
-        "h2p",
-        "h2h",
-        "--plot-pathways",
-        "--resume",
-    ],
+    "he2rna_baseline": {
+        "model": "he2rna",
+        "backbone": "resnet50",
+        "batch-size": 64,
+    },
+    "vit_baseline": {
+        "model": "vit_st",
+        "backbone": "vit_b_16",
+        "batch-size": 32,
+    },
+    "attention_mil": {
+        "model": "attention_mil",
+        "whole-slide": True,
+        "precomputed": True,
+        "batch-size": 1,
+    },
+    "transmil": {
+        "model": "transmil",
+        "whole-slide": True,
+        "precomputed": True,
+        "batch-size": 1,
+    },
+    # --- SpatialTranscriptFormer Variants ---
+    "stf_tiny": make_stf_params(n_layers=2, token_dim=256, n_heads=4, batch_size=8),
+    "stf_small": make_stf_params(n_layers=4, token_dim=384, n_heads=8, batch_size=8),
+    "stf_medium": make_stf_params(n_layers=6, token_dim=512, n_heads=8, batch_size=8),
+    "stf_large": make_stf_params(n_layers=12, token_dim=768, n_heads=12, batch_size=8),
 }
+
+
+def params_to_args(params_dict):
+    """Convert a parameter dictionary to a list of CLI arguments."""
+    args = []
+    for key, value in params_dict.items():
+        arg_name = f"--{key.replace('_', '-')}"
+        if value is True:
+            args.append(arg_name)
+        elif value is False or value is None:
+            continue
+        else:
+            args.extend([arg_name, str(value)])
+    return args
 
 
 def main():
@@ -169,7 +118,7 @@ def main():
         cmd += ["--output-dir", f"./runs/{args.preset}"]
 
     # Add preset arguments
-    cmd += PRESETS[args.preset]
+    cmd += params_to_args(PRESETS[args.preset])
 
     # Add any unknown arguments passed to this script
     cmd += unknown

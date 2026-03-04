@@ -62,11 +62,11 @@ stf-download --species "Homo sapiens" --local_dir hest_data
 We provide presets for baseline models and scaled versions of the SpatialTranscriptFormer.
 
 ```bash
-# Recommended: Run the Interaction model with 4 transformer layers
-python scripts/run_preset.py --preset stf_interaction_l4
+# Recommended: Run the Interaction model (Small)
+python scripts/run_preset.py --preset stf_small
 
-# Run the lightweight 2-layer version
-python scripts/run_preset.py --preset stf_interaction_l2
+# Run the lightweight Tiny version
+python scripts/run_preset.py --preset stf_tiny
 
 # Run baselines
 python scripts/run_preset.py --preset he2rna_baseline

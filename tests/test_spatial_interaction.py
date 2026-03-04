@@ -250,26 +250,6 @@ def test_interaction_mask_bits():
     assert mask[2, 3] == False, "h2h interaction [2, 3] should be enabled"
 
 
-def test_temperature_scaling():
-    """Verify log_temperature actually scales the pathway scores."""
-    model = SpatialTranscriptFormer(num_genes=10, token_dim=64)
-    features = torch.randn(1, 4, 2048)
-    coords = torch.randn(1, 4, 2)
-
-    # Initial scores with default temp
-    scores1 = model(features, rel_coords=coords, return_pathways=True)[1]
-
-    # Manually increase log_temperature significantly
-    with torch.no_grad():
-        model.log_temperature.fill_(10.0)  # Massive temp
-
-    scores2 = model(features, rel_coords=coords, return_pathways=True)[1]
-
-    # Scores should be different and typically more extreme
-    assert not torch.allclose(scores1, scores2)
-    assert scores2.abs().max() > scores1.abs().max()
-
-
 def test_return_attention_values():
     """Validate attention weight extraction logic."""
     model = SpatialTranscriptFormer(

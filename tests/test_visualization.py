@@ -12,9 +12,18 @@ import matplotlib
 
 matplotlib.use("Agg")
 from spatial_transcript_former.predict import (
-    CORE_PATHWAYS,
     plot_training_summary,
 )
+
+# Representative pathways to highlight in summary plots (local copy for testing)
+CORE_PATHWAYS = [
+    "APOPTOSIS",
+    "DNA_REPAIR",
+    "G2M_CHECKPOINT",
+    "MTORC1_SIGNALING",
+    "P53_PATHWAY",
+    "MYC_TARGETS_V1",
+]
 
 # ---------------------------------------------------------------------------
 # Fixtures

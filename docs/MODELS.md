@@ -34,12 +34,8 @@ The SpatialTranscriptFormer models the **interaction between biological pathways
 By default, the model operates in **Full Interaction** mode where all four information flows are active. Users can selectively disable any combination using the `--interactions` flag to explore architectural variants:
 
 ```bash
-# Default: Full Interaction (all quadrants enabled)
---interactions p2p p2h h2p h2h
-
-# Pathway Bottleneck: block H↔H to force all inter-patch
-# communication through the pathway bottleneck
---interactions p2p p2h h2p
+# Default: Small Interaction (CTransPath, 4 layers)
+python scripts/run_preset.py --preset stf_small
 ```
 
 > [!TIP]
@@ -53,7 +49,7 @@ Three additional design principles support these interactions:
 
 - **Biological Initialisation** — The gene reconstruction weights are initialised from MSigDB Hallmark gene sets, providing a biologically-grounded starting point that the model refines during training.
 
-### 2.2 Spatial Learning
+## 2.2 Spatial Learning
 
 The spatial relationships of gene expression are central to this model. It is not sufficient to predict correct expression magnitudes at each spot independently — the model must capture **where** on the tissue pathways are active and how that spatial pattern varies across the slide. Two mechanisms enforce this:
 
@@ -218,13 +214,18 @@ The model outputs these parameters, and the loss computes the negative log-likel
 
 To prevent bottleneck collapse and provide a direct gradient signal to the pathway tokens, we use the `AuxiliaryPathwayLoss`. This loss compares the model's internal pathway scores against "ground truth" pathway activations computed from the gene expression targets via MSigDB membership.
 
+To prevent highly-expressed housekeeping genes from dominating the pathway's spatial pattern, the ground-truth targets are computed using **Z-score spatial normalization**:
+
+1. Every gene's spatial expression pattern is standardized (mean=0, variance=1) across the tissue slide.
+2. The normalized genes are projected onto the binary MSigDB pathway matrix.
+3. The resulting pathway scores are **mean-aggregated** (divided by the number of known member genes in each pathway) rather than raw-summed.
+
+This ensures every gene—including critical but lowly-expressed transcription factors—gets an equal vote in determining where a pathway is active.
+
 The total objective becomes:
 $$\mathcal{L} = \mathcal{L}_{gene} + \lambda_{aux} (1 - \text{PCC}(\text{pathway\_scores}, \text{target\_pathways}))$$
 
 The `--log-transform` flag applies `log1p` to targets, mitigating the heavy-tailed gene expression distribution where housekeeping genes dominate MSE.
-
-The full training objective with pathway sparsity regularisation:
-$$\mathcal{L} = \mathcal{L}_{task} + \lambda \|W_{recon}\|_1$$
 
 ---
 
@@ -239,7 +240,6 @@ $$\mathcal{L} = \mathcal{L}_{task} + \lambda \|W_{recon}\|_1$$
 | `--n-layers` | 2 | Transformer layers (minimum 2) |
 | `--num-pathways` | 50 | Number of pathway bottleneck tokens |
 | `--pathway-init` | off | Initialize gene_reconstructor from MSigDB |
-| `--sparsity-lambda` | 0.0 | L1 regularisation on reconstruction weights |
 | `--loss mse_pcc` | `mse` | Loss function (`mse`, `pcc`, `mse_pcc`, `zinb`) |
 | `--pcc-weight` | 1.0 | Weight for PCC term in composite loss |
 | `--pathway-loss-weight` | 0.0 | Weight for auxiliary pathway loss ($\lambda_{aux}$) |

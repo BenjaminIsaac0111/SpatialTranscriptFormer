@@ -58,6 +58,7 @@ class TestCheckpointRoundtrip:
             small_model,
             optimizer,
             None,
+            None,  # schedulers
             epoch=42,
             best_val_loss=0.123,
             output_dir=checkpoint_dir,
@@ -74,8 +75,14 @@ class TestCheckpointRoundtrip:
         )
         fresh_optimizer = optim.Adam(fresh_model.parameters(), lr=1e-4)
 
-        start_epoch, best_val = load_checkpoint(
-            fresh_model, fresh_optimizer, None, checkpoint_dir, "interaction", "cpu"
+        start_epoch, best_val, loaded_schedulers = load_checkpoint(
+            fresh_model,
+            fresh_optimizer,
+            None,
+            None,
+            checkpoint_dir,
+            "interaction",
+            "cpu",
         )
 
         # Verify metadata
@@ -98,6 +105,7 @@ class TestCheckpointRoundtrip:
             small_model,
             optimizer,
             scaler,
+            None,  # schedulers
             epoch=10,
             best_val_loss=0.5,
             output_dir=checkpoint_dir,
@@ -118,6 +126,7 @@ class TestCheckpointRoundtrip:
             fresh_model,
             fresh_optimizer,
             fresh_scaler,
+            None,  # schedulers
             checkpoint_dir,
             "interaction",
             "cpu",
@@ -129,8 +138,8 @@ class TestCheckpointRoundtrip:
     def test_no_checkpoint_starts_fresh(self, small_model, checkpoint_dir):
         """Missing checkpoint should return epoch 0 and inf loss."""
         optimizer = optim.Adam(small_model.parameters(), lr=1e-4)
-        start_epoch, best_val = load_checkpoint(
-            small_model, optimizer, None, checkpoint_dir, "nonexistent", "cpu"
+        start_epoch, best_val, loaded_schedulers = load_checkpoint(
+            small_model, optimizer, None, None, checkpoint_dir, "nonexistent", "cpu"
         )
         assert start_epoch == 0
         assert best_val == float("inf")

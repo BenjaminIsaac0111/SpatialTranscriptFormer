@@ -27,7 +27,19 @@ def test_model_structure_consistency():
     assert model.gene_reconstructor.weight.shape == (num_genes, num_pathways)
 
     # Verify values match (within tolerance)
-    assert torch.allclose(model.gene_reconstructor.weight, pathway_init.T)
+    # The interaction model now L1-normalizes the pathways for stability
+    # shape of pathway_init is (num_pathways, num_genes)
+    import torch.nn.functional as F
+
+    # We must normalize the columns of pathway_init.T, which correspond to the rows of pathway_init
+    # Adding a small epsilon as done in interaction.py
+    normalized_pathway_init = pathway_init / (
+        pathway_init.sum(dim=1, keepdim=True) + 1e-6
+    )
+
+    assert torch.allclose(
+        model.gene_reconstructor.weight, normalized_pathway_init.T, atol=1e-5
+    )
 
 
 def test_checkpoint_save_load():

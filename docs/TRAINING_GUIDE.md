@@ -126,44 +126,22 @@ python -m spatial_transcript_former.train \
 
 > **Note**: `--pathway-init` overrides `--num-pathways` to 50 (the number of Hallmark gene sets). The GMT file is cached in `.cache/` after first download.
 
-### Data-Driven Discovery (Latent Pathways)
+### Recommended: Using Presets
 
-To allow the model to discover its own spatial-transcriptomic relationships without biological priors, omit `--pathway-init` and apply sparsity regularization (`--sparsity-lambda`). This aims to force the model to identify "canonical" sparse gene sets.
-
-```bash
-python -m spatial_transcript_former.train \
-    --data-dir A:\hest_data \
-    --model interaction \
-    --backbone ctranspath \
-    --use-nystrom \
-    --num-pathways 50 \
-    --sparsity-lambda 0.01 \
-    --precomputed \
-    --whole-slide \
-    --use-amp \
-    --log-transform \
-    --epochs 100
-```
-
-> **Note**: Without `--pathway-init`, the model disables the `AuxiliaryPathwayLoss` and relies entirely on the main reconstruction objectives and the L1 sparsity penalty. (I am yet to obtain results with this method)...
-
-### Robust Counting: ZINB + Auxiliary Loss
-
-For raw count data with high sparsity, using the ZINB distribution and auxiliary pathway supervision is recommended.
+For most cases, it is recommended to use the provided presets:
 
 ```bash
-python -m spatial_transcript_former.train \
-    --data-dir A:\hest_data \
-    --model interaction \
-    --backbone ctranspath \
-    --pathway-init \
-    --loss zinb \
-    --pathway-loss-weight 0.5 \
-    --lr 5e-5 \
-    --batch-size 4 \
-    --whole-slide \
-    --precomputed \
-    --epochs 200
+# Tiny (2 layers, 256 dim)
+python scripts/run_preset.py --preset stf_tiny
+
+# Small (4 layers, 384 dim) - Recommended
+python scripts/run_preset.py --preset stf_small
+
+# Medium (6 layers, 512 dim)
+python scripts/run_preset.py --preset stf_medium
+
+# Large (12 layers, 768 dim)
+python scripts/run_preset.py --preset stf_large
 ```
 
 ### Choosing Interaction Modes
@@ -201,7 +179,7 @@ Submit with:
 sbatch hpc/array_train.slurm
 ```
 
-### Collecting Results
+### Collecting Results (Currently broken!)
 
 After experiments complete, aggregate all `results_summary.json` files into a comparison table:
 
@@ -243,8 +221,8 @@ python -m spatial_transcript_former.train --resume --output-dir runs/my_experime
 | `--feature-dir` | Explicit path to precomputed features directory. | Overrides auto-detection. |
 | `--loss` | Loss function: `mse`, `pcc`, `mse_pcc`, `zinb`. | `mse_pcc` or `zinb` recommended. |
 | `--pathway-loss-weight` | Weight ($\lambda$) for auxiliary pathway supervision. | Set `0.5` or `1.0` with `interaction` model. |
-| `--sparsity-lambda` | L1 regularization weight for discovering latent pathways. | Use `0.01` when `--pathway-init` is NOT used. |
 | `--interactions` | Enabled attention quadrants: `p2p`, `p2h`, `h2p`, `h2h`. | Default: `all` (Full Interaction). |
+| `--plot-pathways-list` | Names of explicitly requested pathways to visualize as heatmaps during periodic validation. | Use with `--plot-pathways`. e.g. `HYPOXIA ANGIOGENESIS` |
 | `--log-transform` | Apply log1p to gene expression targets. | Recommended for raw count data. |
 | `--num-genes` | Number of HVGs to predict (default: 1000). | Match your `global_genes.json`. |
 | `--mask-radius` | Euclidean distance for spatial attention gating. | Usually between 200 and 800. |
