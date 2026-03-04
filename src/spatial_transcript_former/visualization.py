@@ -212,4 +212,5 @@ def run_inference_plot(model, args, sample_id, epoch, device):
         histology_img=histology_img,
         scalef=scalef,
         save_path=save_path,
+        plot_pathways_list=getattr(args, "plot_pathways_list", None),
     )

@@ -147,7 +147,6 @@ def main():
             criterion,
             optimizer,
             device,
-            sparsity_lambda=args.sparsity_lambda,
             whole_slide=args.whole_slide,
             scaler=scaler,
             grad_accum_steps=args.grad_accum_steps,

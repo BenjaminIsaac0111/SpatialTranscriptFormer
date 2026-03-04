@@ -35,17 +35,11 @@ In this mode, the network receives direct supervision on its pathway tokens, gui
     1. **Interaction**: Learnable pathway tokens $P$ interact with Histology patch features $H$ via self-attention (e.g., $p2h$, $h2p$).
     2. **Activation**: Pathway scores $S \in \mathbb{R}^P$ are computed using a learnable temperature-scaled cosine similarity between the pathway tokens and image patch tokens.
     3. **Gene Reconstruction**: $\hat{y} = S \cdot \mathbf{W}_{recon} + b$, where $\mathbf{W}_{recon}$ is initialized using the binary pathway membership matrix $M$.
-- **MTL Auxiliary Loss**: To prevent standard bottleneck collapse, an explicit auxiliary loss bridges the spatial representations directly to biological data. The pathway scores $S$ are supervised against a pathway ground truth ($Y_{genes} \cdot M^T$) using a Pearson Correlation Coefficient (PCC) loss.
-  $$L_{total} = L_{gene} + \lambda_{pathway} (1 - PCC(S, Y_{genes} \cdot M^T))$$
-- **Benefit**: The model is forced to explicitly align its internal interaction tokens with concrete biological pathways, granting direct interpretability.
-
-#### 2. Data-Driven Discovery (Latent Projection)
-
-In the absence of a biological prior, the model can learn its own "latent pathways".
-
-- **Implementation**: $\mathbf{W}_{recon}$ is randomly initialized and the auxiliary pathway loss is disabled.
-- **Sparsity Constraint**: We apply an L1 penalty to force the model to identify "canonical" sparse gene sets: $L_{total} = L_{gene} + \lambda_{sparsity} \|\mathbf{W}_{recon}\|_1$.
-- **Benefit**: Can discover novel spatial-transcriptomic relationships that aren't yet captured in curated databases.
+- **MTL Auxiliary Loss**: To prevent standard bottleneck collapse, an explicit auxiliary loss bridges the spatial representations directly to biological data. The pathway scores $S$ are supervised against a pathway ground truth using a Pearson Correlation Coefficient (PCC) loss.
+  - To prevent highly expressed housekeeping genes dominating the signal, the raw spatial gene counts ($Y_{genes}$) are first **spatially Z-score normalized** ($Z_{genes}$).
+  - These are then projected onto the pathway matrix and mean-aggregated by member count ($C$):
+  $$L_{total} = L_{gene} + \lambda_{pathway} (1 - PCC(S, \frac{Z_{genes} \cdot M^T}{C}))$$
+- **Benefit**: The model is forced to explicitly align its internal interaction tokens with concrete biological pathways, granting direct interpretability where every gene gets an equal vote.
 
 ## 3. Generalizing to HEST1k Tissues
 
@@ -73,18 +67,12 @@ By supplying these functional groupings via `--custom-gmt`, the model's MTL proc
   - GMT file cached in `.cache/` after first download.
 - **Custom Pathway Definitions** (`--custom-gmt` flag): Users can override the default Hallmarks by providing a URL or local path to a `.gmt` file, enabling custom database integrations (e.g., KEGG, Reactome, or highly specific tissue masks).
 
-- **Sparsity Regularization** (`--sparsity-lambda` flag): L1 penalty on `gene_reconstructor` weights to encourage pathway-like groupings when using data-driven (random) initialization.
-
 ### Usage
 
 ```bash
 # With biological initialization (50 MSigDB Hallmarks)
 python -m spatial_transcript_former.train \
     --model interaction --pathway-init ...
-
-# With data-driven pathways + sparsity
-python -m spatial_transcript_former.train \
-    --model interaction --num-pathways 50 --sparsity-lambda 0.01 ...
 ```
 
 - **Spatial Pathway Maps**: Visualize pathway activations as spatial heatmaps overlaid on histology using `stf-predict`. See the [README](../README.md) for inference instructions.

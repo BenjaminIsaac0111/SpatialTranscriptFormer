@@ -96,7 +96,6 @@ def parse_args():
     )
     g.add_argument("--weight-decay", type=float, default=0.0)
     g.add_argument("--warmup-epochs", type=int, default=10)
-    g.add_argument("--sparsity-lambda", type=float, default=0.0)
     g.add_argument("--augment", action="store_true")
     g.add_argument("--use-amp", action="store_true")
     g.add_argument(
@@ -114,6 +113,12 @@ def parse_args():
     g.add_argument("--global-context-size", type=int, default=128)
     g.add_argument("--compile-backend", type=str, default="inductor")
     g.add_argument("--plot-pathways", action="store_true")
+    g.add_argument(
+        "--plot-pathways-list",
+        nargs="+",
+        default=None,
+        help="List of pathway names to exclusively visualize (e.g. HALLMARK_HYPOXIA). Defaults to the first 6 if None.",
+    )
     g.add_argument("--plot-attention", action="store_true")
     g.add_argument(
         "--return-attention",

@@ -49,7 +49,6 @@ def train_one_epoch(
     criterion,
     optimizer,
     device,
-    sparsity_lambda=0.0,
     whole_slide=False,
     scaler=None,
     grad_accum_steps=1,
@@ -103,9 +102,6 @@ def train_one_epoch(
                     bag_target = _compute_bag_target(genes, mask)
                     loss = criterion(preds, bag_target)
 
-                if sparsity_lambda > 0 and hasattr(model, "get_sparsity_loss"):
-                    loss = loss + (sparsity_lambda * model.get_sparsity_loss())
-
                 loss = loss / grad_accum_steps
 
             _optimizer_step(
@@ -127,9 +123,6 @@ def train_one_epoch(
                     outputs = model(images)
 
                 loss = criterion(outputs, targets)
-
-                if sparsity_lambda > 0 and hasattr(model, "get_sparsity_loss"):
-                    loss = loss + (sparsity_lambda * model.get_sparsity_loss())
 
                 loss = loss / grad_accum_steps
 
