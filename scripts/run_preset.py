@@ -22,7 +22,7 @@ def make_stf_params(n_layers: int, token_dim: int, n_heads: int, batch_size: int
         "token-dim": token_dim,
         "n-heads": n_heads,
         "batch-size": batch_size,
-        "vis_sample": 'TENX29',
+        "vis_sample": "TENX29",
     }
 
 
@@ -52,9 +52,9 @@ PRESETS = {
     },
     # --- SpatialTranscriptFormer Variants ---
     "stf_tiny": make_stf_params(n_layers=2, token_dim=256, n_heads=4, batch_size=8),
-    "stf_small": make_stf_params(n_layers=4, token_dim=384, n_heads=8, batch_size=4),
-    "stf_medium": make_stf_params(n_layers=6, token_dim=512, n_heads=8, batch_size=2),
-    "stf_large": make_stf_params(n_layers=12, token_dim=768, n_heads=12, batch_size=1),
+    "stf_small": make_stf_params(n_layers=4, token_dim=384, n_heads=8, batch_size=8),
+    "stf_medium": make_stf_params(n_layers=6, token_dim=512, n_heads=8, batch_size=8),
+    "stf_large": make_stf_params(n_layers=12, token_dim=768, n_heads=12, batch_size=8),
 }
 
 

@@ -55,10 +55,18 @@ def _compute_pathway_truth(gene_truth, gene_names, args):
         # Only use hallmarks for periodic visualization to keep it fast
         pw_matrix, pw_names = get_pathway_init(gene_names, gmt_urls=urls, verbose=False)
         pw_np = pw_matrix.numpy()  # (P, G)
+
+        # Z-score normalize gene spatial patterns to match AuxiliaryPathwayLoss
+        gene_truth = gene_truth.astype(np.float64)
+        means = np.mean(gene_truth, axis=0, keepdims=True)
+        stds = np.std(gene_truth, axis=0, keepdims=True)
+        stds[stds < 1e-6] = 1e-6  # prevent division by zero
+        norm_genes = (gene_truth - means) / stds
+
         member_counts = pw_np.sum(axis=1, keepdims=True).clip(min=1)
-        # Mean expression of member genes per pathway
-        pathway_truth = (gene_truth @ pw_np.T) / member_counts.T  # (N, P)
-        return pathway_truth, pw_names
+        # Mean expression of normalized member genes per pathway
+        pathway_truth = (norm_genes @ pw_np.T) / member_counts.T  # (N, P)
+        return pathway_truth.astype(np.float32), pw_names
     except Exception as e:
         print(f"Warning: Could not compute pathway ground truth: {e}")
         return None, None

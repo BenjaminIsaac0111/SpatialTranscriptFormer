@@ -447,9 +447,34 @@ class TestAuxiliaryPathwayLoss:
         base = MaskedMSELoss()
         aux = AuxiliaryPathwayLoss(pw_matrix, base, lambda_pathway=1.0)
 
-        # Compute ground truth pathways
+        # Compute ground truth pathways matching the new AuxiliaryPathwayLoss logic
         with torch.no_grad():
-            target_pathways = torch.matmul(targets, pw_matrix.T)
+            if targets.dim() == 2:
+                # Patch level: (B, G). Normalize across the batch dimension
+                means = targets.mean(dim=0, keepdim=True)
+                stds = targets.std(dim=0, keepdim=True).clamp(min=1e-6)
+                norm_genes = (targets - means) / stds
+            else:
+                # Whole slide: (B, N, G). Normalize across valid spatial positions N
+                valid_mask = (
+                    ~mask.unsqueeze(-1)
+                    if mask is not None
+                    else torch.ones_like(targets, dtype=torch.bool)
+                )
+                valid_counts = valid_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+                means = (targets * valid_mask.float()).sum(
+                    dim=1, keepdim=True
+                ) / valid_counts
+                diffs = (targets - means) * valid_mask.float()
+                vars = (diffs**2).sum(dim=1, keepdim=True) / (valid_counts - 1).clamp(
+                    min=1.0
+                )
+                stds = torch.sqrt(vars).clamp(min=1e-6)
+                norm_genes = (diffs / stds) * valid_mask.float()
+
+            target_pathways = torch.matmul(norm_genes, pw_matrix.T)
+            member_counts = pw_matrix.sum(dim=1, keepdim=True).T.clamp(min=1.0)
+            target_pathways = target_pathways / member_counts
 
         gene_loss = base(gene_preds, targets, mask=mask)
         # Use target_pathways as pathway_preds
@@ -566,8 +591,15 @@ class TestAuxiliaryPathwayLoss:
         loss_fn = AuxiliaryPathwayLoss(pw_matrix, MaskedMSELoss(), lambda_pathway=1.0)
         loss_random = loss_fn(gene_preds, targets, pathway_preds=pw_preds_random)
 
-        # Case 2: Pathway preds perfectly match truth (which is targets @ matrix.T)
-        pw_truth = torch.matmul(targets, pw_matrix.T)
+        # Case 2: Pathway preds perfectly match truth
+        with torch.no_grad():
+            means = targets.mean(dim=1, keepdim=True)
+            stds = targets.std(dim=1, keepdim=True).clamp(min=1e-6)
+            norm_genes = (targets - means) / stds
+            pw_truth = torch.matmul(norm_genes, pw_matrix.T)
+            member_counts = pw_matrix.sum(dim=1, keepdim=True).T.clamp(min=1.0)
+            pw_truth = pw_truth / member_counts
+
         loss_perfect = loss_fn(gene_preds, targets, pathway_preds=pw_truth)
 
         # Case 3: Gene expression is specifically high for P0, and pw_preds are high for P0
