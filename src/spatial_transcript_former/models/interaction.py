@@ -131,6 +131,7 @@ class SpatialTranscriptFormer(nn.Module):
         self.backbone, self.image_feature_dim = get_backbone(
             backbone_name, pretrained=pretrained
         )
+        self._backbone_name = backbone_name
 
         # 2. Image Projector
         self.image_proj = nn.Linear(self.image_feature_dim, token_dim)
@@ -232,6 +233,26 @@ class SpatialTranscriptFormer(nn.Module):
             torch.Tensor: L1 loss value.
         """
         return torch.norm(self.gene_reconstructor.weight, p=1)
+
+    @classmethod
+    def from_pretrained(cls, checkpoint_dir, device="cpu", **kwargs):
+        """Load a pretrained SpatialTranscriptFormer from a checkpoint directory.
+
+        The directory should contain ``config.json`` and ``model.pth``
+        (created by :func:`~spatial_transcript_former.checkpoint.save_pretrained`).
+        An optional ``gene_names.json`` will be loaded as ``model.gene_names``.
+
+        Args:
+            checkpoint_dir (str): Path to checkpoint directory.
+            device (str): Torch device to load onto.
+            **kwargs: Override any config values.
+
+        Returns:
+            SpatialTranscriptFormer: Model in eval mode.
+        """
+        from spatial_transcript_former.checkpoint import load_pretrained
+
+        return load_pretrained(checkpoint_dir, device=device, **kwargs)
 
     def forward(
         self,
