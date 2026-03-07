@@ -1,10 +1,11 @@
 # Python API Reference
 
-The SpatialTranscriptFormer package exposes a clean API for loading trained models, running inference on new data, and integrating with the Scanpy/AnnData ecosystem.
+The SpatialTranscriptFormer package exposes a clean API for training, inference, and integration with the Scanpy/AnnData ecosystem.
 
 ```python
 from spatial_transcript_former import (
     SpatialTranscriptFormer,   # Core model
+    Trainer,                   # High-level training orchestrator
     Predictor,                 # Inference wrapper
     FeatureExtractor,          # Backbone feature extraction
     save_pretrained,           # Save checkpoint directory
@@ -401,32 +402,88 @@ stf-train --model interaction --resume --output-dir ./checkpoints
 
 ---
 
-### Programmatic Training
+### Trainer (High-Level)
 
-For custom training loops, use the building blocks directly:
+The `Trainer` class handles LR scheduling, AMP, checkpointing, logging, and early stopping:
 
 ```python
-from spatial_transcript_former.models import SpatialTranscriptFormer
-from spatial_transcript_former.training.engine import train_one_epoch, validate
-from spatial_transcript_former.training.losses import CompositeLoss
-from spatial_transcript_former.training.experiment_logger import ExperimentLogger
-from spatial_transcript_former.training.checkpoint import save_checkpoint, load_checkpoint
+from spatial_transcript_former import SpatialTranscriptFormer, Trainer
+from spatial_transcript_former.training import CompositeLoss, EarlyStoppingCallback
 
-# 1. Build model
-model = SpatialTranscriptFormer(
-    num_genes=460,
-    backbone_name="phikon",
-    pretrained=True,
-    token_dim=256,
-    n_layers=2,
-    use_spatial_pe=True,
-).to(device)
+model = SpatialTranscriptFormer(num_genes=460, backbone_name="phikon", ...)
 
-# 2. Loss & Optimizer
-criterion = CompositeLoss(alpha=1.0)  # MSE + PCC
+trainer = Trainer(
+    model=model,
+    train_loader=train_dl,
+    val_loader=val_dl,
+    criterion=CompositeLoss(alpha=1.0),
+    epochs=100,
+    warmup_epochs=10,
+    device="cuda",
+    output_dir="./checkpoints",
+    use_amp=True,
+    callbacks=[EarlyStoppingCallback(patience=15)],
+)
+results = trainer.fit()                 # returns {"best_val_loss", "history", ...}
+trainer.save_pretrained("./release/v1/") # inference-ready export
+```
+
+#### Trainer Parameters
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `model` | *required* | Any `nn.Module` |
+| `train_loader` | *required* | Training `DataLoader` |
+| `val_loader` | *required* | Validation `DataLoader` |
+| `criterion` | *required* | Loss function |
+| `optimizer` | `None` | Custom optimizer (default: `AdamW`) |
+| `lr` | `1e-4` | Learning rate (if no custom optimizer) |
+| `epochs` | `100` | Total training epochs |
+| `warmup_epochs` | `10` | Linear warmup before cosine annealing |
+| `use_amp` | `False` | Mixed precision (FP16) |
+| `grad_accum_steps` | `1` | Gradient accumulation |
+| `whole_slide` | `False` | Dense whole-slide mode |
+| `output_dir` | `./checkpoints` | Directory for checkpoints/logs |
+| `callbacks` | `[]` | List of `TrainerCallback` instances |
+| `resume` | `False` | Resume from checkpoint |
+
+#### Callbacks
+
+Subclass `TrainerCallback` to hook into the training loop:
+
+```python
+from spatial_transcript_former.training import TrainerCallback
+
+class WandbCallback(TrainerCallback):
+    def on_epoch_end(self, trainer, epoch, metrics):
+        wandb.log(metrics, step=epoch)
+
+    def should_stop(self, trainer, epoch, metrics):
+        return False  # never stop early
+```
+
+| Hook | When |
+| --- | --- |
+| `on_train_begin(trainer)` | Start of `fit()` |
+| `on_epoch_begin(trainer, epoch)` | Before each epoch |
+| `on_epoch_end(trainer, epoch, metrics)` | After validation |
+| `on_train_end(trainer, results)` | End of `fit()` |
+| `should_stop(trainer, epoch, metrics)` | Return `True` to stop |
+
+Built-in: `EarlyStoppingCallback(patience=15, min_delta=0.0)`
+
+---
+
+### Programmatic Training (Low-Level)
+
+For full control, use the engine functions directly:
+
+```python
+from spatial_transcript_former.training import train_one_epoch, validate, CompositeLoss
+
+criterion = CompositeLoss(alpha=1.0)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-# 3. Training loop
 for epoch in range(100):
     train_loss = train_one_epoch(
         model, train_loader, criterion, optimizer, device,
@@ -493,3 +550,65 @@ from spatial_transcript_former import save_pretrained
 # Export for inference (strips optimizer/scheduler state)
 save_pretrained(model, "./release/v1/", gene_names=gene_list)
 ```
+
+---
+
+## Bring Your Own Data
+
+All datasets implement the `SpatialDataset` contract (in `data.base`). The contract requires `__getitem__` to return:
+
+```python
+(features, gene_counts, rel_coords)
+# features:    (S, D) tensor — patch embeddings (S = 1 + neighbours)
+# gene_counts: (G,)   tensor — expression targets
+# rel_coords:  (S, 2) tensor — relative spatial coordinates
+```
+
+### Minimal Implementation
+
+```python
+from spatial_transcript_former.data.base import SpatialDataset
+import torch
+
+class MyVisiumDataset(SpatialDataset):
+    def __init__(self, features, gene_matrix, coords):
+        self._features = torch.as_tensor(features, dtype=torch.float32)
+        self._genes = torch.as_tensor(gene_matrix, dtype=torch.float32)
+        self._coords = torch.as_tensor(coords, dtype=torch.float32)
+        self.num_genes = self._genes.shape[1]
+
+    def __len__(self):
+        return len(self._features)
+
+    def __getitem__(self, idx):
+        feat = self._features[idx].unsqueeze(0)  # (1, D)
+        genes = self._genes[idx]                   # (G,)
+        rel_coord = torch.zeros(1, 2)              # centre = [0,0]
+        return feat, genes, rel_coord
+```
+
+### Training Your Custom Dataset
+
+```python
+from torch.utils.data import DataLoader, random_split
+from spatial_transcript_former import SpatialTranscriptFormer, Trainer
+from spatial_transcript_former.training import CompositeLoss, EarlyStoppingCallback
+
+dataset = MyVisiumDataset(features, gene_matrix, coords)
+train_ds, val_ds = random_split(dataset, [0.8, 0.2])
+
+model = SpatialTranscriptFormer(num_genes=dataset.num_genes, backbone_name="phikon")
+
+trainer = Trainer(
+    model=model,
+    train_loader=DataLoader(train_ds, batch_size=32, shuffle=True),
+    val_loader=DataLoader(val_ds, batch_size=64),
+    criterion=CompositeLoss(),
+    epochs=100,
+    callbacks=[EarlyStoppingCallback(patience=15)],
+)
+results = trainer.fit()
+trainer.save_pretrained("./my_model/")
+```
+
+See `recipes/custom/README.md` for the full guide.
