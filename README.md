@@ -3,7 +3,10 @@
 > [!WARNING]
 > **Work in Progress**: This project is under active development. Core architectures, CLI flags, and data formats are subject to major changes.
 
-**SpatialTranscriptFormer** bridges histology and biological pathways through a high-performance transformer architecture. By modeling the dense interplay between morphological features and gene expression signatures, it provides an interpretable and spatially-coherent mapping of the tissue microenvironment.
+> [!TIP]
+> **Framework Release**: SpatialTranscriptFormer has been restructured from a research codebase into a robust framework. You can now use the Python API to train on your own spatial transcriptomics data with custom backbones and architectures.
+
+**SpatialTranscriptFormer** is a modular deep learning framework designed to bridge histology and biological pathways. It leverages transformer architectures to model the interplay between morphological features and gene expression signatures, providing interpretable mapping of the tissue microenvironment.
 
 ## Key Technical Pillars
 
@@ -35,13 +38,13 @@ This project requires [Conda](https://docs.conda.io/en/latest/).
 1. Clone the repository.
 2. Run the automated setup script:
 3. On Windows: `.\setup.ps1`
-   - On Linux/HPC: `bash setup.sh`
+4. On Linux/HPC: `bash setup.sh`
 
-## Usage
+## Usage: HEST-1k Benchmark Recipe
+
+While the core `SpatialTranscriptFormer` framework can be integrated programmatically with any dataset (see the **[Python API Reference](docs/API.md)** and **[Bring Your Own Data Guide](src/spatial_transcript_former/recipes/custom/README.md)**), this repository includes a complete, out-of-the-box CLI pipeline specifically for reproducing our benchmarks on the [HEST-1k dataset](https://huggingface.co/datasets/MahmoodLab/hest).
 
 ### Dataset Access
-
-The model uses the **HEST1k** dataset. You can download specific subsets (by organ, technology, etc.) or the entire dataset using the `stf-download` utility:
 
 ```bash
 # List available filtering options
@@ -94,10 +97,19 @@ Visualization plots will be saved to the `./results` directory.
 
 ## Documentation
 
-- [Models](docs/MODELS.md): Detailed model architectures and scaling parameters.
-- [Data Structure](docs/DATA_STRUCTURE.md): Organization of HEST data on disk.
-- [Pathway Mapping](docs/PATHWAY_MAPPING.md): Clinical interpretability and pathway integration.
-- [Gene Analysis](docs/GENE_ANALYSIS.md): Modeling strategies for high-dimensional gene space.
+### Framework APIs & Usage
+
+- **[Python API Reference](docs/API.md)**: Full documentation for `Trainer`, `Predictor`, and `SpatialDataset`.
+- **[Bring Your Own Data Guide](src/spatial_transcript_former/recipes/custom/README.md)**: Templates and examples for training on your own non-HEST spatial transcriptomics data.
+- **[HEST Recipe Docs](src/spatial_transcript_former/recipes/hest/README.md)**: Detailed documentation for the included HEST-1k dataset recipe.
+- **[Training Guide](docs/TRAINING_GUIDE.md)**: Complete list of configuration flags and preset configurations for HEST models.
+
+### Theory & Interpretability
+
+- **[Models & Architecture](docs/MODELS.md)**: Deep dive into the quad-flow interaction logic and network scaling.
+- **[Pathway Mapping](docs/PATHWAY_MAPPING.md)**: Clinical interpretability, pathway bottleneck design, and MSigDB integration.
+- **[Gene Analysis](docs/GENE_ANALYSIS.md)**: Modeling strategies for mapping morphology to high-dimensional gene spaces.
+- **[Data Structure](docs/DATA_STRUCTURE.md)**: Detailed breakdown of the HEST data structure on disk, metadata conventions, and preprocessing invariants.
 
 ## Development
 

@@ -9,7 +9,7 @@ import os
 import h5py
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
-from ..config import get_config
+from spatial_transcript_former.config import get_config
 
 
 def get_hest_data_dir() -> str:

@@ -4,7 +4,7 @@ import os
 import argparse
 import numpy as np
 from spatial_transcript_former.models import SpatialTranscriptFormer
-from spatial_transcript_former.data.utils import get_sample_ids, setup_dataloaders
+from spatial_transcript_former.recipes.hest.utils import get_sample_ids, setup_dataloaders
 
 
 class Args:

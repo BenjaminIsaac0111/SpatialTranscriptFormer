@@ -23,7 +23,7 @@ import torch
 import pandas as pd
 import numpy as np
 from .io import decode_h5_string, load_h5ad_metadata
-from .base import (
+from spatial_transcript_former.data.base import (
     SpatialDataset,
     apply_dihedral_augmentation,
     apply_dihedral_to_tensor,
@@ -37,7 +37,7 @@ import torch.nn.functional as F
 
 # Augmentation helpers and normalize_coordinates are now in data.base
 # and imported above. Kept here for backward compatibility:
-# from spatial_transcript_former.data.dataset import apply_dihedral_augmentation
+# from spatial_transcript_former.recipes.hest.dataset import apply_dihedral_augmentation
 # still works via the import at the top of this file.
 
 

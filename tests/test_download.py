@@ -10,7 +10,7 @@ import shutil
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 # Correct import based on the project structure
-from spatial_transcript_former.data.download import (
+from spatial_transcript_former.recipes.hest.download import (
     download_metadata,
     filter_samples,
     download_hest_subset,
@@ -28,7 +28,7 @@ class TestDownload(unittest.TestCase):
         # Clean up the temporary directory
         shutil.rmtree(self.test_dir)
 
-    @patch("spatial_transcript_former.data.download.hf_hub_download")
+    @patch("spatial_transcript_former.recipes.hest.download.hf_hub_download")
     @patch("os.path.exists")
     def test_download_metadata_exists(self, mock_exists, mock_download):
         # Test case where metadata already exists
@@ -39,7 +39,7 @@ class TestDownload(unittest.TestCase):
         self.assertEqual(result, self.metadata_path)
         mock_download.assert_not_called()
 
-    @patch("spatial_transcript_former.data.download.hf_hub_download")
+    @patch("spatial_transcript_former.recipes.hest.download.hf_hub_download")
     @patch("os.path.exists")
     def test_download_metadata_missing(self, mock_exists, mock_download):
         # Test case where metadata is missing and needs download
@@ -80,7 +80,7 @@ class TestDownload(unittest.TestCase):
         samples = filter_samples(self.metadata_path, organ="Brain")
         self.assertEqual(samples, [])
 
-    @patch("spatial_transcript_former.data.download.snapshot_download")
+    @patch("spatial_transcript_former.recipes.hest.download.snapshot_download")
     def test_download_hest_subset_calls(self, mock_snapshot):
         # Test that snapshot_download is called with correct patterns
         sample_ids = ["S1", "S2"]
@@ -104,7 +104,7 @@ class TestDownload(unittest.TestCase):
         # Check additional patterns
         self.assertIn("extra_file.txt", patterns)
 
-    @patch("spatial_transcript_former.data.download.snapshot_download")
+    @patch("spatial_transcript_former.recipes.hest.download.snapshot_download")
     @patch("zipfile.ZipFile")
     @patch("os.listdir")
     @patch("os.path.exists")

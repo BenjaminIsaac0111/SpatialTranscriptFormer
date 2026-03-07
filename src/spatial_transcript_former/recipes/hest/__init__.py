@@ -19,7 +19,7 @@ Quick start::
 """
 
 # Dataset classes and DataLoader factories
-from spatial_transcript_former.data.dataset import (
+from spatial_transcript_former.recipes.hest.dataset import (
     HEST_Dataset,
     HEST_FeatureDataset,
     get_hest_dataloader,
@@ -29,7 +29,7 @@ from spatial_transcript_former.data.dataset import (
 )
 
 # I/O utilities
-from spatial_transcript_former.data.io import (
+from spatial_transcript_former.recipes.hest.io import (
     get_hest_data_dir,
     load_h5ad_metadata,
     get_image_from_h5ad,
@@ -37,23 +37,23 @@ from spatial_transcript_former.data.io import (
 )
 
 # Download
-from spatial_transcript_former.data.download import (
+from spatial_transcript_former.recipes.hest.download import (
     download_hest_subset,
     download_metadata,
     filter_samples,
 )
 
 # Sample discovery and dataloader setup
-from spatial_transcript_former.data.utils import (
+from spatial_transcript_former.recipes.hest.utils import (
     get_sample_ids,
     setup_dataloaders,
 )
 
 # Splitting
-from spatial_transcript_former.data.splitting import split_hest_patients
+from spatial_transcript_former.recipes.hest.splitting import split_hest_patients
 
 # Vocab building
-from spatial_transcript_former.data.build_vocab import scan_h5ad_files
+from spatial_transcript_former.recipes.hest.build_vocab import scan_h5ad_files
 
 __all__ = [
     # Datasets

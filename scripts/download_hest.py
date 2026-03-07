@@ -5,7 +5,7 @@ import pandas as pd
 
 # Add src to path
 sys.path.append(os.path.abspath("src"))
-from spatial_transcript_former.data.download import (
+from spatial_transcript_former.recipes.hest.download import (
     download_hest_subset,
     download_metadata,
 )

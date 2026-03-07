@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import pytest
-from spatial_transcript_former.data.dataset import (
+from spatial_transcript_former.recipes.hest.dataset import (
     apply_dihedral_augmentation,
     apply_dihedral_to_tensor,
 )

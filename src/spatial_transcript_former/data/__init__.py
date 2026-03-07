@@ -20,8 +20,3 @@ from .base import (
     apply_dihedral_to_tensor,
     normalize_coordinates,
 )
-
-# HEST-specific (backward compatibility)
-from .dataset import HEST_Dataset, get_hest_dataloader
-from .splitting import split_hest_patients
-from .download import download_hest_subset, download_metadata, filter_samples
