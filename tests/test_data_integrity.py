@@ -3,7 +3,10 @@ import os
 import torch
 import numpy as np
 import h5py
-from spatial_transcript_former.recipes.hest.io import get_hest_data_dir, load_h5ad_metadata
+from spatial_transcript_former.recipes.hest.io import (
+    get_hest_data_dir,
+    load_h5ad_metadata,
+)
 from spatial_transcript_former.recipes.hest.dataset import load_global_genes
 from spatial_transcript_former.data.pathways import (
     download_msigdb_gmt,

@@ -2,7 +2,10 @@ import torch
 import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
-from spatial_transcript_former.recipes.hest.dataset import HEST_Dataset, HEST_FeatureDataset
+from spatial_transcript_former.recipes.hest.dataset import (
+    HEST_Dataset,
+    HEST_FeatureDataset,
+)
 
 
 @pytest.fixture
