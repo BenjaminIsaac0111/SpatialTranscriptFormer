@@ -1,6 +1,7 @@
-# Training Guide
+# Training Guide (HEST Benchmark Recipe)
 
-This guide provides command-line recipes for training different architectures and configurations using `spatial_transcript_former.train`.
+> [!NOTE]
+> This guide provides command-line recipes specifically for the **HEST-1k benchmark dataset**. If you are looking to train on your own data using the core API, please see the **[Python API Reference](API.md)**.
 
 ## Prerequisites
 

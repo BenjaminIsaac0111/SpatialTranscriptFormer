@@ -1,6 +1,6 @@
-# HEST-1k Recipe
+# HEST-1k Recipe (Exemplar)
 
-This directory contains the recipe for training `SpatialTranscriptFormer` on the **HEST-1k** benchmark dataset.
+This directory serves as a comprehensive **exemplar** for training `SpatialTranscriptFormer` on the **HEST-1k** benchmark dataset.
 
 While the core `SpatialTranscriptFormer` framework is dataset-agnostic, this recipe provides a complete, out-of-the-box pipeline for reproducing our benchmarks, including data downloading, preprocessing, and specialized dataloaders.
 

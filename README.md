@@ -1,20 +1,46 @@
-# SpatialTranscriptFormer
+# SpatialTranscriptFormer Framework
 
 > [!WARNING]
 > **Work in Progress**: This project is under active development. Core architectures, CLI flags, and data formats are subject to major changes.
+
+<!-- -->
 
 > [!TIP]
 > **Framework Release**: SpatialTranscriptFormer has been restructured from a research codebase into a robust framework. You can now use the Python API to train on your own spatial transcriptomics data with custom backbones and architectures.
 
 **SpatialTranscriptFormer** is a modular deep learning framework designed to bridge histology and biological pathways. It leverages transformer architectures to model the interplay between morphological features and gene expression signatures, providing interpretable mapping of the tissue microenvironment.
 
+## Python API: Quick Start
+
+The framework is designed to be integrated programmatically into your scanpy/AnnData workflows:
+
+```python
+from spatial_transcript_former import SpatialTranscriptFormer, Predictor, FeatureExtractor
+from spatial_transcript_former.predict import inject_predictions
+
+# 1. Initialize model and backbone
+model = SpatialTranscriptFormer.from_pretrained("./checkpoints/stf_small/")
+extractor = FeatureExtractor(backbone="phikon", device="cuda")
+predictor = Predictor(model, device="cuda")
+
+# 2. Predict from features
+predictions = predictor.predict_wsi(features, coords) # (1, G)
+
+# 3. Integrate with Scanpy
+inject_predictions(adata, coords, predictions[0], gene_names=model.gene_names)
+```
+
+For more details, see the **[Python API Reference](docs/API.md)**.
+
 ## Key Technical Pillars
 
+- **Modular Architecture**: Decoupled backbones, interaction modules, and output heads.
 - **Quad-Flow Interaction**: Configurable attention between Pathways and Histology patches (`p2p`, `p2h`, `h2p`, `h2h`).
 - **Pathway Bottleneck**: Interpretable gene expression prediction via 50 MSigDB Hallmark tokens.
-- **Spatial Pattern Coherence**: Optimized using a composite **MSE + PCC (Pearson Correlation) loss** to prevent spatial collapse and ensure accurate morphology-expression mapping.
+- **Spatial Pattern Coherence**: Optimized using a composite **MSE + PCC (Pearson Correlation) loss**.
 - **Foundation Model Ready**: Native support for **CTransPath**, **Phikon**, **Hibou**, and **GigaPath**.
-- **Biologically Informed Initialization**: Gene reconstruction weights derived from known hallmark memberships.
+
+---
 
 ## License
 
@@ -31,69 +57,42 @@ This project is protected by a **Proprietary Source Code License**. See the [LIC
 
 The core architectural innovations, including the **SpatialTranscriptFormer** interaction logic and spatial masking strategies, are the unique Intellectual Property of the author. For a detailed breakdown, see the [IP Statement](docs/IP_STATEMENT.md).
 
+---
+
 ## Installation
 
 This project requires [Conda](https://docs.conda.io/en/latest/).
 
 1. Clone the repository.
 2. Run the automated setup script:
-3. On Windows: `.\setup.ps1`
-4. On Linux/HPC: `bash setup.sh`
+   - On Windows: `.\setup.ps1`
+   - On Linux/HPC: `bash setup.sh`
 
-## Usage: HEST-1k Benchmark Recipe
+## Exemplar Recipe: HEST-1k Benchmark
 
-While the core `SpatialTranscriptFormer` framework can be integrated programmatically with any dataset (see the **[Python API Reference](docs/API.md)** and **[Bring Your Own Data Guide](src/spatial_transcript_former/recipes/custom/README.md)**), this repository includes a complete, out-of-the-box CLI pipeline specifically for reproducing our benchmarks on the [HEST-1k dataset](https://huggingface.co/datasets/MahmoodLab/hest).
+The `SpatialTranscriptFormer` repository includes a complete, out-of-the-box CLI pipeline as an exemplar for reproducing our benchmarks on the [HEST-1k dataset](https://huggingface.co/datasets/MahmoodLab/hest).
 
-### Dataset Access
+### 1. Dataset Access & Preprocessing
 
 ```bash
-# List available filtering options
-stf-download --list-options
-
-# Download a specific subset (e.g., Breast Cancer samples from Visium)
+# Download a specific subset
 stf-download --organ Breast --disease Cancer --tech Visium --local_dir hest_data
-
-# Download all human samples
-stf-download --species "Homo sapiens" --local_dir hest_data
 ```
 
-> [!NOTE]
-> The HEST dataset is gated on Hugging Face. Ensure you have accepted the terms at [MahmoodLab/hest](https://huggingface.co/datasets/MahmoodLab/hest) and are logged in via `huggingface-cli login`.
-
-### Train Models
-
-We provide presets for baseline models and scaled versions of the SpatialTranscriptFormer.
+### 2. Training with Presets
 
 ```bash
 # Recommended: Run the Interaction model (Small)
 python scripts/run_preset.py --preset stf_small
-
-# Run the lightweight Tiny version
-python scripts/run_preset.py --preset stf_tiny
-
-# Run baselines
-python scripts/run_preset.py --preset he2rna_baseline
 ```
 
-For a complete list of configurations, see the [Training Guide](docs/TRAINING_GUIDE.md).
-
-### Real-Time Monitoring
-
-Monitor training progress, loss curves, and **prediction variance (collapse detector)** via the web dashboard:
-
-```bash
-python scripts/monitor.py --run-dir runs/stf_interaction_l4
-```
-
-### Inference & Visualization
-
-Generate spatial maps comparing Ground Truth vs Predictions:
+### 3. Inference & Visualization
 
 ```bash
 stf-predict --data-dir A:\hest_data --sample-id MEND29 --model-path checkpoints/best_model.pth --model-type interaction
 ```
 
-Visualization plots will be saved to the `./results` directory.
+Visualization plots and spatial expression maps will be saved to the `./results` directory. For the full guide, see the **[HEST Recipe Docs](src/spatial_transcript_former/recipes/hest/README.md)**.
 
 ## Documentation
 
