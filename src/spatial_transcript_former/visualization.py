@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import h5py
 import matplotlib.pyplot as plt
-from spatial_transcript_former.data.utils import setup_dataloaders
+from spatial_transcript_former.recipes.hest.utils import setup_dataloaders
 
 
 def _load_histology(h5ad_path):
@@ -177,7 +177,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
         return
 
     # 4. Compute Pathway Truth
-    from spatial_transcript_former.data.dataset import load_global_genes
+    from spatial_transcript_former.recipes.hest.dataset import load_global_genes
 
     gene_names = load_global_genes(args.data_dir, args.num_genes)
 

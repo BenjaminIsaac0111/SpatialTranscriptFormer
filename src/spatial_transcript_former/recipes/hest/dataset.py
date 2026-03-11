@@ -23,116 +23,22 @@ import torch
 import pandas as pd
 import numpy as np
 from .io import decode_h5_string, load_h5ad_metadata
-from torch.utils.data import Dataset, DataLoader, ConcatDataset
+from spatial_transcript_former.data.base import (
+    SpatialDataset,
+    apply_dihedral_augmentation,
+    apply_dihedral_to_tensor,
+    normalize_coordinates,
+)
+from torch.utils.data import DataLoader, ConcatDataset
 from scipy.sparse import csr_matrix
 from typing import List, Optional, Tuple, Union
 from scipy.spatial import KDTree
 import torch.nn.functional as F
 
-# ---------------------------------------------------------------------------
-# Spatial augmentation helpers
-# ---------------------------------------------------------------------------
-
-
-def apply_dihedral_augmentation(coords, op=None):
-    """Apply one of the 8 dihedral symmetries to a set of 2-D coordinates.
-
-    The dihedral group D4 contains 4 rotations and 4 reflections, which leave
-    a square grid invariant.  Applying the same operation to both pixel tensors
-    and coordinate tensors keeps spatial relationships consistent after
-    augmentation.
-
-    Args:
-        coords (torch.Tensor or np.ndarray): Shape ``(N, 2)`` array of (x, y)
-            coordinates defined in a *centred* frame (i.e. the origin is the
-            centre of the slide region, not the top-left corner).
-        op (int, optional): Integer in ``[0, 7]`` selecting the operation.
-            If ``None``, one is chosen uniformly at random.
-
-    Returns:
-        tuple:
-            - **augmented_coords** – same type and shape as the input.
-            - **op** (*int*) – the operation that was applied (useful for
-              applying the same transformation to the corresponding image).
-
-    Operations
-    ----------
-    =====  ==============
-    Index  Description
-    =====  ==============
-    0      Identity
-    1      Rotate 90° CCW
-    2      Rotate 180°
-    3      Rotate 270° CCW
-    4      Flip horizontal  (negate x)
-    5      Flip vertical    (negate y)
-    6      Transpose        (swap x and y)
-    7      Anti-transpose   (swap and negate both)
-    =====  ==============
-    """
-    is_torch = isinstance(coords, torch.Tensor)
-    if is_torch:
-        x, y = coords[..., 0].clone(), coords[..., 1].clone()
-    else:
-        x, y = coords[..., 0].copy(), coords[..., 1].copy()
-
-    if op is None:
-        op = np.random.randint(0, 8)
-
-    if op == 0:  # Identity
-        pass
-    elif op == 1:  # Rotate 90° CCW
-        x, y = y, -x
-    elif op == 2:  # Rotate 180°
-        x, y = -x, -y
-    elif op == 3:  # Rotate 270° CCW
-        x, y = -y, x
-    elif op == 4:  # Flip horizontal
-        x = -x
-    elif op == 5:  # Flip vertical
-        y = -y
-    elif op == 6:  # Transpose
-        x, y = y, x
-    elif op == 7:  # Anti-transpose
-        x, y = -y, -x
-
-    if is_torch:
-        return torch.stack([x, y], dim=-1), op
-    else:
-        return np.stack([x, y], axis=-1), op
-
-
-def apply_dihedral_to_tensor(img, op):
-    """Apply a dihedral operation to a ``(C, H, W)`` image tensor.
-
-    Each operation matches the coordinate transform in
-    :func:`apply_dihedral_augmentation` so that pixel content and spatial
-    coordinates stay aligned after augmentation.
-
-    Args:
-        img (torch.Tensor): Image tensor of shape ``(C, H, W)``.
-        op (int): Operation index in ``[0, 7]``.
-
-    Returns:
-        torch.Tensor: Transformed image tensor, same shape as ``img``.
-    """
-    if op == 0:
-        return img
-    if op == 1:
-        return torch.rot90(img, k=1, dims=[1, 2])  # Rotate 90° CCW
-    if op == 2:
-        return torch.rot90(img, k=2, dims=[1, 2])  # Rotate 180°
-    if op == 3:
-        return torch.rot90(img, k=3, dims=[1, 2])  # Rotate 270° CCW
-    if op == 4:
-        return torch.flip(img, dims=[2])  # Flip horizontal (width axis)
-    if op == 5:
-        return torch.flip(img, dims=[1])  # Flip vertical   (height axis)
-    if op == 6:
-        return img.transpose(1, 2)  # Transpose
-    if op == 7:
-        return img.transpose(1, 2).flip(dims=[1, 2])  # Anti-transpose
-    return img
+# Augmentation helpers and normalize_coordinates are now in data.base
+# and imported above. Kept here for backward compatibility:
+# from spatial_transcript_former.recipes.hest.dataset import apply_dihedral_augmentation
+# still works via the import at the top of this file.
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +46,7 @@ def apply_dihedral_to_tensor(img, op):
 # ---------------------------------------------------------------------------
 
 
-class HEST_Dataset(Dataset):
+class HEST_Dataset(SpatialDataset):
     """PyTorch Dataset that loads raw histology patches from a HEST ``.h5`` file.
 
     Each item is a tuple ``(patches, gene_counts, rel_coords)`` where:
@@ -398,27 +304,7 @@ def load_gene_expression_matrix(
         return final_subset, valid_patch_mask, selected_names
 
 
-def normalize_coordinates(coords: np.ndarray) -> np.ndarray:
-    """Auto-normalizes physical coordinates to integer grid indices."""
-    if len(coords) == 0:
-        return coords
-
-    x_vals = np.unique(coords[:, 0])
-    y_vals = np.unique(coords[:, 1])
-
-    dx = x_vals[1:] - x_vals[:-1]
-    dy = y_vals[1:] - y_vals[:-1]
-
-    steps = np.concatenate([dx, dy])
-    valid_steps = steps[steps > 0.5]
-
-    if len(valid_steps) == 0:
-        return coords
-
-    step_size = valid_steps.min()
-    if step_size >= 2.0:
-        return np.round(coords / step_size).astype(coords.dtype)
-    return coords
+# normalize_coordinates is now in data.base and imported above.
 
 
 def load_global_genes(root_dir: str, num_genes: int = 1000) -> List[str]:
@@ -587,7 +473,7 @@ def get_hest_dataloader(
 # ---------------------------------------------------------------------------
 
 
-class HEST_FeatureDataset(Dataset):
+class HEST_FeatureDataset(SpatialDataset):
     """Dataset for pre-computed backbone feature vectors.
 
     Loads CTransPath (or any other backbone) feature vectors from a ``.pt``

@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 import os
 import tempfile
-from spatial_transcript_former.data.splitting import split_hest_patients, main
+from spatial_transcript_former.recipes.hest.splitting import split_hest_patients, main
 import sys
 from unittest.mock import patch
 

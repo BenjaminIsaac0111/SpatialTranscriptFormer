@@ -2,7 +2,10 @@ import torch
 import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
-from spatial_transcript_former.data.dataset import HEST_Dataset, HEST_FeatureDataset
+from spatial_transcript_former.recipes.hest.dataset import (
+    HEST_Dataset,
+    HEST_FeatureDataset,
+)
 
 
 @pytest.fixture
@@ -38,10 +41,10 @@ def test_hest_dataset_augmentation_consistency(mock_h5_file):
     # are called with the same 'op'.
     with (
         patch(
-            "spatial_transcript_former.data.dataset.apply_dihedral_to_tensor"
+            "spatial_transcript_former.recipes.hest.dataset.apply_dihedral_to_tensor"
         ) as mock_tensor_aug,
         patch(
-            "spatial_transcript_former.data.dataset.apply_dihedral_augmentation"
+            "spatial_transcript_former.recipes.hest.dataset.apply_dihedral_augmentation"
         ) as mock_coord_aug,
     ):
 
@@ -75,7 +78,7 @@ def test_hest_feature_dataset_neighborhood_dropout():
     with (
         patch("torch.load") as mock_load,
         patch(
-            "spatial_transcript_former.data.dataset.load_gene_expression_matrix"
+            "spatial_transcript_former.recipes.hest.dataset.load_gene_expression_matrix"
         ) as mock_gene_load,
     ):
 

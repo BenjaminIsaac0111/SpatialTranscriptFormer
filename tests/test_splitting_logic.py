@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 import pytest
-from spatial_transcript_former.data import split_hest_patients
+from spatial_transcript_former.recipes.hest.splitting import split_hest_patients
 
 
 def test_split_hest_patients():

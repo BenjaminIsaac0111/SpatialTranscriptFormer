@@ -3,7 +3,7 @@ import h5py
 import numpy as np
 import pytest
 from unittest.mock import patch, MagicMock
-from spatial_transcript_former.data.io import (
+from spatial_transcript_former.recipes.hest.io import (
     get_hest_data_dir,
     decode_h5_string,
     load_h5ad_metadata,
@@ -17,7 +17,7 @@ def test_decode_h5_string():
     assert decode_h5_string(123) == "123"
 
 
-@patch("spatial_transcript_former.data.io.get_config")
+@patch("spatial_transcript_former.recipes.hest.io.get_config")
 @patch("os.path.exists")
 def test_get_hest_data_dir_from_config(mock_exists, mock_get_config):
     # Mock config to return a specific path
@@ -32,7 +32,7 @@ def test_get_hest_data_dir_from_config(mock_exists, mock_get_config):
     mock_get_config.assert_called_with("data_dirs", [])
 
 
-@patch("spatial_transcript_former.data.io.get_config")
+@patch("spatial_transcript_former.recipes.hest.io.get_config")
 @patch("os.path.exists")
 def test_get_hest_data_dir_fallbacks(mock_exists, mock_get_config):
     mock_get_config.return_value = []
@@ -46,7 +46,7 @@ def test_get_hest_data_dir_fallbacks(mock_exists, mock_get_config):
     assert get_hest_data_dir() == fallback_path
 
 
-@patch("spatial_transcript_former.data.io.get_config")
+@patch("spatial_transcript_former.recipes.hest.io.get_config")
 @patch("os.path.exists")
 def test_get_hest_data_dir_not_found(mock_exists, mock_get_config):
     mock_get_config.return_value = []

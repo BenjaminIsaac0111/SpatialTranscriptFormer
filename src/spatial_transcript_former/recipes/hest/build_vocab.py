@@ -11,7 +11,10 @@ from scipy.sparse import csr_matrix
 
 # Add src to path
 sys.path.append(os.path.abspath("src"))
-from spatial_transcript_former.data.io import get_hest_data_dir, load_h5ad_metadata
+from spatial_transcript_former.recipes.hest.io import (
+    get_hest_data_dir,
+    load_h5ad_metadata,
+)
 from spatial_transcript_former.config import get_config
 from spatial_transcript_former.data.pathways import (
     download_msigdb_gmt,

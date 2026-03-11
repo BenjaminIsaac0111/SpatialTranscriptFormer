@@ -21,7 +21,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from spatial_transcript_former.models.interaction import SpatialTranscriptFormer
-from spatial_transcript_former.data.dataset import (
+from spatial_transcript_former.recipes.hest.dataset import (
     HEST_FeatureDataset,
     load_global_genes,
 )

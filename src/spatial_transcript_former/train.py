@@ -24,7 +24,10 @@ from spatial_transcript_former.training.losses import (
 from spatial_transcript_former.training.engine import train_one_epoch, validate
 from spatial_transcript_former.training.experiment_logger import ExperimentLogger
 from spatial_transcript_former.visualization import run_inference_plot
-from spatial_transcript_former.data.utils import get_sample_ids, setup_dataloaders
+from spatial_transcript_former.recipes.hest.utils import (
+    get_sample_ids,
+    setup_dataloaders,
+)
 
 from spatial_transcript_former.training.arguments import parse_args
 from spatial_transcript_former.training.builder import setup_model, setup_criterion

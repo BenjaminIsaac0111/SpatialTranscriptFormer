@@ -1,5 +1,5 @@
 import os
-from spatial_transcript_former.data.dataset import get_hest_dataloader
+from spatial_transcript_former.recipes.hest.dataset import get_hest_dataloader
 import torch
 
 data_dir = r"A:\hest_data"

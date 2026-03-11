@@ -1,7 +1,7 @@
 import os
 import pytest
 from unittest.mock import patch
-from spatial_transcript_former.data.build_vocab import scan_h5ad_files
+from spatial_transcript_former.recipes.hest.build_vocab import scan_h5ad_files
 
 
 def test_scan_h5ad_files_success(tmp_path):
