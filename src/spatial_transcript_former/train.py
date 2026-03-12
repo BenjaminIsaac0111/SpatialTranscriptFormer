@@ -184,6 +184,8 @@ def main():
             epoch_row["val_pcc"] = round(val_metrics["val_pcc"], 4)
         if val_metrics.get("pred_variance") is not None:
             epoch_row["pred_variance"] = round(val_metrics["pred_variance"], 6)
+        if val_metrics.get("spatial_coherence") is not None:
+            epoch_row["spatial_coherence"] = round(val_metrics["spatial_coherence"], 4)
         if val_metrics.get("attn_correlation") is not None:
             epoch_row["attn_correlation"] = round(val_metrics["attn_correlation"], 4)
 
