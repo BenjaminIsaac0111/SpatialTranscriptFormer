@@ -18,15 +18,20 @@ The framework is designed to be integrated programmatically into your scanpy/Ann
 from spatial_transcript_former import SpatialTranscriptFormer, Predictor, FeatureExtractor
 from spatial_transcript_former.predict import inject_predictions
 
-# 1. Initialize model and backbone
+# 1. Load model and create feature extractor
 model = SpatialTranscriptFormer.from_pretrained("./checkpoints/stf_small/")
 extractor = FeatureExtractor(backbone="phikon", device="cuda")
 predictor = Predictor(model, device="cuda")
 
-# 2. Predict from features
-predictions = predictor.predict_wsi(features, coords) # (1, G)
+# 2. Extract features from image patches
+#    image_patches: (N, 3, 224, 224) float tensor in [0, 1]
+#    coords:        (N, 2) tensor of spatial coordinates (from your WSI tiling)
+features = extractor.extract_batch(image_patches, batch_size=64)  # → (N, 768)
 
-# 3. Integrate with Scanpy
+# 3. Predict gene expression from extracted features
+predictions = predictor.predict_wsi(features, coords)  # → (1, G)
+
+# 4. Integrate with Scanpy
 inject_predictions(adata, coords, predictions[0], gene_names=model.gene_names)
 ```
 
