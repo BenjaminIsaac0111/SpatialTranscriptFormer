@@ -5,6 +5,24 @@ import os
 
 from spatial_transcript_former.config import get_config
 
+# Curated list of MSigDB Hallmarks with strong evidence of involvement in Colorectal/Bowel Cancer
+CRC_PATHWAYS = [
+    "HALLMARK_WNT_BETA_CATENIN_SIGNALING",
+    "HALLMARK_TGF_BETA_SIGNALING",
+    "HALLMARK_KRAS_SIGNALING_UP",
+    "HALLMARK_KRAS_SIGNALING_DN",
+    "HALLMARK_PI3K_AKT_MTOR_SIGNALING",
+    "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION",
+    "HALLMARK_ANGIOGENESIS",
+    "HALLMARK_APICAL_JUNCTION",
+    "HALLMARK_INFLAMMATORY_RESPONSE",
+    "HALLMARK_IL6_JAK_STAT3_SIGNALING",
+    "HALLMARK_APOPTOSIS",
+    "HALLMARK_P53_PATHWAY",
+    "HALLMARK_DNA_REPAIR",
+    "HALLMARK_HYPOXIA",
+]
+
 
 def make_stf_params(n_layers: int, token_dim: int, n_heads: int, batch_size: int):
     """Helper to create standard SpatialTranscriptFormer parameters."""
@@ -14,6 +32,7 @@ def make_stf_params(n_layers: int, token_dim: int, n_heads: int, batch_size: int
         "precomputed": True,
         "whole-slide": True,
         "pathway-init": True,
+        "pathway-loss-weight": 0.5,
         "use-amp": True,
         "log-transform": True,
         "loss": "mse_pcc",
@@ -55,6 +74,11 @@ PRESETS = {
     "stf_small": make_stf_params(n_layers=4, token_dim=384, n_heads=8, batch_size=8),
     "stf_medium": make_stf_params(n_layers=6, token_dim=512, n_heads=8, batch_size=8),
     "stf_large": make_stf_params(n_layers=12, token_dim=768, n_heads=12, batch_size=8),
+    # --- Biologically-Prioritized Variants (e.g. Colorectal Cancer) ---
+    "stf_crc_tiny": {**make_stf_params(2, 256, 4, 8), "pathways": CRC_PATHWAYS},
+    "stf_crc_small": {**make_stf_params(4, 384, 8, 8), "pathways": CRC_PATHWAYS},
+    "stf_crc_medium": {**make_stf_params(6, 512, 8, 8), "pathways": CRC_PATHWAYS},
+    "stf_crc_large": {**make_stf_params(12, 768, 12, 8), "pathways": CRC_PATHWAYS},
 }
 
 
@@ -67,6 +91,9 @@ def params_to_args(params_dict):
             args.append(arg_name)
         elif value is False or value is None:
             continue
+        elif isinstance(value, list) or isinstance(value, tuple):
+            args.append(arg_name)
+            args.extend([str(v) for v in value])
         else:
             args.extend([arg_name, str(value)])
     return args

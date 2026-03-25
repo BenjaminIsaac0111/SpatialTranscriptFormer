@@ -335,16 +335,41 @@ def inject_predictions(
     adata.obsm["spatial"] = coords
 
     # 2. Gene predictions → adata.X
+    #    anndata >=0.12 enforces strict shape consistency — adata.var cannot be
+    #    reassigned independently from adata.X when they'd cause a mismatch.
+    #    Strategy: if the current n_vars doesn't match, rebuild the AnnData
+    #    in-place with the correct shape.
     import pandas as pd
 
-    if gene_names is not None:
-        if len(gene_names) != predictions.shape[1]:
-            raise ValueError(
-                f"gene_names length ({len(gene_names)}) != prediction columns ({predictions.shape[1]})"
-            )
-        adata.var = pd.DataFrame(index=gene_names)
+    n_pred_genes = predictions.shape[1]
+    var_names = (
+        gene_names
+        if gene_names is not None
+        else [f"gene_{i}" for i in range(n_pred_genes)]
+    )
 
-    adata.X = predictions
+    if gene_names is not None and len(gene_names) != n_pred_genes:
+        raise ValueError(
+            f"gene_names length ({len(gene_names)}) != prediction columns ({n_pred_genes})"
+        )
+
+    if adata.n_vars == n_pred_genes:
+        # Shape already matches — direct assignment is safe
+        if gene_names is not None:
+            adata.var = pd.DataFrame(index=gene_names)
+        adata.X = predictions
+    else:
+        # Rebuild AnnData to avoid shape enforcement errors (anndata >=0.12)
+        new_adata = type(adata)(
+            X=predictions,
+            obs=adata.obs.copy(),
+            var=pd.DataFrame(index=var_names),
+        )
+        # Transfer existing obsm (including spatial coords set above)
+        for key in adata.obsm:
+            new_adata.obsm[key] = adata.obsm[key]
+        # Replace contents in-place so the caller's reference stays valid
+        adata.__dict__.update(new_adata.__dict__)
 
     # 3. Pathway scores (optional) → adata.obsm
     if pathway_scores is not None:

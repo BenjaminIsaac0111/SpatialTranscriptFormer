@@ -36,6 +36,36 @@ def parse_args():
         "--log-transform", action="store_true", help="Log1p transform targets"
     )
     g.add_argument("--organ", type=str, default=None, help="Filter samples by organ")
+    g.add_argument(
+        "--qc-min-umis",
+        type=int,
+        default=get_config("qc.min_umis", None),
+        help="Minimum UMI count per spot",
+    )
+    g.add_argument(
+        "--qc-min-genes",
+        type=int,
+        default=get_config("qc.min_genes", None),
+        help="Minimum detected genes per spot",
+    )
+    g.add_argument(
+        "--qc-max-mt",
+        type=float,
+        default=get_config("qc.max_mt", None),
+        help="Maximum mitochondrial fraction per spot",
+    )
+    g.add_argument(
+        "--target-sum",
+        type=int,
+        default=get_config("training.target_sum", 10000),
+        help="Target sum for library-size normalization (CP10k default)",
+    )
+    g.add_argument(
+        "--qc-cache-dir",
+        type=str,
+        default=None,
+        help="Directory to store/load QC results (masks) for faster startup",
+    )
 
     # Loss
     parser.add_argument(
@@ -127,6 +157,18 @@ def parse_args():
     )
     g.add_argument(
         "--weak-supervision", action="store_true", help="Bag-level training for MIL"
+    )
+    g.add_argument(
+        "--interaction-type",
+        type=str,
+        default=None,
+        help="Interaction architecture type (placeholder for future experiments)",
+    )
+    g.add_argument(
+        "--pathway-sparsity",
+        type=str,
+        default=None,
+        help="Pathway sparsity topology (placeholder for future experiments)",
     )
     g.add_argument(
         "--pathway-init",

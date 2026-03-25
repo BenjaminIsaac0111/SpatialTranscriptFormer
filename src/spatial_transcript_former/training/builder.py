@@ -30,20 +30,16 @@ def setup_model(args, device):
         # Load biological pathway initialization if requested
         pathway_init = None
         if getattr(args, "pathway_init", False):
+            from spatial_transcript_former.data import GeneVocab
             from spatial_transcript_former.data.pathways import (
                 get_pathway_init,
                 MSIGDB_URLS,
             )
-            import json
 
-            genes_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                "global_genes.json",
+            vocab = GeneVocab.from_json(
+                getattr(args, "data_dir", ""), num_genes=args.num_genes
             )
-            if not os.path.exists(genes_path):
-                genes_path = "global_genes.json"
-            with open(genes_path) as f:
-                gene_list = json.load(f)
+            gene_list = vocab.genes
 
             if getattr(args, "custom_gmt", None):
                 urls = args.custom_gmt
@@ -59,7 +55,9 @@ def setup_model(args, device):
                 urls = [MSIGDB_URLS["hallmarks"]]
 
             pathway_init, pathway_names = get_pathway_init(
-                gene_list[: args.num_genes], gmt_urls=urls, filter_names=args.pathways
+                gene_list[: args.num_genes],
+                gmt_urls=urls,
+                filter_names=args.pathways
             )
             # Override num_pathways based on actual parsed paths
             args.num_pathways = len(pathway_names)

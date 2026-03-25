@@ -22,6 +22,9 @@ import json
 import torch
 import pandas as pd
 import numpy as np
+import hashlib
+import pickle
+from typing import List, Optional
 from .io import decode_h5_string, load_h5ad_metadata
 from spatial_transcript_former.data.base import (
     SpatialDataset,
@@ -30,7 +33,7 @@ from spatial_transcript_former.data.base import (
     normalize_coordinates,
 )
 from torch.utils.data import DataLoader, ConcatDataset
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, issparse
 from typing import List, Optional, Tuple, Union
 from scipy.spatial import KDTree
 import torch.nn.functional as F
@@ -180,6 +183,11 @@ def load_gene_expression_matrix(
     patch_barcodes: List[bytes],
     selected_gene_names: Optional[List[str]] = None,
     num_genes: int = 1000,
+    qc_min_umis: Optional[int] = None,
+    qc_min_genes: Optional[int] = None,
+    qc_max_mt: Optional[float] = None,
+    target_sum: Optional[int] = None,
+    qc_cache_dir: Optional[str] = None,
 ):
     """Load and align a gene expression matrix from a HEST ``.h5ad`` file.
 
@@ -214,6 +222,28 @@ def load_gene_expression_matrix(
               output columns (discovery mode) or the unchanged input list
               (alignment mode).
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # --- QC Caching ---
+    qc_params_hash = None
+    loaded_from_cache = False
+    if qc_cache_dir and (qc_min_umis is not None or qc_min_genes is not None or qc_max_mt is not None):
+        os.makedirs(qc_cache_dir, exist_ok=True)
+        # Create a unique hash for the QC parameters and this sample
+        qc_str = f"{os.path.basename(h5ad_path)}_{qc_min_umis}_{qc_min_genes}_{qc_max_mt}"
+        qc_params_hash = hashlib.md5(qc_str.encode()).hexdigest()
+        cache_path = os.path.join(qc_cache_dir, f"{qc_params_hash}.pt")
+        
+        if os.path.exists(cache_path):
+            try:
+                cached_data = torch.load(cache_path, weights_only=False)
+                cached_qc_mask = cached_data["valid_patch_mask"]
+                loaded_from_cache = True
+                logger.info(f"Loaded QC mask from cache: {cache_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load QC cache from {cache_path}: {e}")
+    
     metadata = load_h5ad_metadata(h5ad_path)
 
     st_barcodes = metadata["barcodes"]
@@ -238,6 +268,13 @@ def load_gene_expression_matrix(
         valid_patch_mask = np.array(valid_patch_mask)
         patch_indices_array = np.array(patch_indices)
 
+        # If we loaded from cache, restore the combined (barcode + QC) mask.
+        # The barcode loop above only produces a barcode-match mask; applying the
+        # cached mask here ensures QC-filtered spots are excluded from matrix
+        # slicing and from the returned mask without re-running QC.
+        if loaded_from_cache:
+            valid_patch_mask = cached_qc_mask
+
         # --- Load expression matrix (sparse or dense) ---
         X = f["X"]
         if isinstance(X, h5py.Group):
@@ -251,14 +288,88 @@ def load_gene_expression_matrix(
         else:
             raise ValueError("Unknown X format in h5ad file")
 
-        # Slice rows to the valid patches only
+        # Slice rows to the valid patches found in barcodes
         valid_indices = patch_indices_array[valid_patch_mask]
+        if issparse(mat):
+            mat = mat.tocsr()
         mat_subset = mat[valid_indices]
+
+        # --- Per-spot Quality Control (QC) ---
+        if (qc_min_umis is not None or qc_min_genes is not None or qc_max_mt is not None) and not loaded_from_cache:
+            n_spots_before = mat_subset.shape[0]
+            
+            # Calculate metrics
+            n_counts = np.array(mat_subset.sum(axis=1)).flatten()
+            n_genes = np.array((mat_subset > 0).sum(axis=1)).flatten()
+            
+            qc_mask = np.ones(n_spots_before, dtype=bool)
+            
+            if qc_min_umis is not None:
+                qc_mask &= (n_counts >= qc_min_umis)
+            if qc_min_genes is not None:
+                qc_mask &= (n_genes >= qc_min_genes)
+                
+            if qc_max_mt is not None:
+                mt_prefixes = ["mt-", "mt:", "mt_", "grcm38_mt-", "hs_mt-"]
+                mt_genes = [
+                    i for i, name in enumerate(current_gene_names) 
+                    if any(p in name.lower() for p in mt_prefixes)
+                ]
+                if mt_genes:
+                    if isinstance(mat_subset, csr_matrix):
+                        mt_counts = np.array(mat_subset[:, mt_genes].sum(axis=1)).flatten()
+                    else:
+                        mt_counts = np.sum(mat_subset[:, mt_genes], axis=1)
+                    
+                    pct_counts_mt = mt_counts / (n_counts + 1e-9)
+                    qc_mask &= (pct_counts_mt <= qc_max_mt)
+                else:
+                    logger.warning(f"QC max_mt specified but no mitochondrial genes found in {os.path.basename(h5ad_path)}")
+
+            n_spots_after = np.sum(qc_mask)
+            if n_spots_after < n_spots_before:
+                filtered_count = n_spots_before - n_spots_after
+                logger.info(f"QC filtered {filtered_count}/{n_spots_before} spots from {os.path.basename(h5ad_path)} ({n_spots_after/n_spots_before:.1%} kept)")
+
+                if n_spots_after < n_spots_before * 0.5:
+                    logger.warning(f"CRITICAL: More than 50% of spots filtered in {os.path.basename(h5ad_path)}! Check thresholds or data quality.")
+
+                mat_subset = mat_subset[qc_mask]
+
+            # Always update valid_patch_mask to reflect QC results
+            # (no-op when qc_mask is all-True, but keeps the mask consistent
+            # and ensures the cache always stores the combined barcode+QC mask).
+            global_qc_mask = np.zeros(len(valid_patch_mask), dtype=bool)
+            valid_mask_indices = np.where(valid_patch_mask)[0]
+            global_qc_mask[valid_mask_indices[qc_mask]] = True
+            valid_patch_mask = global_qc_mask
+
+            # Save to cache if enabled
+            if qc_params_hash and qc_cache_dir:
+                cache_path = os.path.join(qc_cache_dir, f"{qc_params_hash}.pt")
+                torch.save({"valid_patch_mask": valid_patch_mask}, cache_path)
+                logger.info(f"Saved QC mask to cache: {cache_path}")
+
+        # --- Library-size Normalization ---
+        if target_sum is not None and target_sum > 0:
+            row_sums = np.array(mat_subset.sum(axis=1)).flatten()
+            # Scaling factor: target_sum / total_counts_per_spot
+            # Avoid division by zero for spots with 0 counts
+            scaling_factor = target_sum / (row_sums + 1e-9)
+            scaling_factor = scaling_factor.reshape(-1, 1)
+            
+            if issparse(mat_subset):
+                # Efficiently scale sparse matrix rows
+                mat_subset = mat_subset.multiply(scaling_factor)
+            else:
+                mat_subset = mat_subset * scaling_factor
+            
+            logger.info(f"Normalized library sizes to target_sum={target_sum} per spot.")
 
         # --- Select / align genes ---
         if selected_gene_names is None:
             # Discovery mode: pick top-N genes by total count
-            if isinstance(mat_subset, csr_matrix):
+            if issparse(mat_subset):
                 gene_sums = np.array(mat_subset.sum(axis=0)).flatten()
             else:
                 gene_sums = np.sum(mat_subset, axis=0)
@@ -267,7 +378,7 @@ def load_gene_expression_matrix(
             selected_names = [current_gene_names[i] for i in top_indices]
 
             final_subset_raw = mat_subset[:, top_indices]
-            if isinstance(final_subset_raw, csr_matrix):
+            if issparse(final_subset_raw):
                 final_subset_raw = final_subset_raw.toarray()
 
             # Pad with zeros if fewer than num_genes are available
@@ -291,11 +402,12 @@ def load_gene_expression_matrix(
                     valid_src_indices.append(gene_name_to_idx[name])
                     valid_dst_indices.append(i)
 
-            n_valid_patches = len(valid_indices)
+            n_valid_patches = mat_subset.shape[0]
             final_subset = np.zeros((n_valid_patches, num_genes), dtype=np.float32)
 
             if valid_src_indices:
-                if isinstance(mat_subset, csr_matrix):
+                if issparse(mat_subset):
+                    mat_subset = mat_subset.tocsr()
                     cols_data = mat_subset[:, valid_src_indices].toarray()
                 else:
                     cols_data = mat_subset[:, valid_src_indices]
@@ -310,38 +422,27 @@ def load_gene_expression_matrix(
 def load_global_genes(root_dir: str, num_genes: int = 1000) -> List[str]:
     """Load a globally consistent gene list from ``global_genes.json``.
 
-    Searches ``root_dir`` first, then the current working directory.
+    .. deprecated::
+        Use :class:`~spatial_transcript_former.data.GeneVocab` directly.
+        This function is retained for backward compatibility.
 
     Args:
         root_dir (str): Primary directory to look for ``global_genes.json``.
-        num_genes (int): Maximum number of genes to return (truncates the list
-            if it is longer than this value).
+        num_genes (int): Maximum number of genes to return.
 
     Returns:
         List[str]: Ordered list of gene names.
-
-    Raises:
-        FileNotFoundError: If ``global_genes.json`` cannot be found.
-        RuntimeError: If the file cannot be parsed.
     """
-    global_genes_path = os.path.join(root_dir, "global_genes.json")
-    if not os.path.exists(global_genes_path):
-        global_genes_path = "global_genes.json"
+    import warnings
+    warnings.warn(
+        "load_global_genes() is deprecated. Use GeneVocab.from_json() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from spatial_transcript_former.data import GeneVocab
 
-    if not os.path.exists(global_genes_path):
-        raise FileNotFoundError(
-            f"global_genes.json not found in '{root_dir}' or the current directory. "
-            "Ensure global_genes.json exists to maintain consistent gene representation."
-        )
-
-    try:
-        with open(global_genes_path, "r") as f:
-            genes = json.load(f)
-        genes = genes[:num_genes]
-        print(f"Loaded {len(genes)} global genes from {global_genes_path}")
-        return genes
-    except Exception as e:
-        raise RuntimeError(f"Error loading global genes from {global_genes_path}: {e}")
+    vocab = GeneVocab.from_json(root_dir, num_genes=num_genes)
+    return vocab.genes
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +461,11 @@ def get_hest_dataloader(
     n_neighbors: int = 0,
     augment: bool = False,
     log1p: bool = False,
+    qc_min_umis: Optional[int] = None,
+    qc_min_genes: Optional[int] = None,
+    qc_max_mt: Optional[float] = None,
+    target_sum: Optional[int] = None,
+    qc_cache_dir: Optional[str] = None,
 ):
     """Build a DataLoader over raw histology patches for a list of HEST sample IDs.
 
@@ -418,6 +524,11 @@ def get_hest_dataloader(
                 patch_barcodes,
                 selected_gene_names=common_gene_names,
                 num_genes=num_genes,
+                qc_min_umis=qc_min_umis,
+                qc_min_genes=qc_min_genes,
+                qc_max_mt=qc_max_mt,
+                target_sum=target_sum,
+                qc_cache_dir=qc_cache_dir,
             )
 
             coords_subset = coords_all[mask]
@@ -505,6 +616,10 @@ class HEST_FeatureDataset(SpatialDataset):
         whole_slide_mode (bool): Return all patches as a single item.
         augment (bool): Apply dihedral and neighbourhood dropout augmentations.
         log1p (bool): Apply ``log1p`` transform to gene expression counts.
+        qc_min_umis (int, optional): Minimum UMI count per spot.
+        qc_min_genes (int, optional): Minimum detected genes per spot.
+        qc_max_mt (float, optional): Maximum mitochondrial fraction per spot.
+        target_sum (int, optional): Target sum for library-size normalization.
     """
 
     def __init__(
@@ -519,6 +634,11 @@ class HEST_FeatureDataset(SpatialDataset):
         whole_slide_mode: bool = False,
         augment: bool = False,
         log1p: bool = False,
+        qc_min_umis: Optional[int] = None,
+        qc_min_genes: Optional[int] = None,
+        qc_max_mt: Optional[float] = None,
+        target_sum: Optional[int] = None,
+        qc_cache_dir: Optional[str] = None,
     ):
         self.feature_path = feature_path
         self.h5ad_path = h5ad_path
@@ -530,6 +650,11 @@ class HEST_FeatureDataset(SpatialDataset):
         self.whole_slide_mode = whole_slide_mode
         self.augment = augment
         self.log1p = log1p
+        self.qc_min_umis = qc_min_umis
+        self.qc_min_genes = qc_min_genes
+        self.qc_max_mt = qc_max_mt
+        self.target_sum = target_sum
+        self.qc_cache_dir = qc_cache_dir
 
         if not self.whole_slide_mode:
             self._load_data()
@@ -554,6 +679,11 @@ class HEST_FeatureDataset(SpatialDataset):
             barcodes,
             selected_gene_names=self.selected_gene_names,
             num_genes=self.num_genes,
+            qc_min_umis=self.qc_min_umis,
+            qc_min_genes=self.qc_min_genes,
+            qc_max_mt=self.qc_max_mt,
+            target_sum=self.target_sum,
+            qc_cache_dir=self.qc_cache_dir,
         )
 
         if self.log1p:
@@ -594,6 +724,11 @@ class HEST_FeatureDataset(SpatialDataset):
             barcodes,
             selected_gene_names=self.selected_gene_names,
             num_genes=self.num_genes,
+            qc_min_umis=self.qc_min_umis,
+            qc_min_genes=self.qc_min_genes,
+            qc_max_mt=self.qc_max_mt,
+            target_sum=self.target_sum,
+            qc_cache_dir=self.qc_cache_dir,
         )
 
         if self.log1p:
@@ -623,10 +758,12 @@ class HEST_FeatureDataset(SpatialDataset):
             dists = np.array([dists])
             neighbor_idxs = np.array([neighbor_idxs])
 
-        # Pad when the slide has fewer patches than requested neighbours
+        # Pad when the slide has fewer patches than requested neighbours.
+        # Center (idx) must remain first so rel_coords[0] == [0, 0].
         if len(self.coords) < self.n_neighbors + 1:
             pad_len = (self.n_neighbors + 1) - len(self.coords)
-            neighbor_idxs = np.array(list(range(len(self.coords))) + [idx] * pad_len)
+            others = [i for i in range(len(self.coords)) if i != idx]
+            neighbor_idxs = np.array([idx] + others[:self.n_neighbors] + [idx] * pad_len)
 
         # --- Optional global context ---
         if self.use_global_context:
@@ -659,11 +796,6 @@ class HEST_FeatureDataset(SpatialDataset):
         rel_coords = self.coords[combined_idxs] - center_coord  # (S, 2)
 
         if self.augment:
-            # Coordinate jitter (applied to neighbours only; centre stays at origin)
-            jitter = torch.randn_like(rel_coords) * 5.0
-            jitter[0] = 0.0
-            rel_coords = rel_coords + jitter
-
             # Dihedral rotation / flip
             rel_coords, _ = apply_dihedral_augmentation(rel_coords)
 
@@ -690,6 +822,11 @@ def get_hest_feature_dataloader(
     augment: bool = False,
     log1p: bool = False,
     feature_dir: Optional[str] = None,
+    qc_min_umis: Optional[int] = None,
+    qc_min_genes: Optional[int] = None,
+    qc_max_mt: Optional[float] = None,
+    target_sum: Optional[int] = None,
+    qc_cache_dir: Optional[str] = None,
 ):
     """Build a DataLoader over pre-computed feature vectors for a list of HEST sample IDs.
 
@@ -753,6 +890,11 @@ def get_hest_feature_dataloader(
                 whole_slide_mode=whole_slide_mode,
                 augment=augment,
                 log1p=log1p,
+                qc_min_umis=qc_min_umis,
+                qc_min_genes=qc_min_genes,
+                qc_max_mt=qc_max_mt,
+                target_sum=target_sum,
+                qc_cache_dir=qc_cache_dir,
             )
             datasets.append(ds)
 
