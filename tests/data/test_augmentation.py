@@ -13,7 +13,6 @@ from spatial_transcript_former.recipes.hest.dataset import (
 )
 from spatial_transcript_former.models import SpatialTranscriptFormer
 
-
 # --- From test_spatial_augment.py ---
 
 
@@ -45,6 +44,7 @@ def test_apply_dihedral_augmentation_numpy():
     out, _ = apply_dihedral_augmentation(coords)
     assert isinstance(out, np.ndarray)
     assert out.shape == coords.shape
+
 
 # --- From test_augmentation_sync.py ---
 
@@ -90,6 +90,7 @@ def test_sync_logic():
         else:
             # Should not happen as identity/rotations/flips preserve count
             assert False, f"Pixel lost in op {op}"
+
 
 # --- From test_spatial_alignment.py ---
 

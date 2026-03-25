@@ -17,6 +17,7 @@ import shutil
 import io
 import sys
 import os
+
 sys.path.append(os.path.abspath("."))
 sys.path.append(os.path.abspath("scripts"))
 from download_hest import main
@@ -32,7 +33,6 @@ from spatial_transcript_former.recipes.hest.download import (
     filter_samples,
     download_hest_subset,
 )
-
 
 # --- From test_io.py ---
 
@@ -133,6 +133,7 @@ def test_get_image_from_h5ad(tmp_path):
     img, scalef = get_image_from_h5ad(h5_path, img_type=None)
     assert np.allclose(img, img_data)
     assert scalef == 0.1
+
 
 # --- From test_download.py ---
 
@@ -251,6 +252,7 @@ class TestDownload(unittest.TestCase):
 
         self.assertEqual(mock_zipfile.call_count, 3)
         mock_zip_instance.extractall.assert_called()
+
 
 # --- From test_download_script.py ---
 

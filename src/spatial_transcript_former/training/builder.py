@@ -55,9 +55,7 @@ def setup_model(args, device):
                 urls = [MSIGDB_URLS["hallmarks"]]
 
             pathway_init, pathway_names = get_pathway_init(
-                gene_list[: args.num_genes],
-                gmt_urls=urls,
-                filter_names=args.pathways
+                gene_list[: args.num_genes], gmt_urls=urls, filter_names=args.pathways
             )
             # Override num_pathways based on actual parsed paths
             args.num_pathways = len(pathway_names)

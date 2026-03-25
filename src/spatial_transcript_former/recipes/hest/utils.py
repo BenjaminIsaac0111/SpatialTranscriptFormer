@@ -197,7 +197,7 @@ def setup_dataloaders(args, train_ids, val_ids):
                     qc_min_genes=args.qc_min_genes,
                     qc_max_mt=args.qc_max_mt,
                     target_sum=args.target_sum,
-                qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
                 )
                 if train_ids
                 else None
@@ -218,7 +218,7 @@ def setup_dataloaders(args, train_ids, val_ids):
                     qc_min_genes=args.qc_min_genes,
                     qc_max_mt=args.qc_max_mt,
                     target_sum=args.target_sum,
-                qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
                 )
                 if val_ids
                 else None

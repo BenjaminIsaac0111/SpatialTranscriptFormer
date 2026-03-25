@@ -18,6 +18,7 @@ MSIGDB_URLS = {
     "c2_cgp": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cgp.v2024.1.Hs.symbols.gmt",
 }
 
+
 def download_msigdb_gmt(url: str, filename: str, cache_dir: str = ".cache") -> str:
     """
     Download an MSigDB GMT file if not already cached.

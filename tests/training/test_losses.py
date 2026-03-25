@@ -14,7 +14,6 @@ from spatial_transcript_former.training.losses import (
 )
 from spatial_transcript_former.training.losses import ZINBLoss, PCCLoss
 
-
 # --- From test_losses.py ---
 
 
@@ -602,6 +601,7 @@ class TestAuxiliaryPathwayLoss:
         # Case 3: Gene expression is specifically high for P0, and pw_preds are high for P0
         # If the spatial correlation is high, aux loss should be low.
         assert loss_perfect.item() < loss_random.item()
+
 
 # --- From test_losses_robust.py ---
 

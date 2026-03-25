@@ -20,7 +20,6 @@ from spatial_transcript_former.data.pathways import (
     MSIGDB_URLS,
 )
 
-
 # --- From test_data_integrity.py ---
 
 

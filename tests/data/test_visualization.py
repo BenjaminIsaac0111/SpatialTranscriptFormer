@@ -16,7 +16,6 @@ from spatial_transcript_former.data.spatial_stats import (
     _build_knn_weights,
 )
 
-
 # --- From test_visualization.py ---
 
 
@@ -172,6 +171,7 @@ class TestZScoreNormalization:
         assert np.all(np.isfinite(z))
         assert np.allclose(z, 0.0, atol=1e-4)
 
+
 # --- From test_spatial_stats.py ---
 
 
@@ -321,12 +321,14 @@ class TestSpatialCoherenceScore:
         rng = np.random.RandomState(42)
 
         # Create expression with a mix of spatial and random genes
-        expression = np.column_stack([
-            np.array([10.0 if i % 10 < 5 else 0.0 for i in range(n)]),  # clustered
-            np.array([float(i % 10) for i in range(n)]),  # gradient
-            rng.rand(n),  # random
-            rng.rand(n),  # random
-        ])
+        expression = np.column_stack(
+            [
+                np.array([10.0 if i % 10 < 5 else 0.0 for i in range(n)]),  # clustered
+                np.array([float(i % 10) for i in range(n)]),  # gradient
+                rng.rand(n),  # random
+                rng.rand(n),  # random
+            ]
+        )
 
         score = spatial_coherence_score(
             predicted=expression,
@@ -344,11 +346,13 @@ class TestSpatialCoherenceScore:
         rng = np.random.RandomState(42)
 
         # Ground truth: spatially structured
-        gt = np.column_stack([
-            np.array([10.0 if i % 10 < 5 else 0.0 for i in range(n)]),
-            np.array([float(i // 10) for i in range(n)]),
-            np.array([float(i % 10) for i in range(n)]),
-        ])
+        gt = np.column_stack(
+            [
+                np.array([10.0 if i % 10 < 5 else 0.0 for i in range(n)]),
+                np.array([float(i // 10) for i in range(n)]),
+                np.array([float(i % 10) for i in range(n)]),
+            ]
+        )
         # Predictions: random noise
         pred = rng.rand(n, 3)
 

@@ -9,7 +9,6 @@ import pytest
 
 from spatial_transcript_former.config import ProjectConfig, get_config
 
-
 # --- From test_config.py ---
 
 
@@ -41,6 +40,7 @@ def test_config_singleton():
     # Change a value manually (for testing purposes)
     ProjectConfig._config["test_val"] = 123
     assert get_config("test_val") == 123
+
 
 # --- From test_warnings.py ---
 

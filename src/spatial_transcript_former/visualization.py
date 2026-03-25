@@ -53,12 +53,12 @@ def _compute_pathway_truth(gene_truth, gene_names, args):
 
         urls = [MSIGDB_URLS["hallmarks"]]
         # Only use hallmarks for periodic visualization to keep it fast
-        
+
         pw_matrix, pw_names = get_pathway_init(
-            gene_names, 
-            gmt_urls=urls, 
+            gene_names,
+            gmt_urls=urls,
             verbose=False,
-            filter_names=getattr(args, "pathways", None)
+            filter_names=getattr(args, "pathways", None),
         )
         pw_np = pw_matrix.numpy()  # (P, G)
 
@@ -115,7 +115,11 @@ def run_inference_plot(model, args, sample_id, epoch, device):
             # Forward pass
             if args.whole_slide:
                 outputs = model(
-                    image_features, rel_coords=coords, mask=mask, return_dense=True, return_pathways=True
+                    image_features,
+                    rel_coords=coords,
+                    mask=mask,
+                    return_dense=True,
+                    return_pathways=True,
                 )
             else:
                 outputs = model(image_features, rel_coords=coords, return_pathways=True)

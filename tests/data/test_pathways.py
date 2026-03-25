@@ -19,7 +19,6 @@ from spatial_transcript_former.training.losses import (
     MaskedMSELoss,
 )
 
-
 # --- From test_pathways.py ---
 
 
@@ -194,6 +193,7 @@ class TestPathwayTruth:
         stds = np.std(result, axis=0)
         assert np.any(stds > 0.01), "Pathway truth has no spatial variation"
 
+
 # --- From test_pathways_robust.py ---
 
 
@@ -230,6 +230,7 @@ def test_build_membership_matrix_empty():
     matrix, names = build_membership_matrix(pathway_dict, gene_list)
     assert matrix.sum() == 0
     assert names == ["EMPTY"]
+
 
 # --- From test_pathway_stability.py ---
 

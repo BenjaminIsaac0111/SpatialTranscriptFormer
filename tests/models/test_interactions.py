@@ -19,7 +19,6 @@ from spatial_transcript_former.models.interaction import (
 )
 from spatial_transcript_former.training.engine import train_one_epoch, validate
 
-
 # --- From test_interactions.py ---
 
 
@@ -185,6 +184,7 @@ def test_attention_extraction():
         assert p2h_region.max() > 0, f"Layer {i} p2h attention should be non-zero"
 
     print("Attention extraction test passed!")
+
 
 # --- From test_spatial_interaction.py ---
 

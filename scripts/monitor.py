@@ -2,6 +2,7 @@
 """
 Real-time Training Monitor Entrypoint for SpatialTranscriptFormer.
 """
+
 import argparse
 import logging
 from spatial_transcript_former.dashboard.app import init_app, app

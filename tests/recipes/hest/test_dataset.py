@@ -20,7 +20,6 @@ from spatial_transcript_former.recipes.hest.dataset import (
 )
 from spatial_transcript_former.recipes.hest.dataset import get_hest_dataloader
 
-
 # --- From test_dataset_logic.py ---
 
 
@@ -116,6 +115,7 @@ def test_apply_dihedral_to_tensor_consistency():
         # Map back to indices: row = ay + 1, col = ax + 1
         row, col = int(ay + 1), int(ax + 1)
         assert aug_img[0, row, col] == 1.0, f"Inconsistent mapping for op {op}"
+
 
 # --- From test_dataset_mocks.py ---
 
@@ -234,6 +234,7 @@ def test_hest_dataset_log1p_logic(mock_h5_file):
     ds_log = HEST_Dataset("mock.h5", coords, genes, log1p=True)
     _, g_log, _ = ds_log[0]
     assert torch.allclose(g_log[0], torch.log1p(torch.tensor(10.0)))
+
 
 # --- From test_dataloader_h5ad.py ---
 

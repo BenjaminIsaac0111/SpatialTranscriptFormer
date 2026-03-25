@@ -223,18 +223,23 @@ def load_gene_expression_matrix(
               (alignment mode).
     """
     import logging
+
     logger = logging.getLogger(__name__)
 
     # --- QC Caching ---
     qc_params_hash = None
     loaded_from_cache = False
-    if qc_cache_dir and (qc_min_umis is not None or qc_min_genes is not None or qc_max_mt is not None):
+    if qc_cache_dir and (
+        qc_min_umis is not None or qc_min_genes is not None or qc_max_mt is not None
+    ):
         os.makedirs(qc_cache_dir, exist_ok=True)
         # Create a unique hash for the QC parameters and this sample
-        qc_str = f"{os.path.basename(h5ad_path)}_{qc_min_umis}_{qc_min_genes}_{qc_max_mt}"
+        qc_str = (
+            f"{os.path.basename(h5ad_path)}_{qc_min_umis}_{qc_min_genes}_{qc_max_mt}"
+        )
         qc_params_hash = hashlib.md5(qc_str.encode()).hexdigest()
         cache_path = os.path.join(qc_cache_dir, f"{qc_params_hash}.pt")
-        
+
         if os.path.exists(cache_path):
             try:
                 cached_data = torch.load(cache_path, weights_only=False)
@@ -243,7 +248,7 @@ def load_gene_expression_matrix(
                 logger.info(f"Loaded QC mask from cache: {cache_path}")
             except Exception as e:
                 logger.warning(f"Failed to load QC cache from {cache_path}: {e}")
-    
+
     metadata = load_h5ad_metadata(h5ad_path)
 
     st_barcodes = metadata["barcodes"]
@@ -295,44 +300,55 @@ def load_gene_expression_matrix(
         mat_subset = mat[valid_indices]
 
         # --- Per-spot Quality Control (QC) ---
-        if (qc_min_umis is not None or qc_min_genes is not None or qc_max_mt is not None) and not loaded_from_cache:
+        if (
+            qc_min_umis is not None or qc_min_genes is not None or qc_max_mt is not None
+        ) and not loaded_from_cache:
             n_spots_before = mat_subset.shape[0]
-            
+
             # Calculate metrics
             n_counts = np.array(mat_subset.sum(axis=1)).flatten()
             n_genes = np.array((mat_subset > 0).sum(axis=1)).flatten()
-            
+
             qc_mask = np.ones(n_spots_before, dtype=bool)
-            
+
             if qc_min_umis is not None:
-                qc_mask &= (n_counts >= qc_min_umis)
+                qc_mask &= n_counts >= qc_min_umis
             if qc_min_genes is not None:
-                qc_mask &= (n_genes >= qc_min_genes)
-                
+                qc_mask &= n_genes >= qc_min_genes
+
             if qc_max_mt is not None:
                 mt_prefixes = ["mt-", "mt:", "mt_", "grcm38_mt-", "hs_mt-"]
                 mt_genes = [
-                    i for i, name in enumerate(current_gene_names) 
+                    i
+                    for i, name in enumerate(current_gene_names)
                     if any(p in name.lower() for p in mt_prefixes)
                 ]
                 if mt_genes:
                     if isinstance(mat_subset, csr_matrix):
-                        mt_counts = np.array(mat_subset[:, mt_genes].sum(axis=1)).flatten()
+                        mt_counts = np.array(
+                            mat_subset[:, mt_genes].sum(axis=1)
+                        ).flatten()
                     else:
                         mt_counts = np.sum(mat_subset[:, mt_genes], axis=1)
-                    
+
                     pct_counts_mt = mt_counts / (n_counts + 1e-9)
-                    qc_mask &= (pct_counts_mt <= qc_max_mt)
+                    qc_mask &= pct_counts_mt <= qc_max_mt
                 else:
-                    logger.warning(f"QC max_mt specified but no mitochondrial genes found in {os.path.basename(h5ad_path)}")
+                    logger.warning(
+                        f"QC max_mt specified but no mitochondrial genes found in {os.path.basename(h5ad_path)}"
+                    )
 
             n_spots_after = np.sum(qc_mask)
             if n_spots_after < n_spots_before:
                 filtered_count = n_spots_before - n_spots_after
-                logger.info(f"QC filtered {filtered_count}/{n_spots_before} spots from {os.path.basename(h5ad_path)} ({n_spots_after/n_spots_before:.1%} kept)")
+                logger.info(
+                    f"QC filtered {filtered_count}/{n_spots_before} spots from {os.path.basename(h5ad_path)} ({n_spots_after/n_spots_before:.1%} kept)"
+                )
 
                 if n_spots_after < n_spots_before * 0.5:
-                    logger.warning(f"CRITICAL: More than 50% of spots filtered in {os.path.basename(h5ad_path)}! Check thresholds or data quality.")
+                    logger.warning(
+                        f"CRITICAL: More than 50% of spots filtered in {os.path.basename(h5ad_path)}! Check thresholds or data quality."
+                    )
 
                 mat_subset = mat_subset[qc_mask]
 
@@ -357,14 +373,16 @@ def load_gene_expression_matrix(
             # Avoid division by zero for spots with 0 counts
             scaling_factor = target_sum / (row_sums + 1e-9)
             scaling_factor = scaling_factor.reshape(-1, 1)
-            
+
             if issparse(mat_subset):
                 # Efficiently scale sparse matrix rows
                 mat_subset = mat_subset.multiply(scaling_factor)
             else:
                 mat_subset = mat_subset * scaling_factor
-            
-            logger.info(f"Normalized library sizes to target_sum={target_sum} per spot.")
+
+            logger.info(
+                f"Normalized library sizes to target_sum={target_sum} per spot."
+            )
 
         # --- Select / align genes ---
         if selected_gene_names is None:
@@ -434,6 +452,7 @@ def load_global_genes(root_dir: str, num_genes: int = 1000) -> List[str]:
         List[str]: Ordered list of gene names.
     """
     import warnings
+
     warnings.warn(
         "load_global_genes() is deprecated. Use GeneVocab.from_json() instead.",
         DeprecationWarning,
@@ -763,7 +782,9 @@ class HEST_FeatureDataset(SpatialDataset):
         if len(self.coords) < self.n_neighbors + 1:
             pad_len = (self.n_neighbors + 1) - len(self.coords)
             others = [i for i in range(len(self.coords)) if i != idx]
-            neighbor_idxs = np.array([idx] + others[:self.n_neighbors] + [idx] * pad_len)
+            neighbor_idxs = np.array(
+                [idx] + others[: self.n_neighbors] + [idx] * pad_len
+            )
 
         # --- Optional global context ---
         if self.use_global_context:

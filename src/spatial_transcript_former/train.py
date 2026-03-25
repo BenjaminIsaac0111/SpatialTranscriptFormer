@@ -69,7 +69,9 @@ def main():
     )
     print(f"Split: {len(train_ids)} train, {len(val_ids)} val")
 
-    train_loader, val_loader, val_whole_slide = setup_dataloaders(args, train_ids, val_ids)
+    train_loader, val_loader, val_whole_slide = setup_dataloaders(
+        args, train_ids, val_ids
+    )
 
     # 2. Model, Loss, Optimizer
     model = setup_model(args, device)

@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-
 # Keys serialized into config.json.  These correspond to
 # SpatialTranscriptFormer.__init__ arguments (minus runtime-only
 # arguments like ``pathway_init`` and ``pretrained``).

@@ -71,7 +71,7 @@ def morans_i(x: np.ndarray, W: csr_matrix) -> float:
     x_mean = x.mean()
     z = x - x_mean
 
-    denominator = np.sum(z ** 2)
+    denominator = np.sum(z**2)
     if denominator < 1e-12:
         return 0.0  # Constant expression → no spatial pattern
 

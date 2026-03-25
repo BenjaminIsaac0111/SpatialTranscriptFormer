@@ -16,7 +16,6 @@ from spatial_transcript_former.training.trainer import (
 )
 from spatial_transcript_former.data.base import SpatialDataset
 
-
 # --- From test_trainer.py ---
 
 

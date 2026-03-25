@@ -9,7 +9,6 @@ import pytest
 
 from spatial_transcript_former.recipes.hest.build_vocab import scan_h5ad_files
 
-
 # --- From test_build_vocab.py ---
 
 

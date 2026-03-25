@@ -17,7 +17,6 @@ from spatial_transcript_former.models.interaction import SpatialTranscriptFormer
 from spatial_transcript_former.models.mil import AttentionMIL, TransMIL
 from spatial_transcript_former.models.backbones import get_backbone
 
-
 # --- From test_models.py ---
 
 
@@ -60,6 +59,7 @@ def test_sparsity_regularization_loss():
     # Expect a positive scalar (L1 norm of reconstruction weights)
     assert sparsity_loss > 0
     assert sparsity_loss.dim() == 0
+
 
 # --- From test_model_backbones.py ---
 
@@ -141,6 +141,7 @@ def test_vit_st_backbone():
     out = model(x)
     assert out.shape == (2, num_genes)
 
+
 # --- From test_backbones.py ---
 
 
@@ -202,6 +203,7 @@ def test_plip():
     except Exception as e:
         traceback.print_exc()
         print(f"Failed: {e}")
+
 
 # --- From test_bottleneck_arch.py ---
 

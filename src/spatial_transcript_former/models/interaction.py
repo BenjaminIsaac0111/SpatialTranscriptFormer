@@ -348,9 +348,7 @@ class SpatialTranscriptFormer(nn.Module):
                     x_layer = x_layer + layer.dropout1(attn_output)
                     x_layer = x_layer + layer._ff_block(layer.norm2(x_layer))
                 else:
-                    x_layer = layer.norm1(
-                        x_layer + layer.dropout1(attn_output)
-                    )
+                    x_layer = layer.norm1(x_layer + layer.dropout1(attn_output))
                     x_layer = layer.norm2(x_layer + layer._ff_block(x_layer))
             out = x_layer
         else:

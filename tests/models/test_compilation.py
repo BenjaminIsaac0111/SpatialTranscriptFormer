@@ -7,7 +7,6 @@ import time
 import torch
 import pytest
 
-
 # --- From test_compile.py ---
 
 
@@ -53,6 +52,7 @@ def test_compile():
         print("Success!")
     except Exception as e:
         print(f"Compilation failed: {e}")
+
 
 # --- From test_compile_backends.py ---
 

@@ -14,7 +14,6 @@ from spatial_transcript_former.models import SpatialTranscriptFormer
 from spatial_transcript_former.train import save_checkpoint, load_checkpoint
 from spatial_transcript_former.data.pathways import get_pathway_init
 
-
 # --- From test_checkpoint.py ---
 
 
@@ -142,6 +141,7 @@ class TestCheckpointRoundtrip:
         )
         assert start_epoch == 0
         assert best_val == float("inf")
+
 
 # --- From test_checkpoints.py ---
 

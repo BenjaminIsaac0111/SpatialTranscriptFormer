@@ -13,7 +13,6 @@ import pytest
 from spatial_transcript_former.recipes.hest.splitting import split_hest_patients
 from spatial_transcript_former.recipes.hest.splitting import split_hest_patients, main
 
-
 # --- From test_splitting_logic.py ---
 
 
@@ -32,6 +31,7 @@ def test_split_hest_patients():
     assert len(train_ids) > 0
     assert len(val_ids) > 0
     # Patient leakage check is already done inside split_hest_patients
+
 
 # --- From test_splitting_robust.py ---
 

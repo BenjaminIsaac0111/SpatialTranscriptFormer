@@ -44,8 +44,12 @@ def scan_h5ad_files(data_dir):
 
 
 def calculate_global_genes(
-    data_dir, ids, num_genes=1000, target_pathways=None,
-    svg_weight=0.0, svg_k=6,
+    data_dir,
+    ids,
+    num_genes=1000,
+    target_pathways=None,
+    svg_weight=0.0,
+    svg_k=6,
 ):
     st_dir = os.path.join(data_dir, "st")
     if not ids:
@@ -158,15 +162,13 @@ def calculate_global_genes(
         # Hybrid score: weighted sum of ranks (lower = better)
         alpha = svg_weight
         hybrid_score = {
-            g: (1 - alpha) * expr_rank[g] + alpha * mi_rank[g]
-            for g in all_genes
+            g: (1 - alpha) * expr_rank[g] + alpha * mi_rank[g] for g in all_genes
         }
         sorted_all_genes = sorted(all_genes, key=lambda g: hybrid_score[g])
 
         # Build stats list with Moran's I column
         sorted_all = [
-            (g, gene_totals[g], gene_morans_avg.get(g, 0.0))
-            for g in sorted_all_genes
+            (g, gene_totals[g], gene_morans_avg.get(g, 0.0)) for g in sorted_all_genes
         ]
         print(
             f"Hybrid ranking: expression weight={(1 - alpha):.1f}, "
@@ -221,7 +223,7 @@ def main():
         type=float,
         default=0.0,
         help="Weight for spatial variability (Moran's I) in gene ranking. "
-             "0.0=expression-only (default), 1.0=SVG-only, 0.5=balanced.",
+        "0.0=expression-only (default), 1.0=SVG-only, 0.5=balanced.",
     )
     parser.add_argument(
         "--svg-k",
@@ -242,8 +244,12 @@ def main():
         sys.exit(1)
 
     top_genes, all_stats = calculate_global_genes(
-        args.data_dir, ids, args.num_genes, target_pathways=args.pathways,
-        svg_weight=args.svg_weight, svg_k=args.svg_k,
+        args.data_dir,
+        ids,
+        args.num_genes,
+        target_pathways=args.pathways,
+        svg_weight=args.svg_weight,
+        svg_k=args.svg_k,
     )
 
     print(f"Saving top {len(top_genes)} genes to {output_path}")

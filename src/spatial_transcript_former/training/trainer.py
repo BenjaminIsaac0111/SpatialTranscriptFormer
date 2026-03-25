@@ -36,7 +36,6 @@ from spatial_transcript_former.training.checkpoint import (
     load_checkpoint,
 )
 
-
 # ---------------------------------------------------------------------------
 # Callback protocol
 # ---------------------------------------------------------------------------
@@ -166,7 +165,9 @@ class Trainer:
         self.use_amp = use_amp
         self.grad_accum_steps = grad_accum_steps
         self.whole_slide = whole_slide
-        self.val_whole_slide = val_whole_slide if val_whole_slide is not None else whole_slide
+        self.val_whole_slide = (
+            val_whole_slide if val_whole_slide is not None else whole_slide
+        )
         self.callbacks = callbacks or []
         self.resume = resume
 
