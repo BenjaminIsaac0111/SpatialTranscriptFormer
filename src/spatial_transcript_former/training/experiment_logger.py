@@ -43,11 +43,13 @@ class ExperimentLogger:
         with sqlite3.connect(self.db_path) as conn:
             # We use a dynamic schema where columns are added as needed.
             # Start with just 'epoch' as the primary key.
-            conn.execute("""
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS metrics (
                     epoch INTEGER PRIMARY KEY
                 )
-                """)
+                """
+            )
 
     def _ensure_columns(self, metrics: Dict[str, float]):
         """Ensures all metric keys exist as columns in the metrics table."""
