@@ -113,7 +113,7 @@ Visualization plots and spatial expression maps will be saved to the `./results`
 - **[Pathway Mapping](docs/PATHWAY_MAPPING.md)**: Clinical interpretability, pathway bottleneck design, and MSigDB integration.
 - **[Gene Analysis](docs/GENE_ANALYSIS.md)**: Modeling strategies for mapping morphology to high-dimensional gene spaces.
 - **[Data Structure](docs/DATA_STRUCTURE.md)**: Detailed breakdown of the HEST data structure on disk, metadata conventions, and preprocessing invariants.
-- **[Single-cell Best Practices](docs/SC_BEST_PRACTICES.md)**: Gap analysis and roadmap for alignment with industry standard recommendations.
+- **[Single-cell Best Practices](docs/SC_BEST_PRACTICES.md)**: Gap analysis and roadmap for alignment with standard recommendations.
 
 ## Development
 

@@ -36,7 +36,6 @@ from spatial_transcript_former.training.checkpoint import (
     load_checkpoint,
 )
 
-
 # ---------------------------------------------------------------------------
 # Callback protocol
 # ---------------------------------------------------------------------------
@@ -124,7 +123,10 @@ class Trainer:
         model_name: Name used in checkpoint filenames.
         use_amp: Enable automatic mixed precision (FP16).
         grad_accum_steps: Gradient accumulation steps.
-        whole_slide: Whole-slide prediction mode.
+        whole_slide: Whole-slide prediction mode (training).
+        val_whole_slide: Whole-slide mode for validation.  Defaults to
+            ``whole_slide``.  Set to ``True`` to get proper per-slide
+            spatial PCC even when training in patch mode.
         callbacks: List of :class:`TrainerCallback` instances.
         resume: Attempt to resume from a checkpoint in ``output_dir``.
     """
@@ -147,6 +149,7 @@ class Trainer:
         use_amp: bool = False,
         grad_accum_steps: int = 1,
         whole_slide: bool = False,
+        val_whole_slide: Optional[bool] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         resume: bool = False,
     ):
@@ -162,6 +165,9 @@ class Trainer:
         self.use_amp = use_amp
         self.grad_accum_steps = grad_accum_steps
         self.whole_slide = whole_slide
+        self.val_whole_slide = (
+            val_whole_slide if val_whole_slide is not None else whole_slide
+        )
         self.callbacks = callbacks or []
         self.resume = resume
 
@@ -288,7 +294,7 @@ class Trainer:
                 self.val_loader,
                 self.criterion,
                 self.device,
-                whole_slide=self.whole_slide,
+                whole_slide=self.val_whole_slide,
                 use_amp=self.use_amp,
             )
 

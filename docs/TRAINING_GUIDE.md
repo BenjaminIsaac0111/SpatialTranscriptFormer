@@ -145,6 +145,17 @@ python scripts/run_preset.py --preset stf_medium
 python scripts/run_preset.py --preset stf_large
 ```
 
+#### Disease-Specific Priors (Colorectal Cancer)
+
+To learn representations specifically constrained to phenotypes of a target disease, you can explicitly filter the initialization pathway bottleneck using the `--pathways` argument. The `crc` presets demonstrate this by shrinking the dimensionality down from 50 generic hallmarks to 14 CRC-specific pathways (e.g. Wnt/Beta-catenin, EMT, Angiogenesis).
+
+```bash
+# Small CRC Variant (14 explicit pathways)
+python scripts/run_preset.py --preset stf_crc_small
+```
+
+These presets are defined directly in `scripts/run_preset.py`, serving as a template for how you can introduce your own biological priors for other diseases.
+
 ### Choosing Interaction Modes
 
 By default, the model runs in **Full Interaction** mode (`p2p p2h h2p h2h`) where all token types attend to each other. You can selectively disable interactions using the `--interactions` flag for ablation or to enforce specific architectural constraints.

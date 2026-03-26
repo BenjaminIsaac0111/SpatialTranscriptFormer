@@ -13,6 +13,7 @@ import torch.optim as optim
 import numpy as np
 
 from spatial_transcript_former.config import get_config
+from spatial_transcript_former.data import GeneVocab
 from spatial_transcript_former.models import HE2RNA, ViT_ST, SpatialTranscriptFormer
 from spatial_transcript_former.utils import set_seed
 from spatial_transcript_former.training.losses import (
@@ -25,7 +26,7 @@ from spatial_transcript_former.training.engine import train_one_epoch, validate
 from spatial_transcript_former.training.experiment_logger import ExperimentLogger
 from spatial_transcript_former.visualization import run_inference_plot
 from spatial_transcript_former.recipes.hest.utils import (
-    get_sample_ids,
+    get_train_val_ids,
     setup_dataloaders,
 )
 
@@ -47,46 +48,30 @@ def main():
     print(f"Device: {device}")
     set_seed(args.seed)
 
-    # Global gene count synchronization
-    genes_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "global_genes.json",
-    )
-    if not os.path.exists(genes_path):
-        genes_path = "global_genes.json"
-    if os.path.exists(genes_path):
-        import json
-
-        with open(genes_path, "r") as f:
-            gene_list = json.load(f)
-        args.num_genes = min(args.num_genes, len(gene_list))
-        print(f"Validated global gene count: {args.num_genes}")
-    else:
+    # Global gene count synchronization via GeneVocab
+    try:
+        vocab = GeneVocab.from_json(args.data_dir, num_genes=args.num_genes)
+        args.num_genes = vocab.num_genes
+    except FileNotFoundError:
         print(
             f"Warning: global_genes.json not found. Using requested num_genes={args.num_genes}"
         )
 
-    # 1. Data
-    final_ids = get_sample_ids(
+    # 1. Data — discover sample IDs and split (recipe handles splitting strategy)
+    train_ids, val_ids = get_train_val_ids(
         args.data_dir,
         precomputed=args.precomputed,
         backbone=args.backbone,
         feature_dir=args.feature_dir,
         max_samples=args.max_samples,
         organ=args.organ,
+        seed=args.seed,
     )
-    np.random.shuffle(final_ids)
-
-    if len(final_ids) == 1:
-        # Prevent empty train split if only testing 1 sample
-        train_ids, val_ids = final_ids, final_ids
-    else:
-        split_idx = int(len(final_ids) * 0.8)
-        train_ids, val_ids = final_ids[:split_idx], final_ids[split_idx:]
-
     print(f"Split: {len(train_ids)} train, {len(val_ids)} val")
 
-    train_loader, val_loader = setup_dataloaders(args, train_ids, val_ids)
+    train_loader, val_loader, val_whole_slide = setup_dataloaders(
+        args, train_ids, val_ids
+    )
 
     # 2. Model, Loss, Optimizer
     model = setup_model(args, device)
@@ -117,7 +102,7 @@ def main():
 
     scaler = torch.amp.GradScaler("cuda") if args.use_amp else None
     print(f"Loss: {criterion.__class__.__name__}")
-    print(f"LR schedule: {warmup_epochs}-epoch warmup → cosine annealing to 1e-6")
+    print(f"LR schedule: {warmup_epochs}-epoch warmup -> cosine annealing to 1e-6")
 
     # 3. Output & Logger
     os.makedirs(args.output_dir, exist_ok=True)
@@ -160,7 +145,7 @@ def main():
             val_loader,
             criterion,
             device,
-            whole_slide=args.whole_slide,
+            whole_slide=val_whole_slide,
             use_amp=args.use_amp,
         )
         val_loss = val_metrics["val_loss"]
@@ -184,6 +169,8 @@ def main():
             epoch_row["val_pcc"] = round(val_metrics["val_pcc"], 4)
         if val_metrics.get("pred_variance") is not None:
             epoch_row["pred_variance"] = round(val_metrics["pred_variance"], 6)
+        if val_metrics.get("spatial_coherence") is not None:
+            epoch_row["spatial_coherence"] = round(val_metrics["spatial_coherence"], 4)
         if val_metrics.get("attn_correlation") is not None:
             epoch_row["attn_correlation"] = round(val_metrics["attn_correlation"], 4)
 

@@ -21,10 +21,12 @@ These are areas where the project already follows industry best practices:
 
 The following items are recommended for future sprints to improve model robustness and biological accuracy.
 
-### 1. SVG-aware Gene Selection (Moran's I)
+### 1. SVG-aware Gene Selection (Moran's I) ✅
 
-**Priority: High**  
+**Priority: High** — **Implemented**  
 **Rationale**: Currently, genes are selected based on total expression or pathway membership. However, the model's primary task is to learn spatial patterns. Selecting genes based on **Spatially Variable Gene (SVG)** metrics like Moran's I (available in Squidpy) would prioritise genes that have learned spatial coherence over those that are just highly expressed (like housekeeping genes).
+
+**Usage**: `stf-build-vocab --svg-weight 0.5 --svg-k 6` enables a hybrid ranking that blends total expression with Moran's I spatial variability. See `data/spatial_stats.py` for the implementation.
 
 ### 2. Standardised Preprocessing Pipeline
 
@@ -41,10 +43,12 @@ The following items are recommended for future sprints to improve model robustne
 **Priority: Medium**  
 **Rationale**: Adding explicit QC thresholds (e.g., minimum UMI count, minimum detected genes, maximum mitochondrial fraction) to the dataset loading scripts would protect the model from training on low-quality "noise" spots.
 
-### 5. Spatial Coherence Validation Metrics
+### 5. Spatial Coherence Validation Metrics ✅
 
-**Priority: Medium**  
-**Rationale**: Aggregate metrics like MSE or PCC don't capture whether the *spatial distribution* of predictions is realistic. Adding a validation step that compares the Moran's I of predicted vs. ground-truth expression would provide a much stronger biological validation signal.
+**Priority: Medium** — **Implemented**  
+**Rationale**: Aggregate metrics like MSE or PCC don't capture whether the *spatial distribution* of predictions is realistic. A validation step now compares the Moran's I of predicted vs. ground-truth expression for the top-50 spatially variable genes, reporting a Pearson correlation as the **Spatial Coherence Score**.
+
+**Integration**: Computed automatically during validation in `training/engine.py` and logged to SQLite as `spatial_coherence`. See `data/spatial_stats.py:spatial_coherence_score()`.
 
 ### 6. Preprocessing Documentation
 

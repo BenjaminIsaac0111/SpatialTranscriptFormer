@@ -329,8 +329,8 @@ class SpatialTranscriptFormer(nn.Module):
                 # 1. Attention Block
                 qkv = layer.norm1(x_layer) if layer.norm_first else x_layer
 
-                # We need to call the internal self_attn with need_weights=True
-                # and average_attn_weights=False to get per-head maps.
+                # Extract per-head attention weights without a second forward pass.
+                # need_weights=True, average_attn_weights=False → (B, H, T, T).
                 attn_output, attn_weights = layer.self_attn(
                     qkv,
                     qkv,
@@ -340,19 +340,15 @@ class SpatialTranscriptFormer(nn.Module):
                     need_weights=True,
                     average_attn_weights=False,
                 )
-                print(
-                    f"DEBUG: Internal attn_weights shape: {attn_weights.shape}"
-                )  # DEBUG
                 attentions.append(attn_weights)
 
-                # Continue forward pass (matching nn.TransformerEncoderLayer logic)
+                # Continue forward pass reusing attn_output (avoids a second
+                # self-attention call and keeps dropout masks consistent).
                 if layer.norm_first:
-                    x_layer = x_layer + layer._sa_block(qkv, interaction_mask, pad_mask)
+                    x_layer = x_layer + layer.dropout1(attn_output)
                     x_layer = x_layer + layer._ff_block(layer.norm2(x_layer))
                 else:
-                    x_layer = layer.norm1(
-                        x_layer + layer._sa_block(x_layer, interaction_mask, pad_mask)
-                    )
+                    x_layer = layer.norm1(x_layer + layer.dropout1(attn_output))
                     x_layer = layer.norm2(x_layer + layer._ff_block(x_layer))
             out = x_layer
         else:

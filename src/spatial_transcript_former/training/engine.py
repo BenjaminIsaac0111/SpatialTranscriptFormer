@@ -7,9 +7,11 @@ both standard patch-level and whole-slide training modes.
 
 import torch
 import torch.nn as nn
+import numpy as np
 from tqdm import tqdm
 from spatial_transcript_former.models import SpatialTranscriptFormer
 from spatial_transcript_former.training.losses import AuxiliaryPathwayLoss
+from spatial_transcript_former.data.spatial_stats import spatial_coherence_score
 
 
 def _optimizer_step(
@@ -150,6 +152,7 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
     pcc_list = []
     pred_var_list = []
     attn_correlations = []
+    spatial_coherence_list = []
 
     with torch.no_grad():
         for batch in tqdm(loader, desc="Validation"):
@@ -316,6 +319,19 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                             pred_var_list.append(
                                 eval_preds[b, valid].var(dim=0).mean().item()
                             )
+                            # Spatial coherence: compare Moran's I of preds vs truth
+                            try:
+                                sc = spatial_coherence_score(
+                                    predicted=eval_preds[b, valid].cpu().numpy(),
+                                    ground_truth=targets[b, valid].cpu().numpy(),
+                                    coords=coords[b, valid].cpu().numpy(),
+                                    k=6,
+                                    top_k_genes=min(50, eval_preds.shape[-1]),
+                                )
+                                if sc != 0.0:
+                                    spatial_coherence_list.append(sc)
+                            except Exception:
+                                pass  # Graceful degradation
                 else:
                     pred_var_list.append(eval_preds.var(dim=0).mean().item())
 
@@ -327,11 +343,18 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
     )
 
     avg_pred_var = sum(pred_var_list) / len(pred_var_list) if pred_var_list else None
+    avg_spatial_coherence = (
+        sum(spatial_coherence_list) / len(spatial_coherence_list)
+        if spatial_coherence_list
+        else None
+    )
 
     if avg_pcc is not None:
         print(f"Validation MAE: {avg_mae:.4f} | PCC: {avg_pcc:.4f}")
     if avg_pred_var is not None:
         print(f"Prediction Variance: {avg_pred_var:.6f}")
+    if avg_spatial_coherence is not None:
+        print(f"Spatial Coherence: {avg_spatial_coherence:.4f}")
     if avg_corr is not None:
         print(f"Spatial Attention Correlation: {avg_corr:.4f}")
 
@@ -340,5 +363,6 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
         "val_mae": avg_mae,
         "val_pcc": avg_pcc,
         "pred_variance": avg_pred_var,
+        "spatial_coherence": avg_spatial_coherence,
         "attn_correlation": avg_corr,
     }
