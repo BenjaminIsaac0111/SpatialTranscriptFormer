@@ -92,7 +92,9 @@ class ExperimentLogger:
             )
 
     def finalize(
-        self, best_val_loss: float, extra_metrics: Optional[Dict[str, Any]] = None
+        self,
+        best_val_loss: float,
+        extra_metrics: Optional[Dict[str, Any]] = None,
     ):
         """
         Write results_summary.json with full experiment metadata.
