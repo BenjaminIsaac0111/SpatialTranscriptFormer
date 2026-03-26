@@ -113,7 +113,6 @@ Visualization plots and spatial expression maps will be saved to the `./results`
 - **[Pathway Mapping](docs/PATHWAY_MAPPING.md)**: Clinical interpretability, pathway bottleneck design, and MSigDB integration.
 - **[Gene Analysis](docs/GENE_ANALYSIS.md)**: Modeling strategies for mapping morphology to high-dimensional gene spaces.
 - **[Data Structure](docs/DATA_STRUCTURE.md)**: Detailed breakdown of the HEST data structure on disk, metadata conventions, and preprocessing invariants.
-- **[Single-cell Best Practices](docs/SC_BEST_PRACTICES.md)**: Gap analysis and roadmap for alignment with standard recommendations.
 
 ## Development
 
@@ -124,12 +123,31 @@ Visualization plots and spatial expression maps will be saved to the `./results`
 .\test.ps1
 ```
 
-## Future Directions & Clinical Collaborations
+## Development Roadmap
 
-A major future direction for **SpatialTranscriptFormer** is to integrate this architecture into an **end-to-end pipeline for patient risk assessment** and prognosis tracking. By leveraging the model's predicted expression and pathway activations, we aim to build a downstream risk prediction module that allows users to directly evaluate how spatially-resolved expression relates to patient survival.
+Active research and development is tracked in the **[Research & Improvement Roadmap](docs/SC_BEST_PRACTICES.md)**. Key directions are summarised below.
+
+### Near-term
+
+- **Vocabulary quality** — mitochondrial gene filtering (`MT-*` exclusion) and a rebuild of the gene vocabulary using SVG-weighted ranking (Moran's I), ensuring training targets are spatially informative rather than dominated by housekeeping genes.
+- **Moran's I weighted loss** — weight each gene's contribution to the training loss by its spatial variability score, so that the gradient is driven by spatially coherent genes rather than high-expression noise.
+
+### Medium-term: Architectural Reframing
+
+The current model predicts ~1000 individual gene expression values as its primary task, with pathway activity as a secondary interpretability output. Based on a review of the ST literature and the [Saezlab ecosystem](https://saezlab.org) (PROGENy, decoupleR, LIANA+), we are shifting toward:
+
+- **Pathway activity as the primary prediction target.** Spatial pathway activity maps pre-computed offline via [decoupleR](https://decoupler-py.readthedocs.io) + [PROGENy](https://saezlab.github.io/progeny/) are spatially cleaner, clinically interpretable, and directly supervised — avoiding the circular regularisation issue of the current `AuxiliaryPathwayLoss`.
+- **Gene expression as a secondary imputation head**, weighted by Moran's I.
+- **Pluggable prior knowledge.** The offline preprocessing step accepts any biological network (PROGENy signalling pathways, MSigDB Hallmarks, LIANA+ ligand-receptor pairs, CollecTRI TF regulons) without changing the model architecture.
+
+### Longer-term
+
+- Evaluation on the 2025 Nat. Comms. benchmark suite (11 methods, 28 metrics, 5 datasets).
+- Support for higher-resolution platforms (Visium HD, Xenium) — architecturally trivial, blocked only by data availability.
+- **Clinical integration** — using predicted spatial pathway activation maps as features for patient risk assessment and prognosis tracking in an end-to-end pipeline.
 
 > [!NOTE]
-> **Call for Collaborators:** Rigorous risk assessment models require vast datasets of clinical metadata and survival outcomes, which we currently lack access to. We are open to investigating *any* disease of interest! If you have access to large clinical cohorts and are interested in exploring how spatial pathway activation correlates with patient prognosis, we would love to partner with you.
+> **Call for Collaborators:** Rigorous risk assessment models require large clinical cohorts with spatial transcriptomics and survival outcomes, which we currently lack access to. We are open to investigating *any* disease of interest. If you have access to such cohorts and are interested in exploring how spatially-resolved pathway activation correlates with patient prognosis, we would love to partner with you.
 
 ## Contributing
 
