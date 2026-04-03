@@ -33,7 +33,10 @@ def test_gene_pathway_coverage(data_dir):
     of biological Hallmark pathways.
     """
     num_genes = 1000
-    genes = load_global_genes(data_dir, num_genes)
+    try:
+        genes = load_global_genes(data_dir, num_genes)
+    except FileNotFoundError:
+        pytest.skip("global_genes.json not found. Skipping data integrity test.")
 
     # Load Hallmarks
     url = MSIGDB_URLS["hallmarks"]
