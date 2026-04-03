@@ -150,22 +150,20 @@ class Predictor:
         self.use_amp = use_amp
 
         # Expose gene names if the model has them (set by from_pretrained)
-        self.gene_names: Optional[List[str]] = getattr(model, "gene_names", None)
+        self.pathway_names: Optional[List[str]] = getattr(model, "pathway_names", None)
 
     @torch.no_grad()
     def predict_patch(
         self,
         image: torch.Tensor,
-        return_pathways: bool = False,
-    ) -> Union[torch.Tensor, tuple]:
-        """Predict gene expression from a single image patch.
+    ) -> torch.Tensor:
+        """Predict pathway activities from a single image patch.
 
         Args:
             image: ``(1, 3, H, W)`` or ``(3, H, W)`` image tensor.
-            return_pathways: Also return pathway activation scores.
 
         Returns:
-            Gene expression tensor ``(1, G)`` or tuple with pathway scores.
+            Pathway activity tensor ``(1, P)``.
         """
         if image.dim() == 3:
             image = image.unsqueeze(0)
@@ -181,7 +179,6 @@ class Predictor:
             result = self.model(
                 image,
                 rel_coords=rel_coords,
-                return_pathways=return_pathways,
             )
         return result
 
@@ -190,20 +187,17 @@ class Predictor:
         self,
         features: torch.Tensor,
         coords: torch.Tensor,
-        return_pathways: bool = False,
         return_dense: bool = False,
-    ) -> Union[torch.Tensor, tuple]:
-        """Predict gene expression from pre-extracted whole-slide features.
+    ) -> torch.Tensor:
+        """Predict pathway activities from pre-extracted whole-slide features.
 
         Args:
             features: ``(N, D)`` or ``(1, N, D)`` feature embeddings.
             coords: ``(N, 2)`` or ``(1, N, 2)`` spatial coordinates.
-            return_pathways: Also return pathway activation scores.
-            return_dense: If True, return per-patch predictions ``(1, N, G)``.
+            return_dense: If True, return per-patch predictions ``(1, N, P)``.
 
         Returns:
-            Gene expression tensor ``(1, G)`` or ``(1, N, G)`` if dense,
-            optionally with pathway scores as a tuple.
+            Pathway activity tensor ``(1, P)`` or ``(1, N, P)`` if dense.
         """
         # Ensure batch dimension
         if features.dim() == 2:
@@ -229,7 +223,6 @@ class Predictor:
             result = self.model(
                 features,
                 rel_coords=coords,
-                return_pathways=return_pathways,
                 return_dense=return_dense,
             )
         return result
@@ -272,14 +265,12 @@ class Predictor:
 def inject_predictions(
     adata,
     coords: np.ndarray,
-    predictions: np.ndarray,
-    gene_names: Optional[List[str]] = None,
-    pathway_scores: Optional[np.ndarray] = None,
+    pathway_scores: np.ndarray,
     pathway_names: Optional[List[str]] = None,
 ):
-    """Inject SpatialTranscriptFormer predictions into an AnnData object.
+    """Inject SpatialTranscriptFormer pathway predictions into an AnnData object.
 
-    Registers spatial coordinates and gene/pathway predictions into the
+    Registers spatial coordinates and pathway predictions into the
     appropriate AnnData slots so that standard Scanpy spatial plotting
     and analysis tools work out of the box.
 
@@ -287,11 +278,9 @@ def inject_predictions(
         adata: A :class:`anndata.AnnData` instance.  Must have the same
             number of observations as ``coords`` rows.
         coords: ``(N, 2)`` spatial coordinates array.
-        predictions: ``(N, G)`` predicted gene expression array.
-        gene_names: Optional list of G gene symbols.  If provided, they
+        pathway_scores: ``(N, P)`` predicted pathway activity array.
+        pathway_names: Optional list of P pathway names.  If provided, they
             are set as ``adata.var_names``.
-        pathway_scores: Optional ``(N, P)`` pathway activation scores.
-        pathway_names: Optional list of P pathway names.
 
     Returns:
         The modified ``adata`` (in-place).
@@ -302,9 +291,9 @@ def inject_predictions(
         from spatial_transcript_former.predict import inject_predictions
 
         adata = sc.AnnData(obs=pd.DataFrame(index=[f"spot_{i}" for i in range(N)]))
-        inject_predictions(adata, coords, preds, gene_names=model.gene_names)
+        inject_predictions(adata, coords, preds, pathway_names=model.pathway_names)
 
-        sc.pl.spatial(adata, color="TP53")
+        sc.pl.spatial(adata, color="HALLMARK_HYPOXIA")
     """
     try:
         import anndata  # noqa: F401
@@ -319,48 +308,44 @@ def inject_predictions(
         raise ValueError(
             f"coords has {coords.shape[0]} rows but adata has {n_obs} observations"
         )
-    if predictions.shape[0] != n_obs:
+    if pathway_scores.shape[0] != n_obs:
         raise ValueError(
-            f"predictions has {predictions.shape[0]} rows but adata has {n_obs} observations"
+            f"pathway_scores has {pathway_scores.shape[0]} rows but adata has {n_obs} observations"
         )
 
     # Convert torch tensors to numpy if needed
     if isinstance(coords, torch.Tensor):
         coords = coords.cpu().numpy()
-    if isinstance(predictions, torch.Tensor):
-        predictions = predictions.cpu().numpy()
+    if isinstance(pathway_scores, torch.Tensor):
+        pathway_scores = pathway_scores.cpu().numpy()
 
     # 1. Spatial coordinates
     adata.obsm["spatial"] = coords
 
-    # 2. Gene predictions → adata.X
-    #    anndata >=0.12 enforces strict shape consistency — adata.var cannot be
-    #    reassigned independently from adata.X when they'd cause a mismatch.
-    #    Strategy: if the current n_vars doesn't match, rebuild the AnnData
-    #    in-place with the correct shape.
+    # 2. Pathway predictions → adata.X
     import pandas as pd
 
-    n_pred_genes = predictions.shape[1]
+    n_pred_pathways = pathway_scores.shape[1]
     var_names = (
-        gene_names
-        if gene_names is not None
-        else [f"gene_{i}" for i in range(n_pred_genes)]
+        pathway_names
+        if pathway_names is not None
+        else [f"pathway_{i}" for i in range(n_pred_pathways)]
     )
 
-    if gene_names is not None and len(gene_names) != n_pred_genes:
+    if pathway_names is not None and len(pathway_names) != n_pred_pathways:
         raise ValueError(
-            f"gene_names length ({len(gene_names)}) != prediction columns ({n_pred_genes})"
+            f"pathway_names length ({len(pathway_names)}) != prediction columns ({n_pred_pathways})"
         )
 
-    if adata.n_vars == n_pred_genes:
+    if adata.n_vars == n_pred_pathways:
         # Shape already matches — direct assignment is safe
-        if gene_names is not None:
-            adata.var = pd.DataFrame(index=gene_names)
-        adata.X = predictions
+        if pathway_names is not None:
+            adata.var = pd.DataFrame(index=pathway_names)
+        adata.X = pathway_scores
     else:
         # Rebuild AnnData to avoid shape enforcement errors (anndata >=0.12)
         new_adata = type(adata)(
-            X=predictions,
+            X=pathway_scores,
             obs=adata.obs.copy(),
             var=pd.DataFrame(index=var_names),
         )
@@ -369,15 +354,6 @@ def inject_predictions(
             new_adata.obsm[key] = adata.obsm[key]
         # Replace contents in-place so the caller's reference stays valid
         adata.__dict__.update(new_adata.__dict__)
-
-    # 3. Pathway scores (optional) → adata.obsm
-    if pathway_scores is not None:
-        if isinstance(pathway_scores, torch.Tensor):
-            pathway_scores = pathway_scores.cpu().numpy()
-        adata.obsm["spatial_pathways"] = pathway_scores
-
-        if pathway_names is not None:
-            adata.uns["pathway_names"] = pathway_names
 
     return adata
 

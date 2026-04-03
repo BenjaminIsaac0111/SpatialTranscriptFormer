@@ -10,9 +10,6 @@ from .losses import (
     CompositeLoss,
     PCCLoss,
     MaskedMSELoss,
-    MaskedHuberLoss,
-    ZINBLoss,
-    AuxiliaryPathwayLoss,
 )
 from .experiment_logger import ExperimentLogger
 
@@ -28,9 +25,6 @@ __all__ = [
     "CompositeLoss",
     "PCCLoss",
     "MaskedMSELoss",
-    "MaskedHuberLoss",
-    "ZINBLoss",
-    "AuxiliaryPathwayLoss",
     # Logging
     "ExperimentLogger",
 ]

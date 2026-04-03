@@ -20,7 +20,6 @@ from spatial_transcript_former.training.losses import (
     PCCLoss,
     CompositeLoss,
     MaskedMSELoss,
-    ZINBLoss,
 )
 from spatial_transcript_former.training.engine import train_one_epoch, validate
 from spatial_transcript_former.training.experiment_logger import ExperimentLogger
@@ -75,9 +74,7 @@ def main():
 
     # 2. Model, Loss, Optimizer
     model = setup_model(args, device)
-    # Pass pathway_init to criterion so AuxiliaryPathwayLoss can use it
-    pathway_init = getattr(model, "_pathway_init_matrix", None)
-    criterion = setup_criterion(args, pathway_init=pathway_init).to(device)
+    criterion = setup_criterion(args).to(device)
     optimizer = optim.Adam(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )

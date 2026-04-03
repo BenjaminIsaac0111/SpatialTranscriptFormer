@@ -1,3 +1,4 @@
+import os
 import argparse
 from spatial_transcript_former.config import get_config
 
@@ -32,47 +33,20 @@ def parse_args():
         "--whole-slide", action="store_true", help="Dense whole-slide prediction"
     )
     g.add_argument("--seed", type=int, default=42)
-    g.add_argument(
-        "--log-transform", action="store_true", help="Log1p transform targets"
-    )
     g.add_argument("--organ", type=str, default=None, help="Filter samples by organ")
-    g.add_argument(
-        "--qc-min-umis",
-        type=int,
-        default=get_config("qc.min_umis", None),
-        help="Minimum UMI count per spot",
-    )
-    g.add_argument(
-        "--qc-min-genes",
-        type=int,
-        default=get_config("qc.min_genes", None),
-        help="Minimum detected genes per spot",
-    )
-    g.add_argument(
-        "--qc-max-mt",
-        type=float,
-        default=get_config("qc.max_mt", None),
-        help="Maximum mitochondrial fraction per spot",
-    )
-    g.add_argument(
-        "--target-sum",
-        type=int,
-        default=get_config("training.target_sum", 10000),
-        help="Target sum for library-size normalization (CP10k default)",
-    )
-    g.add_argument(
-        "--qc-cache-dir",
-        type=str,
-        default=None,
-        help="Directory to store/load QC results (masks) for faster startup",
-    )
 
     # Loss
     parser.add_argument(
         "--loss",
         type=str,
         default="mse_pcc",
-        choices=["mse", "pcc", "mse_pcc", "zinb", "poisson", "logcosh"],
+        choices=[
+            "mse",
+            "pcc",
+            "mse_pcc",
+            "poisson",
+            "logcosh",
+        ],
     )
     parser.add_argument(
         "--pcc-weight",
@@ -81,10 +55,10 @@ def parse_args():
         help="Weight for PCC term in mse_pcc loss",
     )
     parser.add_argument(
-        "--pathway-loss-weight",
-        type=float,
-        default=0.0,
-        help="Weight for auxiliary pathway PCC loss (0 = disabled)",
+        "--pathway-targets-dir",
+        type=str,
+        default=None,
+        help="Directory of pre-computed pathway activity .h5 files",
     )
 
     # Model
@@ -99,6 +73,14 @@ def parse_args():
     g.add_argument("--no-pretrained", action="store_false", dest="pretrained")
     g.set_defaults(pretrained=True)
     g.add_argument("--num-pathways", type=int, default=50)
+    g.add_argument(
+        "--pathway-prior",
+        type=str,
+        default="hallmarks",
+        choices=["hallmarks", "progeny"],
+        help="Pathway prior for token initialisation. "
+        "'progeny' sets num-pathways=14 automatically.",
+    )
     g.add_argument("--token-dim", type=int, default=256)
     g.add_argument("--n-heads", type=int, default=4)
     g.add_argument("--n-layers", type=int, default=2)
@@ -171,21 +153,10 @@ def parse_args():
         help="Pathway sparsity topology (placeholder for future experiments)",
     )
     g.add_argument(
-        "--pathway-init",
-        action="store_true",
-        help="Initialize gene_reconstructor with MSigDB Hallmarks",
-    )
-    g.add_argument(
         "--pathways",
         nargs="+",
         default=None,
-        help="List of MSigDB pathway names to explicitly instantiate (e.g. HALLMARK_APOPTOSIS). If none are provided but --pathway-init is enabled, all pathways in the provided GMTs will be loaded.",
-    )
-    g.add_argument(
-        "--custom-gmt",
-        nargs="+",
-        default=None,
-        help="List of URLs or local paths to custom .gmt files for pathway initialization. Overrides standard MSigDB defaults if provided.",
+        help="List of selected pathway names to define expected input/output dimension.",
     )
     g.add_argument(
         "--vis-interval",
@@ -200,4 +171,7 @@ def parse_args():
         help="Sample ID to use for periodic visualization",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.pathway_targets_dir is None:
+        args.pathway_targets_dir = os.path.join(args.data_dir, "pathway_activities")
+    return args

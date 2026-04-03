@@ -180,6 +180,8 @@ def setup_dataloaders(args, train_ids, val_ids):
         except FileNotFoundError as e:
             raise RuntimeError(f"Cannot setup dataloaders: {e}")
 
+        pathway_targets_dir = getattr(args, "pathway_targets_dir", None)
+
         if args.whole_slide:
             train_loader = (
                 get_hest_feature_dataloader(
@@ -192,12 +194,7 @@ def setup_dataloaders(args, train_ids, val_ids):
                     whole_slide_mode=True,
                     augment=args.augment,
                     feature_dir=feat_dir,
-                    log1p=args.log_transform,
-                    qc_min_umis=args.qc_min_umis,
-                    qc_min_genes=args.qc_min_genes,
-                    qc_max_mt=args.qc_max_mt,
-                    target_sum=args.target_sum,
-                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    pathway_targets_dir=pathway_targets_dir,
                 )
                 if train_ids
                 else None
@@ -213,12 +210,7 @@ def setup_dataloaders(args, train_ids, val_ids):
                     whole_slide_mode=True,
                     augment=False,
                     feature_dir=feat_dir,
-                    log1p=args.log_transform,
-                    qc_min_umis=args.qc_min_umis,
-                    qc_min_genes=args.qc_min_genes,
-                    qc_max_mt=args.qc_max_mt,
-                    target_sum=args.target_sum,
-                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    pathway_targets_dir=pathway_targets_dir,
                 )
                 if val_ids
                 else None
@@ -236,12 +228,7 @@ def setup_dataloaders(args, train_ids, val_ids):
                     global_context_size=args.global_context_size,
                     augment=args.augment,
                     feature_dir=feat_dir,
-                    log1p=args.log_transform,
-                    qc_min_umis=args.qc_min_umis,
-                    qc_min_genes=args.qc_min_genes,
-                    qc_max_mt=args.qc_max_mt,
-                    target_sum=args.target_sum,
-                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    pathway_targets_dir=pathway_targets_dir,
                 )
                 if train_ids
                 else None
@@ -258,12 +245,7 @@ def setup_dataloaders(args, train_ids, val_ids):
                     whole_slide_mode=True,
                     augment=False,
                     feature_dir=feat_dir,
-                    log1p=args.log_transform,
-                    qc_min_umis=args.qc_min_umis,
-                    qc_min_genes=args.qc_min_genes,
-                    qc_max_mt=args.qc_max_mt,
-                    target_sum=args.target_sum,
-                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    pathway_targets_dir=pathway_targets_dir,
                 )
                 if val_ids
                 else None
@@ -299,12 +281,6 @@ def setup_dataloaders(args, train_ids, val_ids):
                 n_neighbors=args.n_neighbors,
                 transform=train_transform,
                 augment=args.augment,
-                log1p=args.log_transform,
-                qc_min_umis=args.qc_min_umis,
-                qc_min_genes=args.qc_min_genes,
-                qc_max_mt=args.qc_max_mt,
-                target_sum=args.target_sum,
-                qc_cache_dir=getattr(args, "qc_cache_dir", None),
             )
             if train_ids
             else None
@@ -318,12 +294,6 @@ def setup_dataloaders(args, train_ids, val_ids):
                 num_genes=args.num_genes,
                 n_neighbors=args.n_neighbors,
                 transform=val_transform,
-                log1p=args.log_transform,
-                qc_min_umis=args.qc_min_umis,
-                qc_min_genes=args.qc_min_genes,
-                qc_max_mt=args.qc_max_mt,
-                target_sum=args.target_sum,
-                qc_cache_dir=getattr(args, "qc_cache_dir", None),
             )
             if val_ids
             else None

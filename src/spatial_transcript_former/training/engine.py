@@ -10,7 +10,6 @@ import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
 from spatial_transcript_former.models import SpatialTranscriptFormer
-from spatial_transcript_former.training.losses import AuxiliaryPathwayLoss
 from spatial_transcript_former.data.spatial_stats import spatial_coherence_score
 
 
@@ -67,41 +66,33 @@ def train_one_epoch(
     pbar = tqdm(loader, desc="Training")
 
     if whole_slide:
-        for batch_idx, (feats, genes, coords, mask) in enumerate(pbar):
-            feats, genes, coords, mask = (
-                feats.to(device),
-                genes.to(device),
-                coords.to(device),
-                mask.to(device),
-            )
+        for batch_idx, batch in enumerate(pbar):
+            # Unpack: (feats, genes, pathway_targets, coords, mask)
+            # We ignore genes directly, focusing strictly on pathways
+            feats, genes, pathway_targets, coords, mask = batch
+            feats = feats.to(device)
+            coords = coords.to(device)
+            mask = mask.to(device)
+            if pathway_targets is None:
+                raise ValueError(
+                    "pathway_targets is None, but training now requires pathway targets."
+                )
+            pathway_targets = pathway_targets.to(device)
 
             with torch.amp.autocast("cuda", enabled=scaler is not None):
                 if isinstance(model, SpatialTranscriptFormer) and not getattr(
                     model, "weak_supervision", False
                 ):
-                    # Request pathway scores if criterion can use them
-                    needs_pathways = isinstance(criterion, AuxiliaryPathwayLoss)
-                    output = model(
+                    preds = model(
                         feats,
                         return_dense=True,
                         mask=mask,
                         rel_coords=coords,
-                        return_pathways=needs_pathways,
                     )
-                    if needs_pathways:
-                        preds, pathway_preds = output
-                        loss = criterion(
-                            preds,
-                            genes,
-                            mask=mask,
-                            pathway_preds=pathway_preds,
-                        )
-                    else:
-                        preds = output
-                        loss = criterion(preds, genes, mask=mask)
+                    loss = criterion(preds, pathway_targets, mask=mask)
                 else:
                     preds = model(feats)
-                    bag_target = _compute_bag_target(genes, mask)
+                    bag_target = _compute_bag_target(pathway_targets, mask)
                     loss = criterion(preds, bag_target)
 
                 loss = loss / grad_accum_steps
@@ -114,9 +105,14 @@ def train_one_epoch(
             running_loss += current_loss
             pbar.set_postfix({"loss": f"{current_loss:.4f}"})
     else:
-        for batch_idx, (images, targets, rel_coords) in enumerate(pbar):
-            images, targets = images.to(device), targets.to(device)
+        for batch_idx, (images, genes, pathway_targets, rel_coords) in enumerate(pbar):
+            images = images.to(device)
             rel_coords = rel_coords.to(device)
+            if pathway_targets is None:
+                raise ValueError(
+                    "pathway_targets is None, but training now requires pathway targets."
+                )
+            pathway_targets = pathway_targets.to(device)
 
             with torch.amp.autocast("cuda", enabled=scaler is not None):
                 if isinstance(model, SpatialTranscriptFormer):
@@ -124,8 +120,7 @@ def train_one_epoch(
                 else:
                     outputs = model(images)
 
-                loss = criterion(outputs, targets)
-
+                loss = criterion(outputs, pathway_targets)
                 loss = loss / grad_accum_steps
 
             _optimizer_step(
@@ -157,17 +152,20 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
     with torch.no_grad():
         for batch in tqdm(loader, desc="Validation"):
             if whole_slide:
-                feats, genes, coords, mask = batch
-                feats, genes, coords, mask = (
-                    feats.to(device),
-                    genes.to(device),
-                    coords.to(device),
-                    mask.to(device),
-                )
+                feats, genes, pathway_targets, coords, mask = batch
+                feats = feats.to(device)
+                coords = coords.to(device)
+                mask = mask.to(device)
+                if pathway_targets is None:
+                    raise ValueError("pathway_targets is None in validation.")
+                pathway_targets = pathway_targets.to(device)
             else:
-                images, genes, rel_coords = batch
-                images, genes = images.to(device), genes.to(device)
+                images, genes, pathway_targets, rel_coords = batch
+                images = images.to(device)
                 rel_coords = rel_coords.to(device)
+                if pathway_targets is None:
+                    raise ValueError("pathway_targets is None in validation.")
+                pathway_targets = pathway_targets.to(device)
 
             with torch.amp.autocast("cuda", enabled=use_amp):
                 attn = None
@@ -176,19 +174,13 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                     if isinstance(model, SpatialTranscriptFormer) and not getattr(
                         model, "weak_supervision", False
                     ):
-                        needs_pathways = isinstance(criterion, AuxiliaryPathwayLoss)
-                        output = model(
+                        outputs = model(
                             feats,
                             return_dense=True,
                             mask=mask,
                             rel_coords=coords,
-                            return_pathways=needs_pathways,
                         )
-                        if needs_pathways:
-                            outputs, pathway_preds = output
-                        else:
-                            outputs = output
-                        targets = genes
+                        targets = pathway_targets
                     else:
                         # MIL models: extract attention if supported
                         if (
@@ -198,35 +190,26 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                             outputs, attn = model(feats, return_attention=True)
                         else:
                             outputs = model(feats)
-                        targets = _compute_bag_target(genes, mask)
+                        targets = _compute_bag_target(pathway_targets, mask)
                 else:
-                    targets = genes
+                    targets = pathway_targets
                     if isinstance(model, SpatialTranscriptFormer):
                         outputs = model(images, rel_coords=rel_coords)
                     else:
                         outputs = model(images)
 
-                # Compute loss, passing pathway_preds if available
+                # Compute loss
                 if (
                     whole_slide
                     and isinstance(model, SpatialTranscriptFormer)
                     and not getattr(model, "weak_supervision", False)
                 ):
-                    if isinstance(criterion, AuxiliaryPathwayLoss):
-                        loss = criterion(
-                            outputs,
-                            targets,
-                            mask=mask,
-                            pathway_preds=pathway_preds,
-                        )
-                    else:
-                        loss = criterion(outputs, targets, mask=mask)
+                    loss = criterion(outputs, targets, mask=mask)
                 else:
                     loss = criterion(outputs, targets)
 
                 # --- Interpretability Metrics (MAE & PCC) ---
-                # Since ZINB loss outputs a tuple (pi, mu, theta), we only use mu (index 1) for evaluations against truth.
-                eval_preds = outputs[1] if isinstance(outputs, tuple) else outputs
+                eval_preds = outputs
                 mae_diff = torch.abs(eval_preds - targets)
                 if (
                     whole_slide
@@ -297,9 +280,9 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                     for b in range(attn.shape[0]):
                         valid_idx = ~mask[b]
                         a_b = attn[b][valid_idx]
-                        g_total = genes[b][valid_idx].sum(dim=-1)
-                        if a_b.std() > 0 and g_total.std() > 0:
-                            corr = torch.corrcoef(torch.stack([a_b, g_total]))[0, 1]
+                        p_total = pathway_targets[b][valid_idx].sum(dim=-1)
+                        if a_b.std() > 0 and p_total.std() > 0:
+                            corr = torch.corrcoef(torch.stack([a_b, p_total]))[0, 1]
                             attn_correlations.append(corr.item())
 
             running_loss += loss.item()

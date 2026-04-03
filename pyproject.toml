@@ -40,6 +40,7 @@ stf-train = "spatial_transcript_former.train:main"
 stf-predict = "spatial_transcript_former.predict:main"
 stf-extract = "spatial_transcript_former.data.extract_features:main"
 stf-build-vocab = "spatial_transcript_former.data.build_vocab:main"
+stf-compute-pathways = "spatial_transcript_former.recipes.hest.compute_pathway_activities:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

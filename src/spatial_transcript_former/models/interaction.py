@@ -65,7 +65,6 @@ class SpatialTranscriptFormer(nn.Module):
 
     def __init__(
         self,
-        num_genes,
         num_pathways=50,
         backbone_name="resnet50",
         pretrained=True,
@@ -73,15 +72,12 @@ class SpatialTranscriptFormer(nn.Module):
         n_heads=4,
         n_layers=2,
         dropout=0.1,
-        pathway_init=None,
         use_spatial_pe=True,
-        output_mode="counts",
         interactions=None,
     ):
         """Initializes the SpatialTranscriptFormer.
 
         Args:
-            num_genes (int): Total number of output genes.
             num_pathways (int): Number of hidden pathway tokens.
             backbone_name (str): Identifier for backbone model.
             pretrained (bool): Load pretrained backbone weights.
@@ -89,10 +85,7 @@ class SpatialTranscriptFormer(nn.Module):
             n_heads (int): Number of attention heads.
             n_layers (int): Number of transformer/interaction layers.
             dropout (float): Dropout probability.
-            pathway_init (Tensor, optional): Biological pathway membership
-                matrix of shape (P, G) to initialize gene_reconstructor.
             use_spatial_pe (bool): Incorporate relative gradients into attention.
-            output_mode (str): 'counts' (standard MSE/PCC) or 'zinb' (Zero-Inflated Negative Binomial outputs).
             interactions (list[str], optional): Which attention interactions to
                 enable.  Valid keys are ``p2p``, ``p2h``, ``h2p``, ``h2h``.
                 Defaults to all four (full self-attention).
@@ -118,11 +111,6 @@ class SpatialTranscriptFormer(nn.Module):
                 f"Got n_layers={n_layers}. Layer 1 lets pathways gather spatial info, "
                 f"Layer 2 lets patches read contextualized pathways."
             )
-
-        # Override num_pathways if biological init is provided
-        if pathway_init is not None:
-            num_pathways = pathway_init.shape[0]
-            print(f"Pathway init: overriding num_pathways to {num_pathways}")
 
         self.num_pathways = num_pathways
         self.use_spatial_pe = use_spatial_pe
@@ -161,41 +149,7 @@ class SpatialTranscriptFormer(nn.Module):
             enable_nested_tensor=False,
         )
 
-        self.gene_reconstructor = nn.Linear(num_pathways, num_genes)
-
-        if pathway_init is not None:
-            with torch.no_grad():
-                # gene_reconstructor.weight is (num_genes, num_pathways)
-                # pathway_init is (num_pathways, num_genes)
-                # L1 normalization roughly matches variance scale of Kaiming initialization
-                # so that outputs don't explode before Softplus is applied.
-                pathway_init_norm = pathway_init / (
-                    pathway_init.sum(dim=1, keepdim=True) + 1e-6
-                )
-                self.gene_reconstructor.weight.copy_(pathway_init_norm.T)
-                self.gene_reconstructor.bias.zero_()
-            # Expose the MSigDB matrix for AuxiliaryPathwayLoss
-            self._pathway_init_matrix = pathway_init.clone()
-            print("Initialized gene_reconstructor with MSigDB Hallmarks")
-        else:
-            self._pathway_init_matrix = None
-
-        self.output_mode = output_mode
-        if self.output_mode == "zinb":
-            # pi: probability of dropout (zero-inflation)
-            self.pi_reconstructor = nn.Linear(num_pathways, num_genes)
-            # theta: inverse dispersion
-            self.theta_reconstructor = nn.Linear(num_pathways, num_genes)
-
-            # Initialize ZINB specialized heads carefully to avoid immediate collapse
-            with torch.no_grad():
-                # Initialize pi aggressively negative so sigmoid(pi) is near 0.05
-                nn.init.normal_(self.pi_reconstructor.weight, std=0.01)
-                nn.init.constant_(self.pi_reconstructor.bias, -3.0)
-
-                # Initialize theta so softplus(theta) is roughly 1.0
-                nn.init.normal_(self.theta_reconstructor.weight, std=0.01)
-                nn.init.constant_(self.theta_reconstructor.bias, 0.5)
+        # Interaction engine complete. Model outputs pathways directly.
 
     def _build_interaction_mask(self, p, s, device):
         """Build ``(P+S, P+S)`` boolean attention mask from ``self.interactions``.
@@ -226,14 +180,6 @@ class SpatialTranscriptFormer(nn.Module):
         mask.fill_diagonal_(False)
         return mask
 
-    def get_sparsity_loss(self):
-        """Computes L1 norm of reconstruction weights for sparsity regularization.
-
-        Returns:
-            torch.Tensor: L1 loss value.
-        """
-        return torch.norm(self.gene_reconstructor.weight, p=1)
-
     @classmethod
     def from_pretrained(cls, checkpoint_dir, device="cpu", **kwargs):
         """Load a pretrained SpatialTranscriptFormer from a checkpoint directory.
@@ -258,7 +204,6 @@ class SpatialTranscriptFormer(nn.Module):
         self,
         x,
         rel_coords=None,
-        return_pathways=False,
         mask=None,
         return_dense=False,
         return_attention=False,
@@ -270,14 +215,12 @@ class SpatialTranscriptFormer(nn.Module):
                 - (B, 3, H, W): Single image patch.
                 - (B, S, D): Pre-computed features.
             rel_coords (torch.Tensor, optional): Spatial relative coordinates.
-            return_pathways (bool): Whether to return pathway activations.
             mask (torch.Tensor, optional): Boolean padding mask for patches (B, S) where True = Padding.
-            return_dense (bool): If True, returns per-patch gene predictions instead of global predictions.
+            return_dense (bool): If True, returns per-patch pathway predictions instead of global predictions.
             return_attention (bool): If True, returns attention maps from all layers.
 
         Returns:
-            torch.Tensor: Predicted gene counts (B, num_genes) or (B, N, num_genes) if return_dense.
-            (Optional) torch.Tensor: Pathway activations/scores.
+            torch.Tensor: Predicted pathway scores (B, num_pathways) or (B, N, num_pathways) if return_dense.
             (Optional) list[torch.Tensor]: Attention maps [L, B, H, T, T] if return_attention.
         """
         if x.dim() == 4:
@@ -380,20 +323,7 @@ class SpatialTranscriptFormer(nn.Module):
             pathway_scores = torch.matmul(norm_global, norm_pathway.transpose(1, 2))
             pathway_scores = pathway_scores.squeeze(1)  # (B, P)
 
-        # Gene reconstruction (unified for both modes)
-        if self.output_mode == "zinb":
-            mu = F.softplus(self.gene_reconstructor(pathway_scores)) + 1e-6
-            mu = torch.clamp(mu, max=1e5)
-            pi = torch.sigmoid(self.pi_reconstructor(pathway_scores))
-            theta = F.softplus(self.theta_reconstructor(pathway_scores)) + 1e-6
-            gene_expression = (pi, mu, theta)
-        else:
-            # Enforce non-negativity for gene counts (log1p or raw)
-            gene_expression = F.softplus(self.gene_reconstructor(pathway_scores))
-
-        results = [gene_expression]
-        if return_pathways:
-            results.append(pathway_scores)
+        results = [pathway_scores]
         if return_attention:
             results.append(attentions)
 

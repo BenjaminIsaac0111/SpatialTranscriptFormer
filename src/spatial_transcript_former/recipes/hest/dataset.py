@@ -12,8 +12,10 @@ Two loading paths are supported:
   forward passes.  The default path used by the SpatialTranscriptFormer
   training pipeline (``--precomputed``).
 
-Both paths return ``(features_or_patches, gene_counts, relative_coords)``
-tuples, keeping the rest of the codebase agnostic to the loading strategy.
+Both paths return ``(features_or_patches, gene_counts, pathway_activities,
+relative_coords)`` tuples, keeping the rest of the codebase agnostic to the
+loading strategy.  ``pathway_activities`` is ``None`` when no
+``pathway_targets_dir`` is supplied.
 """
 
 import os
@@ -22,8 +24,6 @@ import json
 import torch
 import pandas as pd
 import numpy as np
-import hashlib
-import pickle
 from typing import List, Optional
 from .io import decode_h5_string, load_h5ad_metadata
 from spatial_transcript_former.data.base import (
@@ -93,7 +93,6 @@ class HEST_Dataset(SpatialDataset):
         neighborhood_indices: Optional[np.ndarray] = None,
         coords_all: Optional[np.ndarray] = None,
         augment: bool = False,
-        log1p: bool = False,
     ):
         self.h5_path = h5_path
         self.transform = transform
@@ -103,7 +102,6 @@ class HEST_Dataset(SpatialDataset):
         self.neighborhood_indices = neighborhood_indices
         self.coords_all = coords_all
         self.augment = augment
-        self.log1p = log1p
 
         # Opened lazily inside each DataLoader worker (see __getitem__).
         self.h5_file = None
@@ -163,8 +161,6 @@ class HEST_Dataset(SpatialDataset):
             rel_coords = torch.zeros((1, 2))
 
         gene_counts = torch.tensor(self.genes[idx], dtype=torch.float32)
-        if self.log1p:
-            gene_counts = torch.log1p(gene_counts)
 
         return data, gene_counts, rel_coords
 
@@ -183,11 +179,6 @@ def load_gene_expression_matrix(
     patch_barcodes: List[bytes],
     selected_gene_names: Optional[List[str]] = None,
     num_genes: int = 1000,
-    qc_min_umis: Optional[int] = None,
-    qc_min_genes: Optional[int] = None,
-    qc_max_mt: Optional[float] = None,
-    target_sum: Optional[int] = None,
-    qc_cache_dir: Optional[str] = None,
 ):
     """Load and align a gene expression matrix from a HEST ``.h5ad`` file.
 
@@ -226,29 +217,6 @@ def load_gene_expression_matrix(
 
     logger = logging.getLogger(__name__)
 
-    # --- QC Caching ---
-    qc_params_hash = None
-    loaded_from_cache = False
-    if qc_cache_dir and (
-        qc_min_umis is not None or qc_min_genes is not None or qc_max_mt is not None
-    ):
-        os.makedirs(qc_cache_dir, exist_ok=True)
-        # Create a unique hash for the QC parameters and this sample
-        qc_str = (
-            f"{os.path.basename(h5ad_path)}_{qc_min_umis}_{qc_min_genes}_{qc_max_mt}"
-        )
-        qc_params_hash = hashlib.md5(qc_str.encode()).hexdigest()
-        cache_path = os.path.join(qc_cache_dir, f"{qc_params_hash}.pt")
-
-        if os.path.exists(cache_path):
-            try:
-                cached_data = torch.load(cache_path, weights_only=False)
-                cached_qc_mask = cached_data["valid_patch_mask"]
-                loaded_from_cache = True
-                logger.info(f"Loaded QC mask from cache: {cache_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load QC cache from {cache_path}: {e}")
-
     metadata = load_h5ad_metadata(h5ad_path)
 
     st_barcodes = metadata["barcodes"]
@@ -273,13 +241,6 @@ def load_gene_expression_matrix(
         valid_patch_mask = np.array(valid_patch_mask)
         patch_indices_array = np.array(patch_indices)
 
-        # If we loaded from cache, restore the combined (barcode + QC) mask.
-        # The barcode loop above only produces a barcode-match mask; applying the
-        # cached mask here ensures QC-filtered spots are excluded from matrix
-        # slicing and from the returned mask without re-running QC.
-        if loaded_from_cache:
-            valid_patch_mask = cached_qc_mask
-
         # --- Load expression matrix (sparse or dense) ---
         X = f["X"]
         if isinstance(X, h5py.Group):
@@ -298,91 +259,6 @@ def load_gene_expression_matrix(
         if issparse(mat):
             mat = mat.tocsr()
         mat_subset = mat[valid_indices]
-
-        # --- Per-spot Quality Control (QC) ---
-        if (
-            qc_min_umis is not None or qc_min_genes is not None or qc_max_mt is not None
-        ) and not loaded_from_cache:
-            n_spots_before = mat_subset.shape[0]
-
-            # Calculate metrics
-            n_counts = np.array(mat_subset.sum(axis=1)).flatten()
-            n_genes = np.array((mat_subset > 0).sum(axis=1)).flatten()
-
-            qc_mask = np.ones(n_spots_before, dtype=bool)
-
-            if qc_min_umis is not None:
-                qc_mask &= n_counts >= qc_min_umis
-            if qc_min_genes is not None:
-                qc_mask &= n_genes >= qc_min_genes
-
-            if qc_max_mt is not None:
-                mt_prefixes = ["mt-", "mt:", "mt_", "grcm38_mt-", "hs_mt-"]
-                mt_genes = [
-                    i
-                    for i, name in enumerate(current_gene_names)
-                    if any(p in name.lower() for p in mt_prefixes)
-                ]
-                if mt_genes:
-                    if isinstance(mat_subset, csr_matrix):
-                        mt_counts = np.array(
-                            mat_subset[:, mt_genes].sum(axis=1)
-                        ).flatten()
-                    else:
-                        mt_counts = np.sum(mat_subset[:, mt_genes], axis=1)
-
-                    pct_counts_mt = mt_counts / (n_counts + 1e-9)
-                    qc_mask &= pct_counts_mt <= qc_max_mt
-                else:
-                    logger.warning(
-                        f"QC max_mt specified but no mitochondrial genes found in {os.path.basename(h5ad_path)}"
-                    )
-
-            n_spots_after = np.sum(qc_mask)
-            if n_spots_after < n_spots_before:
-                filtered_count = n_spots_before - n_spots_after
-                logger.info(
-                    f"QC filtered {filtered_count}/{n_spots_before} spots from {os.path.basename(h5ad_path)} ({n_spots_after/n_spots_before:.1%} kept)"
-                )
-
-                if n_spots_after < n_spots_before * 0.5:
-                    logger.warning(
-                        f"CRITICAL: More than 50% of spots filtered in {os.path.basename(h5ad_path)}! Check thresholds or data quality."
-                    )
-
-                mat_subset = mat_subset[qc_mask]
-
-            # Always update valid_patch_mask to reflect QC results
-            # (no-op when qc_mask is all-True, but keeps the mask consistent
-            # and ensures the cache always stores the combined barcode+QC mask).
-            global_qc_mask = np.zeros(len(valid_patch_mask), dtype=bool)
-            valid_mask_indices = np.where(valid_patch_mask)[0]
-            global_qc_mask[valid_mask_indices[qc_mask]] = True
-            valid_patch_mask = global_qc_mask
-
-            # Save to cache if enabled
-            if qc_params_hash and qc_cache_dir:
-                cache_path = os.path.join(qc_cache_dir, f"{qc_params_hash}.pt")
-                torch.save({"valid_patch_mask": valid_patch_mask}, cache_path)
-                logger.info(f"Saved QC mask to cache: {cache_path}")
-
-        # --- Library-size Normalization ---
-        if target_sum is not None and target_sum > 0:
-            row_sums = np.array(mat_subset.sum(axis=1)).flatten()
-            # Scaling factor: target_sum / total_counts_per_spot
-            # Avoid division by zero for spots with 0 counts
-            scaling_factor = target_sum / (row_sums + 1e-9)
-            scaling_factor = scaling_factor.reshape(-1, 1)
-
-            if issparse(mat_subset):
-                # Efficiently scale sparse matrix rows
-                mat_subset = mat_subset.multiply(scaling_factor)
-            else:
-                mat_subset = mat_subset * scaling_factor
-
-            logger.info(
-                f"Normalized library sizes to target_sum={target_sum} per spot."
-            )
 
         # --- Select / align genes ---
         if selected_gene_names is None:
@@ -479,12 +355,6 @@ def get_hest_dataloader(
     num_genes: int = 1000,
     n_neighbors: int = 0,
     augment: bool = False,
-    log1p: bool = False,
-    qc_min_umis: Optional[int] = None,
-    qc_min_genes: Optional[int] = None,
-    qc_max_mt: Optional[float] = None,
-    target_sum: Optional[int] = None,
-    qc_cache_dir: Optional[str] = None,
 ):
     """Build a DataLoader over raw histology patches for a list of HEST sample IDs.
 
@@ -543,11 +413,6 @@ def get_hest_dataloader(
                 patch_barcodes,
                 selected_gene_names=common_gene_names,
                 num_genes=num_genes,
-                qc_min_umis=qc_min_umis,
-                qc_min_genes=qc_min_genes,
-                qc_max_mt=qc_max_mt,
-                target_sum=target_sum,
-                qc_cache_dir=qc_cache_dir,
             )
 
             coords_subset = coords_all[mask]
@@ -581,7 +446,6 @@ def get_hest_dataloader(
                 neighborhood_indices=neighborhood_indices,
                 coords_all=coords_all,
                 augment=augment,
-                log1p=log1p,
             )
             datasets.append(ds)
 
@@ -634,11 +498,6 @@ class HEST_FeatureDataset(SpatialDataset):
         global_context_size (int): Number of patches in the global context.
         whole_slide_mode (bool): Return all patches as a single item.
         augment (bool): Apply dihedral and neighbourhood dropout augmentations.
-        log1p (bool): Apply ``log1p`` transform to gene expression counts.
-        qc_min_umis (int, optional): Minimum UMI count per spot.
-        qc_min_genes (int, optional): Minimum detected genes per spot.
-        qc_max_mt (float, optional): Maximum mitochondrial fraction per spot.
-        target_sum (int, optional): Target sum for library-size normalization.
     """
 
     def __init__(
@@ -652,12 +511,7 @@ class HEST_FeatureDataset(SpatialDataset):
         global_context_size: int = 256,
         whole_slide_mode: bool = False,
         augment: bool = False,
-        log1p: bool = False,
-        qc_min_umis: Optional[int] = None,
-        qc_min_genes: Optional[int] = None,
-        qc_max_mt: Optional[float] = None,
-        target_sum: Optional[int] = None,
-        qc_cache_dir: Optional[str] = None,
+        pathway_targets_dir: Optional[str] = None,
     ):
         self.feature_path = feature_path
         self.h5ad_path = h5ad_path
@@ -668,12 +522,7 @@ class HEST_FeatureDataset(SpatialDataset):
         self.global_context_size = global_context_size
         self.whole_slide_mode = whole_slide_mode
         self.augment = augment
-        self.log1p = log1p
-        self.qc_min_umis = qc_min_umis
-        self.qc_min_genes = qc_min_genes
-        self.qc_max_mt = qc_max_mt
-        self.target_sum = target_sum
-        self.qc_cache_dir = qc_cache_dir
+        self.pathway_targets_dir = pathway_targets_dir
 
         if not self.whole_slide_mode:
             self._load_data()
@@ -682,6 +531,7 @@ class HEST_FeatureDataset(SpatialDataset):
             self.features = None
             self.coords = None
             self.genes = None
+            self.pathway_activities = None
             self.kdtree = None
 
     def _load_data(self):
@@ -698,15 +548,7 @@ class HEST_FeatureDataset(SpatialDataset):
             barcodes,
             selected_gene_names=self.selected_gene_names,
             num_genes=self.num_genes,
-            qc_min_umis=self.qc_min_umis,
-            qc_min_genes=self.qc_min_genes,
-            qc_max_mt=self.qc_max_mt,
-            target_sum=self.target_sum,
-            qc_cache_dir=self.qc_cache_dir,
         )
-
-        if self.log1p:
-            gene_matrix = np.log1p(gene_matrix)
 
         if self.selected_gene_names is None:
             self.selected_gene_names = selected_names
@@ -719,6 +561,19 @@ class HEST_FeatureDataset(SpatialDataset):
         )  # (N_valid, 2)
         self.genes = torch.tensor(gene_matrix, dtype=torch.float32)  # (N_valid, G)
         self.kdtree = KDTree(self.coords.numpy())
+
+        # Load pathway activity targets if a directory is provided
+        self.pathway_activities = None
+        if self.pathway_targets_dir is not None:
+            sample_id = os.path.splitext(os.path.basename(self.feature_path))[0]
+            h5_path = os.path.join(self.pathway_targets_dir, f"{sample_id}.h5")
+            if os.path.exists(h5_path):
+                from .compute_pathway_activities import load_pathway_activities
+
+                acts, _, _ = load_pathway_activities(h5_path, list(barcodes))
+                self.pathway_activities = torch.tensor(
+                    acts[mask_bool], dtype=torch.float32
+                )  # (N_valid, P)
 
     def __len__(self):
         return 1 if self.whole_slide_mode else len(self.coords)
@@ -743,15 +598,7 @@ class HEST_FeatureDataset(SpatialDataset):
             barcodes,
             selected_gene_names=self.selected_gene_names,
             num_genes=self.num_genes,
-            qc_min_umis=self.qc_min_umis,
-            qc_min_genes=self.qc_min_genes,
-            qc_max_mt=self.qc_max_mt,
-            target_sum=self.target_sum,
-            qc_cache_dir=self.qc_cache_dir,
         )
-
-        if self.log1p:
-            gene_matrix = np.log1p(gene_matrix)
 
         mask_bool = np.array(mask, dtype=bool)
         feats = features[mask_bool]
@@ -763,7 +610,20 @@ class HEST_FeatureDataset(SpatialDataset):
         if self.augment:
             co, _ = apply_dihedral_augmentation(co)
 
-        return feats, g, co
+        # Load pathway activity targets if available
+        pathway_acts = None
+        if self.pathway_targets_dir is not None:
+            sample_id = os.path.splitext(os.path.basename(self.feature_path))[0]
+            h5_path = os.path.join(self.pathway_targets_dir, f"{sample_id}.h5")
+            if os.path.exists(h5_path):
+                from .compute_pathway_activities import load_pathway_activities
+
+                acts, _, _ = load_pathway_activities(h5_path, list(barcodes))
+                pathway_acts = torch.tensor(
+                    acts[mask_bool], dtype=torch.float32
+                )  # (N_valid, P)
+
+        return feats, g, pathway_acts, co
 
     def _getitem_patch(self, idx):
         """Return a single patch together with its neighbourhood context."""
@@ -821,7 +681,38 @@ class HEST_FeatureDataset(SpatialDataset):
             rel_coords, _ = apply_dihedral_augmentation(rel_coords)
 
         target_genes = self.genes[idx]
-        return feats, target_genes, rel_coords
+        pathway_acts = (
+            self.pathway_activities[idx]
+            if self.pathway_activities is not None
+            else None
+        )
+        return feats, target_genes, pathway_acts, rel_coords
+
+
+# ---------------------------------------------------------------------------
+# Collate helpers
+# ---------------------------------------------------------------------------
+
+
+def collate_fn_patch(batch):
+    """Collate ``(feats, genes, pathway_acts, coords)`` tuples.
+
+    Handles ``pathway_acts=None`` (when no pathway targets dir is configured)
+    by passing ``None`` through to the engine rather than stacking.
+
+    Args:
+        batch: List of ``(feats, genes, pathway_acts, coords)`` tuples.
+
+    Returns:
+        tuple: ``(feats, genes, pathway_acts, coords)`` where
+        ``pathway_acts`` is a stacked tensor or ``None``.
+    """
+    feats = torch.stack([item[0] for item in batch])
+    genes = torch.stack([item[1] for item in batch]) if batch[0][1] is not None else None
+    has_pathways = batch[0][2] is not None
+    pathways = torch.stack([item[2] for item in batch]) if has_pathways else None
+    coords = torch.stack([item[3] for item in batch])
+    return feats, genes, pathways, coords
 
 
 # ---------------------------------------------------------------------------
@@ -841,13 +732,8 @@ def get_hest_feature_dataloader(
     global_context_size: int = 256,
     whole_slide_mode: bool = False,
     augment: bool = False,
-    log1p: bool = False,
     feature_dir: Optional[str] = None,
-    qc_min_umis: Optional[int] = None,
-    qc_min_genes: Optional[int] = None,
-    qc_max_mt: Optional[float] = None,
-    target_sum: Optional[int] = None,
-    qc_cache_dir: Optional[str] = None,
+    pathway_targets_dir: Optional[str] = None,
 ):
     """Build a DataLoader over pre-computed feature vectors for a list of HEST sample IDs.
 
@@ -875,7 +761,6 @@ def get_hest_feature_dataloader(
         global_context_size (int): Number of global context patches.
         whole_slide_mode (bool): Return full slides instead of individual patches.
         augment (bool): Apply data augmentations.
-        log1p (bool): Apply ``log1p`` transform to gene expression counts.
         feature_dir (str, optional): Explicit feature directory; overrides the
             default ``<root_dir>/he_features`` location.
 
@@ -910,12 +795,7 @@ def get_hest_feature_dataloader(
                 global_context_size=global_context_size,
                 whole_slide_mode=whole_slide_mode,
                 augment=augment,
-                log1p=log1p,
-                qc_min_umis=qc_min_umis,
-                qc_min_genes=qc_min_genes,
-                qc_max_mt=qc_max_mt,
-                target_sum=target_sum,
-                qc_cache_dir=qc_cache_dir,
+                pathway_targets_dir=pathway_targets_dir,
             )
             datasets.append(ds)
 
@@ -930,18 +810,21 @@ def get_hest_feature_dataloader(
             """Pad variable-length slides to the longest in the batch.
 
             Args:
-                batch: List of ``(feats, genes, coords)`` tuples where each
-                    tensor has a variable first dimension (number of patches).
+                batch: List of ``(feats, genes, pathway_acts, coords)`` tuples
+                    where each tensor has a variable first dimension (number of
+                    patches).  ``pathway_acts`` may be ``None``.
 
             Returns:
-                tuple: ``(padded_feats, padded_genes, padded_coords, mask)``
-                    where ``mask`` is ``True`` for padding positions and
-                    ``False`` for real data.
+                tuple: ``(padded_feats, padded_genes, padded_pathway_acts,
+                padded_coords, mask)`` where ``mask`` is ``True`` for padding
+                positions.  ``padded_pathway_acts`` is ``None`` when no pathway
+                targets were loaded.
             """
             lengths = [item[0].shape[0] for item in batch]
             max_len = max(lengths)
             d_dim = batch[0][0].shape[1]
             g_dim = batch[0][1].shape[1]
+            has_pathways = batch[0][2] is not None
             bs = len(batch)
 
             padded_feats = torch.zeros(bs, max_len, d_dim)
@@ -950,14 +833,22 @@ def get_hest_feature_dataloader(
             # True = padding, False = valid data  (matches nn.MultiheadAttention convention)
             mask = torch.ones(bs, max_len, dtype=torch.bool)
 
-            for i, (f, g, c) in enumerate(batch):
+            if has_pathways:
+                p_dim = batch[0][2].shape[1]
+                padded_pathways = torch.zeros(bs, max_len, p_dim)
+            else:
+                padded_pathways = None
+
+            for i, (f, g, pw, c) in enumerate(batch):
                 l = lengths[i]
                 padded_feats[i, :l] = f
                 padded_genes[i, :l] = g
                 padded_coords[i, :l] = c
                 mask[i, :l] = False
+                if has_pathways:
+                    padded_pathways[i, :l] = pw
 
-            return padded_feats, padded_genes, padded_coords, mask
+            return padded_feats, padded_genes, padded_pathways, padded_coords, mask
 
         return DataLoader(
             concat_ds,
@@ -968,5 +859,9 @@ def get_hest_feature_dataloader(
         )
 
     return DataLoader(
-        concat_ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers
+        concat_ds,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        collate_fn=collate_fn_patch,
     )
