@@ -1,5 +1,5 @@
 """
-Merged tests: test_trainer.py
+Tests for Trainer lifecycle, callbacks, and checkpoint resumption.
 """
 
 import os
@@ -15,32 +15,35 @@ from spatial_transcript_former.training.trainer import (
     EarlyStoppingCallback,
 )
 from spatial_transcript_former.data.base import SpatialDataset
+from spatial_transcript_former.recipes.hest.dataset import collate_fn_patch
 
-# --- From test_trainer.py ---
+# ---------------------------------------------------------------------------
+# Setup
+# ---------------------------------------------------------------------------
 
 
 class TinySpatialDataset(SpatialDataset):
     """Minimal SpatialDataset for testing."""
 
-    def __init__(self, n=32, feature_dim=64, num_genes=10):
+    def __init__(self, n=32, feature_dim=64, num_pathways=10):
         self._features = torch.randn(n, 1, feature_dim)
-        self._genes = torch.randn(n, num_genes).abs()
+        self._pathways = torch.randn(n, num_pathways).abs()
         self._coords = torch.zeros(n, 1, 2)
-        self.num_genes = num_genes
+        self.num_pathways = num_pathways
 
     def __len__(self):
         return len(self._features)
 
     def __getitem__(self, idx):
-        return self._features[idx], self._genes[idx], self._coords[idx]
+        return self._features[idx], None, self._pathways[idx], self._coords[idx]
 
 
 class TinyModel(nn.Module):
     """Simple linear model for testing (mimics patch-level prediction)."""
 
-    def __init__(self, in_dim=64, num_genes=10):
+    def __init__(self, in_dim=64, num_pathways=10):
         super().__init__()
-        self.fc = nn.Linear(in_dim, num_genes)
+        self.fc = nn.Linear(in_dim, num_pathways)
 
     def forward(self, x, **kwargs):
         # x shape: (B, 1, D) -> squeeze -> (B, D)
@@ -52,11 +55,13 @@ class TinyModel(nn.Module):
 @pytest.fixture
 def tiny_setup(tmp_path):
     """Create a minimal training setup with a tmp_path for output."""
-    ds = TinySpatialDataset(n=32, feature_dim=64, num_genes=10)
-    train_loader = DataLoader(ds, batch_size=8, shuffle=True)
-    val_loader = DataLoader(ds, batch_size=8)
+    ds = TinySpatialDataset(n=32, feature_dim=64, num_pathways=10)
+    train_loader = DataLoader(
+        ds, batch_size=8, shuffle=True, collate_fn=collate_fn_patch
+    )
+    val_loader = DataLoader(ds, batch_size=8, collate_fn=collate_fn_patch)
 
-    model = TinyModel(in_dim=64, num_genes=10)
+    model = TinyModel(in_dim=64, num_pathways=10)
     criterion = nn.MSELoss()
     output_dir = str(tmp_path / "output")
 

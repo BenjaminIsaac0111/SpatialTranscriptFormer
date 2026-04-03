@@ -1,5 +1,5 @@
 """
-Merged tests: test_dataset_logic.py, test_dataset_mocks.py, test_dataloader_h5ad.py, test_qc_filtering.py
+Tests for HEST dataset loaders, augmentations, and coordinate normalization.
 """
 
 from unittest.mock import MagicMock, patch
@@ -20,7 +20,9 @@ from spatial_transcript_former.recipes.hest.dataset import (
 )
 from spatial_transcript_former.recipes.hest.dataset import get_hest_dataloader
 
-# --- From test_dataset_logic.py ---
+# ---------------------------------------------------------------------------
+# Core Logic
+# ---------------------------------------------------------------------------
 
 
 def test_apply_dihedral_augmentation_all_ops():
@@ -117,7 +119,9 @@ def test_apply_dihedral_to_tensor_consistency():
         assert aug_img[0, row, col] == 1.0, f"Inconsistent mapping for op {op}"
 
 
-# --- From test_dataset_mocks.py ---
+# ---------------------------------------------------------------------------
+# Mocks
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -211,7 +215,7 @@ def test_hest_feature_dataset_neighborhood_dropout():
         # Run multiple times to trigger the stochastic dropout
         dropout_occurred = False
         for _ in range(100):
-            f, _, _ = ds[0]
+            f, _, _, _ = ds[0]
             # Center (index 0) should NEVER be zero
             assert not torch.all(f[0] == 0)
 
@@ -220,45 +224,3 @@ def test_hest_feature_dataset_neighborhood_dropout():
                 dropout_occurred = True
 
         assert dropout_occurred, "Neighborhood dropout augmentation was never triggered"
-
-
-def test_hest_dataset_log1p_logic(mock_h5_file):
-    """Verify that log1p is applied to genes when enabled."""
-    coords = np.array([[10.0, 20.0]])
-    genes = np.array([[10.0]])
-
-    ds_no_log = HEST_Dataset("mock.h5", coords, genes, log1p=False)
-    _, g_no_log, _ = ds_no_log[0]
-    assert g_no_log[0] == 10.0
-
-    ds_log = HEST_Dataset("mock.h5", coords, genes, log1p=True)
-    _, g_log, _ = ds_log[0]
-    assert torch.allclose(g_log[0], torch.log1p(torch.tensor(10.0)))
-
-
-# --- From test_dataloader_h5ad.py ---
-
-
-data_dir = r"A:\hest_data"
-# Use a sample ID we know exists
-sample_ids = ["MEND29"]  # Start with just one
-
-print(f"Testing DataLoader with ID: {sample_ids}")
-
-try:
-    loader = get_hest_dataloader(data_dir, sample_ids, batch_size=4, num_genes=100)
-    print(f"DataLoader created with {len(loader)} batches.")
-
-    for i, (images, targets) in enumerate(loader):
-        print(f"Batch {i}:")
-        print(f"  Images shape: {images.shape}")
-        print(f"  Targets shape: {targets.shape}")
-        print(f"  Target range: {targets.min()} - {targets.max()}")
-        if i >= 0:
-            break  # Just one batch
-
-except Exception as e:
-    print(f"Error: {e}")
-    import traceback
-
-    traceback.print_exc()

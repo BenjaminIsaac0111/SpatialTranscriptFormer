@@ -1,5 +1,5 @@
 """
-Merged tests: test_visualization.py, test_spatial_stats.py
+Tests for training summary visualization and spatial statistics (Moran's I, Coherence).
 """
 
 import os
@@ -16,7 +16,9 @@ from spatial_transcript_former.data.spatial_stats import (
     _build_knn_weights,
 )
 
-# --- From test_visualization.py ---
+# ---------------------------------------------------------------------------
+# Training Summary
+# ---------------------------------------------------------------------------
 
 
 matplotlib.use("Agg")
@@ -172,7 +174,9 @@ class TestZScoreNormalization:
         assert np.allclose(z, 0.0, atol=1e-4)
 
 
-# --- From test_spatial_stats.py ---
+# ---------------------------------------------------------------------------
+# Spatial Statistics
+# ---------------------------------------------------------------------------
 
 
 def _make_grid(rows=10, cols=10):

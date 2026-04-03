@@ -1,13 +1,11 @@
 """
-Merged tests: test_data_management.py, test_data_integrity.py
+Tests for biological coverage and spatial data integrity.
 """
 
 import os
-
 import pytest
 import torch
 import numpy as np
-import h5py
 
 from spatial_transcript_former.recipes.hest.io import (
     get_hest_data_dir,
@@ -19,8 +17,6 @@ from spatial_transcript_former.data.pathways import (
     parse_gmt,
     MSIGDB_URLS,
 )
-
-# --- From test_data_integrity.py ---
 
 
 @pytest.fixture

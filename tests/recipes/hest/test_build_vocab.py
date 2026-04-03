@@ -1,5 +1,5 @@
 """
-Merged tests: test_build_vocab.py
+Tests for scanning H5AD files and building gene/pathway vocabularies.
 """
 
 import os
@@ -9,7 +9,9 @@ import pytest
 
 from spatial_transcript_former.recipes.hest.build_vocab import scan_h5ad_files
 
-# --- From test_build_vocab.py ---
+# ---------------------------------------------------------------------------
+# Scanning
+# ---------------------------------------------------------------------------
 
 
 def test_scan_h5ad_files_success(tmp_path):
