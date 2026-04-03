@@ -50,31 +50,30 @@ def test_model_compilation_sanity():
 
     # Using a small model for fast compilation check
     model = SpatialTranscriptFormer(
-        token_dim=64,
-        n_heads=2,
-        n_layers=1,
-        pretrained=False
+        token_dim=64, n_heads=2, n_layers=1, pretrained=False
     ).eval()
-    
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
-    
+
     try:
         compiled_model = torch.compile(model)
-        
+
         # Mock input
         features = torch.randn(1, 4, 2048).to(device)
         coords = torch.randn(1, 4, 2).to(device)
-        
+
         # Warmup (this is where most errors occur)
         with torch.no_grad():
             _ = compiled_model(features, rel_coords=coords)
-            
+
         print("Model compilation successful!")
     except RuntimeError as e:
         if "not supported on Python 3.14" in str(e):
             pytest.skip(f"torch.compile not supported on Python 3.14: {e}")
-        pytest.fail(f"SpatialTranscriptFormer compilation failed with RuntimeError: {e}")
+        pytest.fail(
+            f"SpatialTranscriptFormer compilation failed with RuntimeError: {e}"
+        )
     except Exception as e:
         pytest.fail(f"SpatialTranscriptFormer compilation failed: {e}")
 

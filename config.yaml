@@ -12,7 +12,7 @@ training:
   batch_size: 8
   learning_rate: 0.0001
   output_dir: "./runs"
-  
+
 # MSigDB Pathway Settings
 pathways:
   default_collection: "hallmarks"

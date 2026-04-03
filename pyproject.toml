@@ -31,6 +31,7 @@ dev = [
     "pytest",
     "black",
     "flake8",
+    "pre-commit",
 ]
 
 [project.scripts]
@@ -55,3 +56,21 @@ filterwarnings = [
     "ignore:os.fork:RuntimeWarning",
     "ignore:torch.utils._pytree._register_pytree_node is deprecated:UserWarning",
 ]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''

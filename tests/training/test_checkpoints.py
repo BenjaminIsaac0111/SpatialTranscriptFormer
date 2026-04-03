@@ -146,6 +146,7 @@ class TestCheckpointRoundtrip:
 # Basic State Dict
 # ---------------------------------------------------------------------------
 
+
 def test_checkpoint_save_load():
     """
     Verify that a model can be saved and loaded without losing architectural state.
@@ -158,7 +159,8 @@ def test_checkpoint_save_load():
 
         # Save state
         torch.save(
-            {"model_state_dict": model.state_dict(), "num_pathways": num_pathways}, ckpt_path
+            {"model_state_dict": model.state_dict(), "num_pathways": num_pathways},
+            ckpt_path,
         )
 
         # Load state

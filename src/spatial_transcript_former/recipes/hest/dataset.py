@@ -708,7 +708,9 @@ def collate_fn_patch(batch):
         ``pathway_acts`` is a stacked tensor or ``None``.
     """
     feats = torch.stack([item[0] for item in batch])
-    genes = torch.stack([item[1] for item in batch]) if batch[0][1] is not None else None
+    genes = (
+        torch.stack([item[1] for item in batch]) if batch[0][1] is not None else None
+    )
     has_pathways = batch[0][2] is not None
     pathways = torch.stack([item[2] for item in batch]) if has_pathways else None
     coords = torch.stack([item[3] for item in batch])

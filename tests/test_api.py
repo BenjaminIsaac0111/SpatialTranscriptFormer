@@ -297,7 +297,9 @@ class TestInjectPredictions:
         pathway_scores = np.random.rand(n, p).astype(np.float32)
         pathway_names = [f"PW_{i}" for i in range(p)]
 
-        inject_predictions(adata, np.zeros((n, 2)), pathway_scores, pathway_names=pathway_names)
+        inject_predictions(
+            adata, np.zeros((n, 2)), pathway_scores, pathway_names=pathway_names
+        )
         assert adata.X.shape == (n, p)
         assert list(adata.var_names) == pathway_names
 

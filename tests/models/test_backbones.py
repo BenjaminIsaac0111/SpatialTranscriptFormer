@@ -53,7 +53,9 @@ def test_attention_mil_backbone():
 
 def test_trans_mil_backbone():
     num_pathways = 50
-    model = TransMIL(output_dim=num_pathways, backbone_name="resnet50", pretrained=False)
+    model = TransMIL(
+        output_dim=num_pathways, backbone_name="resnet50", pretrained=False
+    )
 
     x = torch.randn(2, 5, 3, 224, 224)
     out = model(x)

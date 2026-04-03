@@ -24,7 +24,7 @@ Or using the provided PowerShell script:
   - Sample filtering logic (by Organ, Disease, Technology).
   - Pattern generation for HEST subsets.
   - Unzipping logic for segmentation files.
-  
+
 - `tests/test_splitting_logic.py`: Tests for `splitting.py`. Verifies:
   - Patient-level splitting (train/val/test).
   - Leakage prevention (ensuring patients don't overlap between splits).

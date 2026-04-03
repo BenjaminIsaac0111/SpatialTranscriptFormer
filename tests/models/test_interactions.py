@@ -21,9 +21,7 @@ from spatial_transcript_former.training.engine import train_one_epoch, validate
 
 def test_mask_logic():
     print("Testing Mask Logic...")
-    model = SpatialTranscriptFormer(
-        num_pathways=10, interactions=["p2p", "p2h"]
-    )
+    model = SpatialTranscriptFormer(num_pathways=10, interactions=["p2p", "p2h"])
 
     # p=10, s=20
     mask = model._build_interaction_mask(10, 20, "cpu")
@@ -185,9 +183,7 @@ def test_attention_extraction():
 def test_n_layers_enforcement():
     """n_layers < 2 with h2h blocked should raise ValueError."""
     with pytest.raises(ValueError, match="n_layers must be >= 2"):
-        SpatialTranscriptFormer(
-            n_layers=1, interactions=["p2p", "p2h", "h2p"]
-        )
+        SpatialTranscriptFormer(n_layers=1, interactions=["p2p", "p2h", "h2p"])
 
 
 def test_n_layers_ok_with_full_interactions():
@@ -375,9 +371,7 @@ def test_spatial_encoder_normalization():
 
 def test_interaction_mask_bits():
     """Explicitly verify which bits are blocked in the interaction mask."""
-    model = SpatialTranscriptFormer(
-        interactions=["p2h", "h2p", "h2h"]
-    )  # No p2p
+    model = SpatialTranscriptFormer(interactions=["p2h", "h2p", "h2h"])  # No p2p
     p, s = 2, 3
     mask = model._build_interaction_mask(p, s, torch.device("cpu"))
 
@@ -397,9 +391,7 @@ def test_interaction_mask_bits():
 
 def test_return_attention_values():
     """Validate attention weight extraction logic."""
-    model = SpatialTranscriptFormer(
-        token_dim=64, n_heads=2, n_layers=2
-    ).eval()
+    model = SpatialTranscriptFormer(token_dim=64, n_heads=2, n_layers=2).eval()
     B, S, D = 1, 4, 2048
     features = torch.randn(B, S, D)
     coords = torch.randn(B, S, 2)
@@ -407,9 +399,7 @@ def test_return_attention_values():
 
     # [pw_scores, attentions]
     with torch.no_grad():
-        _, attentions = model(
-            features, rel_coords=coords, return_attention=True
-        )
+        _, attentions = model(features, rel_coords=coords, return_attention=True)
 
     assert len(attentions) == 2  # n_layers
     for layer_attn in attentions:
