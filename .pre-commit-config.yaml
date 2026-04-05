@@ -14,3 +14,12 @@ repos:
     hooks:
     -   id: black
         language_version: python3
+
+-   repo: local
+    hooks:
+    -   id: pytest
+        name: pytest
+        entry: conda run -n SpatialTranscriptFormer --no-capture-output python -m pytest
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -231,7 +231,7 @@ def get_hest_dataloader(
 
     Patches and gene expression are loaded from ``<root_dir>/patches/<id>.h5``
     and ``<root_dir>/st/<id>.h5ad`` respectively.  All samples are aligned to
-    the global gene list loaded via :func:`load_global_genes`.
+    the global list of pathway-relevant features.
 
     Args:
         root_dir (str): Root directory containing ``patches/`` and ``st/``
