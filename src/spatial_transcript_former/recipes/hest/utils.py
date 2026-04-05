@@ -1,5 +1,4 @@
 import os
-import argparse
 import pandas as pd
 from torchvision import transforms
 from spatial_transcript_former.data.paths import resolve_feature_dir
@@ -78,7 +77,8 @@ def get_sample_ids(
         original_count = len(final_ids)
         final_ids = [fid for fid in final_ids if fid in available_pts]
         print(
-            f"Refined to {len(final_ids)}/{original_count} based on features in {feat_dir}"
+            f"Refined to {len(final_ids)}/{original_count} based on features in "
+            f"{feat_dir}"
         )
 
     if max_samples is not None:
@@ -180,6 +180,9 @@ def setup_dataloaders(args, train_ids, val_ids):
         except FileNotFoundError as e:
             raise RuntimeError(f"Cannot setup dataloaders: {e}")
 
+        pathway_targets_dir = getattr(args, "pathway_targets_dir", None)
+        pathway_names = getattr(args, "pathways", None)
+
         if args.whole_slide:
             train_loader = (
                 get_hest_feature_dataloader(
@@ -187,17 +190,13 @@ def setup_dataloaders(args, train_ids, val_ids):
                     train_ids,
                     batch_size=args.batch_size,
                     shuffle=True,
-                    num_genes=args.num_genes,
+                    num_workers=0,  # Cached in-RAM, no workers needed (faster/safer on Windows)
                     n_neighbors=args.n_neighbors,
                     whole_slide_mode=True,
                     augment=args.augment,
                     feature_dir=feat_dir,
-                    log1p=args.log_transform,
-                    qc_min_umis=args.qc_min_umis,
-                    qc_min_genes=args.qc_min_genes,
-                    qc_max_mt=args.qc_max_mt,
-                    target_sum=args.target_sum,
-                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    pathway_targets_dir=pathway_targets_dir,
+                    pathway_names=pathway_names,
                 )
                 if train_ids
                 else None
@@ -208,17 +207,13 @@ def setup_dataloaders(args, train_ids, val_ids):
                     val_ids,
                     batch_size=args.batch_size,
                     shuffle=False,
-                    num_genes=args.num_genes,
+                    num_workers=0,  # Cached in-RAM, no workers needed
                     n_neighbors=args.n_neighbors,
                     whole_slide_mode=True,
                     augment=False,
                     feature_dir=feat_dir,
-                    log1p=args.log_transform,
-                    qc_min_umis=args.qc_min_umis,
-                    qc_min_genes=args.qc_min_genes,
-                    qc_max_mt=args.qc_max_mt,
-                    target_sum=args.target_sum,
-                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    pathway_targets_dir=pathway_targets_dir,
+                    pathway_names=pathway_names,
                 )
                 if val_ids
                 else None
@@ -230,18 +225,14 @@ def setup_dataloaders(args, train_ids, val_ids):
                     train_ids,
                     batch_size=args.batch_size,
                     shuffle=True,
-                    num_genes=args.num_genes,
+                    num_workers=args.num_workers,
                     n_neighbors=args.n_neighbors,
                     use_global_context=args.use_global_context,
                     global_context_size=args.global_context_size,
                     augment=args.augment,
                     feature_dir=feat_dir,
-                    log1p=args.log_transform,
-                    qc_min_umis=args.qc_min_umis,
-                    qc_min_genes=args.qc_min_genes,
-                    qc_max_mt=args.qc_max_mt,
-                    target_sum=args.target_sum,
-                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    pathway_targets_dir=pathway_targets_dir,
+                    pathway_names=pathway_names,
                 )
                 if train_ids
                 else None
@@ -254,16 +245,12 @@ def setup_dataloaders(args, train_ids, val_ids):
                     val_ids,
                     batch_size=args.batch_size,
                     shuffle=False,
-                    num_genes=args.num_genes,
+                    num_workers=0,  # Cached in-RAM, no workers needed
                     whole_slide_mode=True,
                     augment=False,
                     feature_dir=feat_dir,
-                    log1p=args.log_transform,
-                    qc_min_umis=args.qc_min_umis,
-                    qc_min_genes=args.qc_min_genes,
-                    qc_max_mt=args.qc_max_mt,
-                    target_sum=args.target_sum,
-                    qc_cache_dir=getattr(args, "qc_cache_dir", None),
+                    pathway_targets_dir=pathway_targets_dir,
+                    pathway_names=pathway_names,
                 )
                 if val_ids
                 else None
@@ -278,7 +265,7 @@ def setup_dataloaders(args, train_ids, val_ids):
         if args.augment:
             train_transform = transforms.Compose(
                 [
-                    # Note: Rotations/Flips are now handled DIHEDRALLY inside HEST_Dataset for coord sync
+                    # Rotations/Flips handled DIHEDRALLY inside HEST_Dataset
                     transforms.ColorJitter(brightness=0.1, contrast=0.1),
                     norm,
                 ]
@@ -295,16 +282,10 @@ def setup_dataloaders(args, train_ids, val_ids):
                 train_ids,
                 batch_size=args.batch_size,
                 shuffle=True,
-                num_genes=args.num_genes,
+                num_workers=args.num_workers,
                 n_neighbors=args.n_neighbors,
                 transform=train_transform,
                 augment=args.augment,
-                log1p=args.log_transform,
-                qc_min_umis=args.qc_min_umis,
-                qc_min_genes=args.qc_min_genes,
-                qc_max_mt=args.qc_max_mt,
-                target_sum=args.target_sum,
-                qc_cache_dir=getattr(args, "qc_cache_dir", None),
             )
             if train_ids
             else None
@@ -315,15 +296,9 @@ def setup_dataloaders(args, train_ids, val_ids):
                 val_ids,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_genes=args.num_genes,
+                num_workers=args.num_workers,
                 n_neighbors=args.n_neighbors,
                 transform=val_transform,
-                log1p=args.log_transform,
-                qc_min_umis=args.qc_min_umis,
-                qc_min_genes=args.qc_min_genes,
-                qc_max_mt=args.qc_max_mt,
-                target_sum=args.target_sum,
-                qc_cache_dir=getattr(args, "qc_cache_dir", None),
             )
             if val_ids
             else None

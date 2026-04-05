@@ -1,5 +1,5 @@
 """
-Merged tests: test_interactions.py, test_spatial_interaction.py
+Tests for SpatialTranscriptFormer interaction logic and attention masking.
 """
 
 import sys
@@ -11,7 +11,6 @@ import torch.nn as nn
 import numpy as np
 import pytest
 
-from spatial_transcript_former.models.interaction import SpatialTranscriptFormer
 from spatial_transcript_former.models.interaction import (
     SpatialTranscriptFormer,
     LearnedSpatialEncoder,
@@ -19,14 +18,10 @@ from spatial_transcript_former.models.interaction import (
 )
 from spatial_transcript_former.training.engine import train_one_epoch, validate
 
-# --- From test_interactions.py ---
-
 
 def test_mask_logic():
     print("Testing Mask Logic...")
-    model = SpatialTranscriptFormer(
-        num_genes=100, num_pathways=10, interactions=["p2p", "p2h"]
-    )
+    model = SpatialTranscriptFormer(num_pathways=10, interactions=["p2p", "p2h"])
 
     # p=10, s=20
     mask = model._build_interaction_mask(10, 20, "cpu")
@@ -47,7 +42,6 @@ def test_connectivity():
     print("Testing Patch-to-Patch Connectivity (h2h)...")
     # Enable all interactions including h2h
     model = SpatialTranscriptFormer(
-        num_genes=100,
         num_pathways=10,
         n_layers=2,
         interactions=["p2p", "p2h", "h2p", "h2h"],
@@ -79,7 +73,6 @@ def test_connectivity():
     # Now try with h2h disabled
     print("Testing Connectivity with h2h disabled...")
     model_no_h2h = SpatialTranscriptFormer(
-        num_genes=100,
         num_pathways=10,
         n_layers=2,
         interactions=["p2p", "p2h", "h2p"],
@@ -107,7 +100,6 @@ def test_connectivity():
     # To truly see zero interaction, block pathways too
     print("Testing ZERO Connectivity (only p2p enabled)...")
     model_isolated = SpatialTranscriptFormer(
-        num_genes=100,
         num_pathways=10,
         n_layers=2,
         interactions=["p2p"],
@@ -132,7 +124,6 @@ def test_attention_extraction():
     print("Testing Attention Extraction...")
     p, s = 10, 20
     model = SpatialTranscriptFormer(
-        num_genes=100,
         num_pathways=p,
         n_layers=2,
         interactions=["p2p", "p2h"],  # Block h2p, h2h
@@ -192,15 +183,12 @@ def test_attention_extraction():
 def test_n_layers_enforcement():
     """n_layers < 2 with h2h blocked should raise ValueError."""
     with pytest.raises(ValueError, match="n_layers must be >= 2"):
-        SpatialTranscriptFormer(
-            num_genes=50, n_layers=1, interactions=["p2p", "p2h", "h2p"]
-        )
+        SpatialTranscriptFormer(n_layers=1, interactions=["p2p", "p2h", "h2p"])
 
 
 def test_n_layers_ok_with_full_interactions():
     """n_layers=1 is allowed when h2h is enabled (full attention)."""
     model = SpatialTranscriptFormer(
-        num_genes=50,
         token_dim=64,
         n_heads=4,
         n_layers=1,
@@ -212,7 +200,7 @@ def test_n_layers_ok_with_full_interactions():
 def test_invalid_interaction_key():
     """Unknown interaction keys should raise ValueError."""
     with pytest.raises(ValueError, match="Unknown interaction keys"):
-        SpatialTranscriptFormer(num_genes=50, interactions=["p2p", "x2y"])
+        SpatialTranscriptFormer(interactions=["p2p", "x2y"])
 
 
 @pytest.mark.parametrize(
@@ -226,7 +214,6 @@ def test_invalid_interaction_key():
 def test_interaction_combinations(interactions):
     """Various interaction combos should produce correct output shapes."""
     model = SpatialTranscriptFormer(
-        num_genes=50,
         token_dim=64,
         n_heads=4,
         n_layers=2,
@@ -242,7 +229,6 @@ def test_interaction_combinations(interactions):
 def test_full_interactions_returns_no_mask():
     """When all interactions are enabled, _build_interaction_mask returns None."""
     model = SpatialTranscriptFormer(
-        num_genes=50,
         token_dim=64,
         n_heads=4,
         n_layers=2,
@@ -254,7 +240,7 @@ def test_full_interactions_returns_no_mask():
 
 def test_missing_coords_raises():
     """use_spatial_pe=True without coords should raise ValueError."""
-    model = SpatialTranscriptFormer(num_genes=50, token_dim=64, n_heads=4, n_layers=2)
+    model = SpatialTranscriptFormer(token_dim=64, n_heads=4, n_layers=2)
     features = torch.randn(2, 10, 2048)
     with pytest.raises(ValueError, match="rel_coords was not provided"):
         model(features)
@@ -263,7 +249,6 @@ def test_missing_coords_raises():
 def test_spatial_transcript_former_dense_forward():
     """Instantiate the model and ensure forward() with return_dense=True executes properly."""
     model = SpatialTranscriptFormer(
-        num_genes=50,
         token_dim=64,
         n_heads=4,
         n_layers=2,
@@ -297,50 +282,32 @@ def test_spatial_transcript_former_dense_forward():
     ), "Gradients did not flow through the transformer in dense pass."
 
 
-def test_unified_pathway_scoring():
-    """Both global and dense modes should produce pathway_scores from dot-products."""
-    model = SpatialTranscriptFormer(
-        num_genes=50,
-        token_dim=64,
-        n_heads=4,
-        n_layers=2,
-        num_pathways=10,
-    )
-
-    B, N, D = 2, 5, 2048
-    features = torch.randn(B, N, D)
-    coords = torch.randn(B, N, 2)
-
-    # Global mode returns (gene_expression, pathway_scores)
-    gene_expr, pw_scores = model(features, rel_coords=coords, return_pathways=True)
-    assert gene_expr.shape == (B, 50)
-    assert pw_scores.shape == (B, 10)  # (B, P) from pooled dot-product
-
-    # Dense mode returns (gene_expression, pathway_scores)
-    gene_expr_d, pw_scores_d = model(
-        features, rel_coords=coords, return_pathways=True, return_dense=True
-    )
-    assert gene_expr_d.shape == (B, N, 50)
-    assert pw_scores_d.shape == (B, N, 10)  # (B, S, P) from per-patch dot-product
-
-
 def test_engine_passes_coords_to_forward():
     """
     Verify that the training engine passes spatial coordinates to
     model.forward() in whole_slide mode.
     """
-    model = SpatialTranscriptFormer(num_genes=10)
+    model = SpatialTranscriptFormer()
 
     # Mock forward to track calls
     original_forward = model.forward
-    model.forward = MagicMock(return_value=torch.randn(2, 5, 10))
+    model.forward = MagicMock(return_value=torch.randn(2, 5, 50))
     model.get_sparsity_loss = MagicMock(return_value=torch.tensor(0.0))
 
     fake_coords = torch.randn(2, 5, 2)
     fake_mask = torch.zeros(2, 5).bool()
 
-    # Dataloader yielding (feats, genes, coords, mask)
-    loader = [(torch.randn(2, 5, 512), torch.randn(2, 5, 10), fake_coords, fake_mask)]
+    # Dataloader yielding (feats, genes, pathway_targets, coords, mask, pathway_morans)
+    loader = [
+        (
+            torch.randn(2, 5, 512),
+            None,
+            torch.randn(2, 5, 50),
+            fake_coords,
+            fake_mask,
+            None,
+        )
+    ]
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
@@ -362,16 +329,18 @@ def test_engine_validate_passes_coords():
     """
     Verify validation loop passes coords.
     """
-    model = SpatialTranscriptFormer(num_genes=10)
-    model.forward = MagicMock(return_value=torch.randn(2, 5, 10))
+    model = SpatialTranscriptFormer()
+    model.forward = MagicMock(return_value=torch.randn(2, 5, 50))
 
     fake_coords = torch.randn(2, 5, 2)
     loader = [
         (
             torch.randn(2, 5, 512),
-            torch.randn(2, 5, 10),
+            None,
+            torch.randn(2, 5, 50),
             fake_coords,
             torch.zeros(2, 5).bool(),
+            None,
         )
     ]
 
@@ -410,9 +379,7 @@ def test_spatial_encoder_normalization():
 
 def test_interaction_mask_bits():
     """Explicitly verify which bits are blocked in the interaction mask."""
-    model = SpatialTranscriptFormer(
-        num_genes=50, interactions=["p2h", "h2p", "h2h"]
-    )  # No p2p
+    model = SpatialTranscriptFormer(interactions=["p2h", "h2p", "h2h"])  # No p2p
     p, s = 2, 3
     mask = model._build_interaction_mask(p, s, torch.device("cpu"))
 
@@ -432,19 +399,15 @@ def test_interaction_mask_bits():
 
 def test_return_attention_values():
     """Validate attention weight extraction logic."""
-    model = SpatialTranscriptFormer(
-        num_genes=10, token_dim=64, n_heads=2, n_layers=2
-    ).eval()
+    model = SpatialTranscriptFormer(token_dim=64, n_heads=2, n_layers=2).eval()
     B, S, D = 1, 4, 2048
     features = torch.randn(B, S, D)
     coords = torch.randn(B, S, 2)
     P = model.num_pathways
 
-    # [gene_expr, pw_scores, attentions]
+    # [pw_scores, attentions]
     with torch.no_grad():
-        _, _, attentions = model(
-            features, rel_coords=coords, return_attention=True, return_pathways=True
-        )
+        _, attentions = model(features, rel_coords=coords, return_attention=True)
 
     assert len(attentions) == 2  # n_layers
     for layer_attn in attentions:

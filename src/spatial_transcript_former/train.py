@@ -2,7 +2,7 @@
 Training script for SpatialTranscriptFormer and baselines.
 
 Usage:
-    stf-train --model interaction --data-dir /path/to/hest --precomputed --whole-slide
+    stf-train --model interaction --data-dir /path/to/hest --precomputed --whole-slide --pathway-prior hallmarks
 """
 
 import argparse
@@ -13,14 +13,12 @@ import torch.optim as optim
 import numpy as np
 
 from spatial_transcript_former.config import get_config
-from spatial_transcript_former.data import GeneVocab
 from spatial_transcript_former.models import HE2RNA, ViT_ST, SpatialTranscriptFormer
 from spatial_transcript_former.utils import set_seed
 from spatial_transcript_former.training.losses import (
     PCCLoss,
     CompositeLoss,
     MaskedMSELoss,
-    ZINBLoss,
 )
 from spatial_transcript_former.training.engine import train_one_epoch, validate
 from spatial_transcript_former.training.experiment_logger import ExperimentLogger
@@ -48,14 +46,7 @@ def main():
     print(f"Device: {device}")
     set_seed(args.seed)
 
-    # Global gene count synchronization via GeneVocab
-    try:
-        vocab = GeneVocab.from_json(args.data_dir, num_genes=args.num_genes)
-        args.num_genes = vocab.num_genes
-    except FileNotFoundError:
-        print(
-            f"Warning: global_genes.json not found. Using requested num_genes={args.num_genes}"
-        )
+    set_seed(args.seed)
 
     # 1. Data — discover sample IDs and split (recipe handles splitting strategy)
     train_ids, val_ids = get_train_val_ids(
@@ -75,9 +66,7 @@ def main():
 
     # 2. Model, Loss, Optimizer
     model = setup_model(args, device)
-    # Pass pathway_init to criterion so AuxiliaryPathwayLoss can use it
-    pathway_init = getattr(model, "_pathway_init_matrix", None)
-    criterion = setup_criterion(args, pathway_init=pathway_init).to(device)
+    criterion = setup_criterion(args).to(device)
     optimizer = optim.Adam(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )

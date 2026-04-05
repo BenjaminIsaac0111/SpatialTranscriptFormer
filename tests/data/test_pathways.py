@@ -1,5 +1,5 @@
 """
-Merged tests: test_pathways.py, test_pathways_robust.py, test_pathway_stability.py
+Tests for MSigDB pathway parsing and membership matrix construction.
 """
 
 import pytest
@@ -13,13 +13,6 @@ from spatial_transcript_former.data.pathways import (
     MSIGDB_URLS,
 )
 from spatial_transcript_former.data.pathways import build_membership_matrix
-from spatial_transcript_former.models.interaction import SpatialTranscriptFormer
-from spatial_transcript_former.training.losses import (
-    AuxiliaryPathwayLoss,
-    MaskedMSELoss,
-)
-
-# --- From test_pathways.py ---
 
 
 @pytest.fixture(scope="module")
@@ -136,179 +129,123 @@ class TestMembershipMatrix:
 # ---------------------------------------------------------------------------
 
 
-class TestPathwayTruth:
-    def test_consistent_across_calls(self, gene_list):
-        """Ground truth from MSigDB membership should be identical across calls."""
-        from spatial_transcript_former.visualization import _compute_pathway_truth
-        from unittest.mock import MagicMock
+# ---------------------------------------------------------------------------
+# Pathway Moran's I
+# ---------------------------------------------------------------------------
 
-        args = MagicMock()
-        args.sparsity_lambda = 0.0
-        args.pathways = None
+
+class TestPathwayMoransI:
+    """Tests for per-pathway Moran's I computation and H5 serialisation."""
+
+    def test_spatially_coherent_pathway_has_high_morans(self):
+        """A pathway with strong spatial structure should have high Moran's I."""
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            _compute_pathway_morans_i,
+        )
 
         np.random.seed(42)
-        gene_truth = np.random.rand(200, len(gene_list)).astype(np.float32)
+        # Grid of 100 spots
+        xs, ys = np.meshgrid(np.arange(10), np.arange(10))
+        coords = np.column_stack([xs.ravel(), ys.ravel()]).astype(np.float64)
 
-        result1, names1 = _compute_pathway_truth(gene_truth, gene_list, args)
-        result2, names2 = _compute_pathway_truth(gene_truth, gene_list, args)
+        n_spots = 100
+        n_pathways = 3
 
-        np.testing.assert_array_equal(result1, result2)
-        assert names1 == names2
+        activities = np.zeros((n_spots, n_pathways), dtype=np.float32)
+        # Pathway 0: strong spatial gradient (high Moran's I)
+        activities[:, 0] = coords[:, 0].astype(np.float32)
+        # Pathway 1: random noise (low Moran's I)
+        activities[:, 1] = np.random.randn(n_spots).astype(np.float32)
+        # Pathway 2: constant (zero Moran's I)
+        activities[:, 2] = 1.0
 
-    def test_output_shape(self, gene_list):
-        """Pathway truth should be (N, P) where P=50 (Hallmarks default)."""
-        from spatial_transcript_former.visualization import _compute_pathway_truth
-        from unittest.mock import MagicMock
+        morans = _compute_pathway_morans_i(activities, coords, k=6)
+        assert morans.shape == (n_pathways,)
+        assert morans.dtype == np.float32
+        # Spatially coherent pathway should have high I
+        assert morans[0] > 0.5
+        # Random pathway should have low I (clipped to >= 0)
+        assert morans[1] >= 0.0
+        assert morans[1] < 0.3
+        # Constant pathway: zero
+        assert morans[2] == pytest.approx(0.0, abs=1e-6)
 
-        args = MagicMock()
-        args.sparsity_lambda = 0.0
-        args.pathways = None
+    def test_too_few_spots_returns_zeros(self):
+        """With fewer spots than k+1, should return zeros."""
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            _compute_pathway_morans_i,
+        )
 
-        N = 150
-        gene_truth = np.random.rand(N, len(gene_list)).astype(np.float32)
-        result, names = _compute_pathway_truth(gene_truth, gene_list, args)
+        activities = np.random.randn(3, 5).astype(np.float32)
+        coords = np.array([[0, 0], [1, 0], [0, 1]], dtype=np.float64)
 
-        assert result.shape == (N, 50)
-        assert len(names) == 50
+        morans = _compute_pathway_morans_i(activities, coords, k=6)
+        assert morans.shape == (5,)
+        np.testing.assert_array_equal(morans, 0.0)
 
-    def test_spatial_variation(self, gene_list):
-        """Pathway truth should have spatial variation (non-zero std)."""
-        from spatial_transcript_former.visualization import _compute_pathway_truth
-        from unittest.mock import MagicMock
+    def test_negative_morans_clipped_to_zero(self):
+        """Negative Moran's I should be clipped to 0."""
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            _compute_pathway_morans_i,
+        )
 
-        args = MagicMock()
-        args.sparsity_lambda = 0.0
-        args.pathways = None
+        np.random.seed(123)
+        # Checkerboard pattern produces negative Moran's I
+        xs, ys = np.meshgrid(np.arange(10), np.arange(10))
+        coords = np.column_stack([xs.ravel(), ys.ravel()]).astype(np.float64)
+        n_spots = 100
 
-        # Create gene expression with spatial patterns
-        N = 200
-        gene_truth = np.random.rand(N, len(gene_list)).astype(np.float32)
-        # Add spatial structure to first few genes
-        gene_truth[:100, 0] += 5.0
-        gene_truth[100:, 1] += 5.0
+        activities = np.zeros((n_spots, 1), dtype=np.float32)
+        activities[:, 0] = ((xs.ravel() + ys.ravel()) % 2).astype(np.float32)
 
-        result, _ = _compute_pathway_truth(gene_truth, gene_list, args)
+        morans = _compute_pathway_morans_i(activities, coords, k=4)
+        # Should be clipped to 0, not negative
+        assert morans[0] >= 0.0
 
-        # At least some pathways should have non-trivial spatial variation
-        stds = np.std(result, axis=0)
-        assert np.any(stds > 0.01), "Pathway truth has no spatial variation"
+    def test_h5_roundtrip_morans(self, tmp_path):
+        """pathway_morans_i should survive write/read roundtrip."""
+        import h5py
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            load_pathway_activities,
+        )
 
+        n_spots, n_pathways = 50, 5
+        acts = np.random.randn(n_spots, n_pathways).astype(np.float32)
+        barcodes_raw = [f"SPOT_{i}" for i in range(n_spots)]
+        barcodes_bytes = np.array(barcodes_raw, dtype="S")
+        pw_names = np.array([f"PW_{i}" for i in range(n_pathways)], dtype="S")
+        morans_orig = np.array([0.1, 0.5, 0.0, 0.8, 0.3], dtype=np.float32)
 
-# --- From test_pathways_robust.py ---
+        h5_path = str(tmp_path / "test_sample.h5")
+        with h5py.File(h5_path, "w") as f:
+            f.create_dataset("activities", data=acts)
+            f.create_dataset("barcodes", data=barcodes_bytes)
+            f.create_dataset("pathway_names", data=pw_names)
+            f.create_dataset("pathway_morans_i", data=morans_orig)
 
+        _, _, _, morans_loaded = load_pathway_activities(h5_path, barcodes_raw)
+        assert morans_loaded is not None
+        np.testing.assert_array_almost_equal(morans_loaded, morans_orig)
 
-def test_build_membership_matrix_integrity():
-    """Verify that the membership matrix correctly maps genes to pathways."""
-    pathway_dict = {
-        "PATHWAY_A": ["GENE_1", "GENE_2"],
-        "PATHWAY_B": ["GENE_2", "GENE_3"],
-    }
-    gene_list = ["GENE_1", "GENE_2", "GENE_3", "GENE_4"]
+    def test_h5_missing_morans_returns_none(self, tmp_path):
+        """Older H5 files without pathway_morans_i should return None."""
+        import h5py
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            load_pathway_activities,
+        )
 
-    matrix, names = build_membership_matrix(pathway_dict, gene_list)
+        n_spots, n_pathways = 20, 3
+        acts = np.random.randn(n_spots, n_pathways).astype(np.float32)
+        barcodes_raw = [f"SPOT_{i}" for i in range(n_spots)]
+        barcodes_bytes = np.array(barcodes_raw, dtype="S")
+        pw_names = np.array([f"PW_{i}" for i in range(n_pathways)], dtype="S")
 
-    assert names == ["PATHWAY_A", "PATHWAY_B"]
-    assert matrix.shape == (2, 4)
+        h5_path = str(tmp_path / "test_old_sample.h5")
+        with h5py.File(h5_path, "w") as f:
+            f.create_dataset("activities", data=acts)
+            f.create_dataset("barcodes", data=barcodes_bytes)
+            f.create_dataset("pathway_names", data=pw_names)
+            # No pathway_morans_i dataset
 
-    # Pathway A: GENE_1, GENE_2
-    assert matrix[0, 0] == 1.0
-    assert matrix[0, 1] == 1.0
-    assert matrix[0, 2] == 0.0
-    assert matrix[0, 3] == 0.0
-
-    # Pathway B: GENE_2, GENE_3
-    assert matrix[1, 0] == 0.0
-    assert matrix[1, 1] == 1.0
-    assert matrix[1, 2] == 1.0
-    assert matrix[1, 3] == 0.0
-
-
-def test_build_membership_matrix_empty():
-    """Check behavior with no matches."""
-    pathway_dict = {"EMPTY": ["XYZ"]}
-    gene_list = ["ABC", "DEF"]
-    matrix, names = build_membership_matrix(pathway_dict, gene_list)
-    assert matrix.sum() == 0
-    assert names == ["EMPTY"]
-
-
-# --- From test_pathway_stability.py ---
-
-
-def test_pathway_initialization_stability_and_gradients():
-    """
-    Verifies that initializing the model with a binary pathway matrix:
-    1. Does not cause predictions to exponentially explode (numerical stability).
-    2. Allows gradients to flow properly when using AuxiliaryPathwayLoss.
-    """
-    torch.manual_seed(42)
-    num_pathways = 50
-    num_genes = 100
-
-    # Create a synthetic MSigDB-style binary matrix
-    pathway_matrix = (torch.rand(num_pathways, num_genes) > 0.8).float()
-    # Ensure no empty pathways to avoid division by zero
-    pathway_matrix[:, 0] = 1.0
-
-    # Initialize model with pathway_init
-    model = SpatialTranscriptFormer(
-        num_genes=num_genes,
-        num_pathways=num_pathways,
-        pathway_init=pathway_matrix,
-        use_spatial_pe=False,
-        output_mode="counts",
-        pretrained=False,
-    )
-
-    # Dummy inputs
-    B, S, D = (
-        2,
-        10,
-        2048,
-    )  # Using D=2048 since backbone='resnet50' requires it natively, or provided features
-    feats = torch.randn(B, S, D, requires_grad=True)
-    coords = torch.randn(B, S, 2)
-    target_genes = torch.randn(B, S, num_genes).abs()
-    mask = torch.zeros(B, S, dtype=torch.bool)
-
-    # Forward pass
-    # return_pathways=True is needed to get the intermediate pathway preds for Auxiliary loss
-    gene_preds, pathway_preds = model(
-        feats, rel_coords=coords, return_dense=True, return_pathways=True
-    )
-
-    # 1. Numerical Stability Check
-    # Without L1 normalization and removing temperature, predictions would explode.
-    # With the fix, Softplus should keep outputs reasonably small.
-    max_pred = gene_preds.max().item()
-    print(f"Max prediction value at initialization: {max_pred:.2f}")
-    assert (
-        max_pred < 100.0
-    ), f"Predictions exploded! Max value: {max_pred}. Check L1 normalization."
-    assert not torch.isnan(gene_preds).any(), "Found NaNs in initial predictions."
-
-    # 2. Gradient Flow Check (Compatibility with Training)
-    loss_fn = AuxiliaryPathwayLoss(pathway_matrix, MaskedMSELoss(), lambda_pathway=1.0)
-    loss = loss_fn(gene_preds, target_genes, mask=mask, pathway_preds=pathway_preds)
-
-    assert loss.isfinite(), "Loss is not finite."
-
-    loss.backward()
-
-    # Verify gradients reached the core transformer layers
-    target_layer_grad = model.fusion_engine.layers[0].linear1.weight.grad
-    assert target_layer_grad is not None, "Gradients did not reach the fusion engine."
-    assert target_layer_grad.norm() > 0, "Vanishing gradients in the fusion engine."
-    assert torch.isfinite(
-        target_layer_grad
-    ).all(), "Exploding/NaN gradients in fusion engine."
-
-    # Verify gradients reached the final reconstructor layer
-    recon_grad = model.gene_reconstructor.weight.grad
-    assert recon_grad is not None, "Gradients did not reach the gene reconstructor."
-    assert recon_grad.norm() > 0, "Vanishing gradients in the gene reconstructor."
-    assert torch.isfinite(
-        recon_grad
-    ).all(), "Exploding/NaN gradients in gene reconstructor."
-
-    print("Pathway initialization is fully stable and compatible with NN training.")
+        _, _, _, morans_loaded = load_pathway_activities(h5_path, barcodes_raw)
+        assert morans_loaded is None

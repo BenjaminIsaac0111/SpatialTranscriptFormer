@@ -20,37 +20,6 @@ def find_project_root() -> str:
     )
 
 
-def resolve_gene_vocab_path(*search_dirs: str) -> str:
-    """Locate ``global_genes.json`` by searching multiple directories.
-
-    Searches (in order):
-    1. Each directory in ``search_dirs``.
-    2. The project root (detected automatically).
-    3. The current working directory.
-
-    Args:
-        *search_dirs: Additional directories to search first.
-
-    Returns:
-        Absolute path to the first ``global_genes.json`` found.
-
-    Raises:
-        FileNotFoundError: If the file cannot be found anywhere.
-    """
-    candidates = list(search_dirs) + [find_project_root(), os.getcwd()]
-
-    for d in candidates:
-        path = os.path.join(d, "global_genes.json")
-        if os.path.exists(path):
-            return os.path.abspath(path)
-
-    searched = ", ".join(repr(d) for d in candidates)
-    raise FileNotFoundError(
-        f"global_genes.json not found. Searched: {searched}. "
-        "Run `stf-build-vocab` or place the file in your data directory."
-    )
-
-
 def resolve_feature_dir(
     data_dir: str,
     backbone: str = "resnet50",

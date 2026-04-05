@@ -24,8 +24,6 @@ from spatial_transcript_former.recipes.hest.dataset import (
     HEST_FeatureDataset,
     get_hest_dataloader,
     get_hest_feature_dataloader,
-    load_gene_expression_matrix,
-    load_global_genes,
 )
 
 # I/O utilities
@@ -52,17 +50,12 @@ from spatial_transcript_former.recipes.hest.utils import (
 # Splitting
 from spatial_transcript_former.recipes.hest.splitting import split_hest_patients
 
-# Vocab building
-from spatial_transcript_former.recipes.hest.build_vocab import scan_h5ad_files
-
 __all__ = [
     # Datasets
     "HEST_Dataset",
     "HEST_FeatureDataset",
     "get_hest_dataloader",
     "get_hest_feature_dataloader",
-    "load_gene_expression_matrix",
-    "load_global_genes",
     # I/O
     "get_hest_data_dir",
     "load_h5ad_metadata",
@@ -76,5 +69,4 @@ __all__ = [
     "get_sample_ids",
     "setup_dataloaders",
     "split_hest_patients",
-    "scan_h5ad_files",
 ]

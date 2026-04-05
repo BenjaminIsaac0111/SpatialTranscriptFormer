@@ -36,7 +36,6 @@ from spatial_transcript_former import (
 def small_model():
     """A minimal SpatialTranscriptFormer for fast tests."""
     return SpatialTranscriptFormer(
-        num_genes=50,
         num_pathways=10,
         backbone_name="resnet50",
         pretrained=False,
@@ -51,8 +50,8 @@ def small_model():
 def checkpoint_dir(small_model):
     """Save a small model to a temp directory and return the path."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        gene_names = [f"GENE_{i}" for i in range(50)]
-        save_pretrained(small_model, tmpdir, gene_names=gene_names)
+        pathway_names = [f"PATHWAY_{i}" for i in range(10)]
+        save_pretrained(small_model, tmpdir, pathway_names=pathway_names)
         yield tmpdir
 
 
@@ -102,22 +101,22 @@ class TestCheckpointSerialization:
             assert os.path.isfile(os.path.join(tmpdir, "config.json"))
             assert os.path.isfile(os.path.join(tmpdir, "model.pth"))
 
-    def test_save_with_gene_names(self, small_model):
-        """save_pretrained should create gene_names.json when provided."""
+    def test_save_with_pathway_names(self, small_model):
+        """save_pretrained should create pathway_names.json when provided."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            names = [f"G{i}" for i in range(50)]
-            save_pretrained(small_model, tmpdir, gene_names=names)
-            path = os.path.join(tmpdir, "gene_names.json")
+            names = [f"G{i}" for i in range(10)]
+            save_pretrained(small_model, tmpdir, pathway_names=names)
+            path = os.path.join(tmpdir, "pathway_names.json")
             assert os.path.isfile(path)
             with open(path) as f:
                 loaded = json.load(f)
             assert loaded == names
 
-    def test_save_gene_names_length_mismatch(self, small_model):
-        """Mismatched gene_names length should raise ValueError."""
+    def test_save_pathway_names_length_mismatch(self, small_model):
+        """Mismatched pathway_names length should raise ValueError."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(ValueError, match="gene_names length"):
-                save_pretrained(small_model, tmpdir, gene_names=["A", "B"])
+            with pytest.raises(ValueError, match="pathway_names length"):
+                save_pretrained(small_model, tmpdir, pathway_names=["A", "B"])
 
     def test_config_json_contents(self, small_model):
         """config.json should contain all expected architecture keys."""
@@ -125,7 +124,6 @@ class TestCheckpointSerialization:
             save_pretrained(small_model, tmpdir)
             with open(os.path.join(tmpdir, "config.json")) as f:
                 config = json.load(f)
-            assert config["num_genes"] == 50
             assert config["num_pathways"] == 10
             assert config["token_dim"] == 64
             assert config["n_heads"] == 4
@@ -141,12 +139,12 @@ class TestCheckpointSerialization:
             assert n1 == n2, f"Parameter name mismatch: {n1} vs {n2}"
             assert torch.allclose(p1, p2), f"Weight mismatch in {n1}"
 
-    def test_round_trip_gene_names(self, checkpoint_dir):
+    def test_round_trip_pathway_names(self, checkpoint_dir):
         """gene_names should survive the round trip."""
         model = load_pretrained(checkpoint_dir)
-        assert model.gene_names is not None
-        assert len(model.gene_names) == 50
-        assert model.gene_names[0] == "GENE_0"
+        assert model.pathway_names is not None
+        assert len(model.pathway_names) == 10
+        assert model.pathway_names[0] == "PATHWAY_0"
 
     def test_load_missing_config_raises(self):
         """Loading from empty directory should raise FileNotFoundError."""
@@ -187,14 +185,14 @@ class TestPredictor:
         predictor = Predictor(small_model, device="cpu")
         image = torch.randn(1, 3, 224, 224)
         result = predictor.predict_patch(image)
-        assert result.shape == (1, 50)
+        assert result.shape == (1, 10)
 
     def test_predict_patch_no_batch_dim(self, small_model):
         """predict_patch should accept (3, H, W) without batch dim."""
         predictor = Predictor(small_model, device="cpu")
         image = torch.randn(3, 224, 224)
         result = predictor.predict_patch(image)
-        assert result.shape == (1, 50)
+        assert result.shape == (1, 10)
 
     def test_predict_wsi(self, small_model):
         """predict_wsi should return (1, G) tensor for global mode."""
@@ -202,7 +200,7 @@ class TestPredictor:
         features = torch.randn(20, small_model.image_proj.in_features)
         coords = torch.randn(20, 2)
         result = predictor.predict_wsi(features, coords)
-        assert result.shape == (1, 50)
+        assert result.shape == (1, 10)
 
     def test_predict_wsi_dense(self, small_model):
         """predict_wsi with return_dense should return (1, N, G)."""
@@ -211,7 +209,7 @@ class TestPredictor:
         features = torch.randn(n_patches, small_model.image_proj.in_features)
         coords = torch.randn(n_patches, 2)
         result = predictor.predict_wsi(features, coords, return_dense=True)
-        assert result.shape == (1, n_patches, 50)
+        assert result.shape == (1, n_patches, 10)
 
     def test_predict_wsi_feature_dim_mismatch(self, small_model):
         """Wrong feature dim should raise ValueError with helpful message."""
@@ -226,7 +224,7 @@ class TestPredictor:
         predictor = Predictor(small_model, device="cpu")
         image = torch.randn(1, 3, 224, 224)
         result = predictor.predict(image)
-        assert result.shape == (1, 50)
+        assert result.shape == (1, 10)
 
     def test_predict_unified_dispatch_features(self, small_model):
         """predict() should dispatch to WSI mode for 2D features."""
@@ -234,7 +232,7 @@ class TestPredictor:
         features = torch.randn(10, small_model.image_proj.in_features)
         coords = torch.randn(10, 2)
         result = predictor.predict(features, coords)
-        assert result.shape == (1, 50)
+        assert result.shape == (1, 10)
 
     def test_predict_features_without_coords_raises(self, small_model):
         """predict() on features without coords should raise."""
@@ -243,12 +241,12 @@ class TestPredictor:
         with pytest.raises(ValueError, match="coords are required"):
             predictor.predict(features)
 
-    def test_gene_names_exposed(self, checkpoint_dir):
+    def test_pathway_names_exposed(self, checkpoint_dir):
         """Predictor should expose gene_names from the model."""
         model = SpatialTranscriptFormer.from_pretrained(checkpoint_dir)
         predictor = Predictor(model)
-        assert predictor.gene_names is not None
-        assert len(predictor.gene_names) == 50
+        assert predictor.pathway_names is not None
+        assert len(predictor.pathway_names) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +283,7 @@ class TestInjectPredictions:
             adata,
             np.zeros((n, 2)),
             np.zeros((n, g)),
-            gene_names=gene_names,
+            pathway_names=gene_names,
         )
         assert list(adata.var_names) == gene_names
 
@@ -300,14 +298,10 @@ class TestInjectPredictions:
         pathway_names = [f"PW_{i}" for i in range(p)]
 
         inject_predictions(
-            adata,
-            np.zeros((n, 2)),
-            np.zeros((n, g)),
-            pathway_scores=pathway_scores,
-            pathway_names=pathway_names,
+            adata, np.zeros((n, 2)), pathway_scores, pathway_names=pathway_names
         )
-        assert adata.obsm["spatial_pathways"].shape == (n, p)
-        assert adata.uns["pathway_names"] == pathway_names
+        assert adata.X.shape == (n, p)
+        assert list(adata.var_names) == pathway_names
 
     def test_shape_mismatch_raises(self):
         """Mismatched row counts should raise ValueError."""

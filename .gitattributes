@@ -1,2 +1,22 @@
+# Force LF line endings for all text files
 * text=auto eol=lf
 
+# Explicitly handle Python files
+*.py text eol=lf
+
+# Handle configuration files
+*.yaml text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+
+# Mark data artifacts as binary to prevent corruption
+*.csv binary
+*.sqlite binary
+*.h5 binary
+*.pth binary
+*.pt binary
+*.pkl binary
+
+# Large data and logs should definitely be binary
+*.log text eol=lf

@@ -1,5 +1,5 @@
 """
-Merged tests: test_config.py, test_warnings.py
+Tests for project configuration, singleton state, and warning handling.
 """
 
 import os
@@ -9,7 +9,9 @@ import pytest
 
 from spatial_transcript_former.config import ProjectConfig, get_config
 
-# --- From test_config.py ---
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
 
 
 def test_config_loading():
@@ -42,7 +44,9 @@ def test_config_singleton():
     assert get_config("test_val") == 123
 
 
-# --- From test_warnings.py ---
+# ---------------------------------------------------------------------------
+# Warnings
+# ---------------------------------------------------------------------------
 
 
 def function_that_warns():

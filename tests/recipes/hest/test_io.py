@@ -1,5 +1,5 @@
 """
-Merged tests: test_io.py, test_download.py, test_download_script.py
+Tests for HEST IO operations and dataset downloading.
 """
 
 import os
@@ -34,7 +34,9 @@ from spatial_transcript_former.recipes.hest.download import (
     download_hest_subset,
 )
 
-# --- From test_io.py ---
+# ---------------------------------------------------------------------------
+# IO
+# ---------------------------------------------------------------------------
 
 
 def test_decode_h5_string():
@@ -135,7 +137,9 @@ def test_get_image_from_h5ad(tmp_path):
     assert scalef == 0.1
 
 
-# --- From test_download.py ---
+# ---------------------------------------------------------------------------
+# Downloading
+# ---------------------------------------------------------------------------
 
 
 class TestDownload(unittest.TestCase):
@@ -254,7 +258,9 @@ class TestDownload(unittest.TestCase):
         mock_zip_instance.extractall.assert_called()
 
 
-# --- From test_download_script.py ---
+# ---------------------------------------------------------------------------
+# Download Script
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

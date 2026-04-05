@@ -1,5 +1,5 @@
 """
-Merged tests: test_splitting_logic.py, test_splitting_robust.py
+Tests for patient-wise dataset splitting and data leakage prevention.
 """
 
 import os
@@ -13,7 +13,9 @@ import pytest
 from spatial_transcript_former.recipes.hest.splitting import split_hest_patients
 from spatial_transcript_former.recipes.hest.splitting import split_hest_patients, main
 
-# --- From test_splitting_logic.py ---
+# ---------------------------------------------------------------------------
+# Core Logic
+# ---------------------------------------------------------------------------
 
 
 def test_split_hest_patients():
@@ -33,7 +35,9 @@ def test_split_hest_patients():
     # Patient leakage check is already done inside split_hest_patients
 
 
-# --- From test_splitting_robust.py ---
+# ---------------------------------------------------------------------------
+# Robustness
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

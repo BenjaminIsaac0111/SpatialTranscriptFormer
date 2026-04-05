@@ -2,13 +2,11 @@
 Data abstractions for SpatialTranscriptFormer.
 
 Core exports:
-    - :class:`GeneVocab` — single source of truth for gene vocabulary
     - :class:`SpatialDataset` — abstract base class implementing the data contract
     - :func:`apply_dihedral_augmentation` — D4 coordinate augmentation
     - :func:`apply_dihedral_to_tensor` — D4 image augmentation
     - :func:`normalize_coordinates` — auto-normalise spatial coordinates
     - :func:`resolve_feature_dir` — centralised feature directory discovery
-    - :func:`resolve_gene_vocab_path` — find ``global_genes.json``
 
 HEST-specific exports (backward compatibility — prefer ``recipes.hest``):
     - :class:`HEST_Dataset`, :func:`get_hest_dataloader`
@@ -23,5 +21,4 @@ from .base import (
     apply_dihedral_to_tensor,
     normalize_coordinates,
 )
-from .gene_vocab import GeneVocab
-from .paths import resolve_feature_dir, resolve_gene_vocab_path
+from .paths import resolve_feature_dir

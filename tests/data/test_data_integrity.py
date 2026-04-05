@@ -1,26 +1,21 @@
 """
-Merged tests: test_data_management.py, test_data_integrity.py
+Tests for biological coverage and spatial data integrity.
 """
 
 import os
-
 import pytest
 import torch
 import numpy as np
-import h5py
 
 from spatial_transcript_former.recipes.hest.io import (
     get_hest_data_dir,
     load_h5ad_metadata,
 )
-from spatial_transcript_former.recipes.hest.dataset import load_global_genes
 from spatial_transcript_former.data.pathways import (
     download_msigdb_gmt,
     parse_gmt,
     MSIGDB_URLS,
 )
-
-# --- From test_data_integrity.py ---
 
 
 @pytest.fixture
@@ -29,38 +24,6 @@ def data_dir():
         return get_hest_data_dir()
     except FileNotFoundError:
         pytest.skip("HEST data directory not found. Skipping data integrity tests.")
-
-
-def test_gene_pathway_coverage(data_dir):
-    """
-    Verify that the top 1000 global genes provide sufficient coverage
-    of biological Hallmark pathways.
-    """
-    num_genes = 1000
-    genes = load_global_genes(data_dir, num_genes)
-
-    # Load Hallmarks
-    url = MSIGDB_URLS["hallmarks"]
-    gmt_path = download_msigdb_gmt(
-        url, "h.all.v2024.1.Hs.symbols.gmt", os.path.join(data_dir, ".cache")
-    )
-    pathway_dict = parse_gmt(gmt_path)
-
-    unique_hallmark_genes = set()
-    for p_genes in pathway_dict.values():
-        unique_hallmark_genes.update(p_genes)
-
-    overlap = set(genes).intersection(unique_hallmark_genes)
-    # Percentage of our global genes that are in the Hallmark sets
-    relevance = len(overlap) / len(genes)
-
-    print(
-        f"Hallmark Gene Relevance: {relevance*100:.1f}% of global genes are Hallmarks"
-    )
-    # We expect at least 45% of our top 1000 genes to be Hallmarks to ensure biological focus
-    assert (
-        relevance > 0.45
-    ), f"Global gene relevance to Hallmarks is too low ({relevance*100:.1f}%)"
 
 
 def test_coordinate_alignment_bounds(data_dir):

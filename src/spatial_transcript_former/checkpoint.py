@@ -4,7 +4,7 @@ Public-facing checkpoint serialization for SpatialTranscriptFormer.
 Saves and loads a self-contained checkpoint directory containing:
     - config.json    — architecture hyper-parameters
     - model.pth      — model weights (state_dict)
-    - gene_names.json — ordered list of gene symbols (optional)
+    - pathway_names.json — ordered list of gene symbols (optional)
 """
 
 import json
@@ -17,7 +17,6 @@ import torch
 # SpatialTranscriptFormer.__init__ arguments (minus runtime-only
 # arguments like ``pathway_init`` and ``pretrained``).
 _CONFIG_KEYS = [
-    "num_genes",
     "num_pathways",
     "backbone_name",
     "token_dim",
@@ -25,7 +24,6 @@ _CONFIG_KEYS = [
     "n_layers",
     "dropout",
     "use_spatial_pe",
-    "output_mode",
     "interactions",
 ]
 
@@ -40,7 +38,6 @@ def _model_config(model) -> Dict[str, Any]:
         raise TypeError(f"Expected SpatialTranscriptFormer, got {type(model).__name__}")
 
     # Reconstruct config from the live model's attributes / constructor args.
-    num_genes = model.gene_reconstructor.out_features
     num_pathways = model.num_pathways
     token_dim = model.image_proj.out_features
     backbone_name = _infer_backbone_name(model)
@@ -52,11 +49,9 @@ def _model_config(model) -> Dict[str, Any]:
     dropout = first_layer.dropout.p if hasattr(first_layer, "dropout") else 0.1
 
     use_spatial_pe = model.use_spatial_pe
-    output_mode = model.output_mode
     interactions = sorted(model.interactions)
 
     return {
-        "num_genes": num_genes,
         "num_pathways": num_pathways,
         "backbone_name": backbone_name,
         "token_dim": token_dim,
@@ -64,7 +59,6 @@ def _model_config(model) -> Dict[str, Any]:
         "n_layers": n_layers,
         "dropout": dropout,
         "use_spatial_pe": use_spatial_pe,
-        "output_mode": output_mode,
         "interactions": interactions,
     }
 
@@ -91,19 +85,19 @@ def _infer_backbone_name(model) -> str:
 def save_pretrained(
     model,
     save_dir: str,
-    gene_names: Optional[List[str]] = None,
+    pathway_names: Optional[List[str]] = None,
 ) -> None:
     """Save a SpatialTranscriptFormer checkpoint directory.
 
     Creates ``save_dir`` containing:
         - ``config.json``     — architecture parameters
         - ``model.pth``       — ``state_dict``
-        - ``gene_names.json`` — ordered gene symbols (if provided)
+        - ``pathway_names.json`` — ordered pathway names (if provided)
 
     Args:
         model: A :class:`SpatialTranscriptFormer` instance.
         save_dir: Directory to write files into (created if needed).
-        gene_names: Optional ordered list of gene symbols matching the
+        pathway_names: Optional ordered list of pathway names matching the
             model's ``num_genes`` output dimension.
     """
     os.makedirs(save_dir, exist_ok=True)
@@ -116,15 +110,15 @@ def save_pretrained(
     # 2. Weights
     torch.save(model.state_dict(), os.path.join(save_dir, "model.pth"))
 
-    # 3. Gene names (optional)
-    if gene_names is not None:
-        if len(gene_names) != config["num_genes"]:
+    # 3. Pathway names (optional)
+    if pathway_names is not None:
+        if len(pathway_names) != config["num_pathways"]:
             raise ValueError(
-                f"gene_names length ({len(gene_names)}) does not match "
-                f"model num_genes ({config['num_genes']})"
+                f"pathway_names length ({len(pathway_names)}) does not match "
+                f"model num_pathways ({config['num_pathways']})"
             )
-        with open(os.path.join(save_dir, "gene_names.json"), "w") as f:
-            json.dump(gene_names, f)
+        with open(os.path.join(save_dir, "pathway_names.json"), "w") as f:
+            json.dump(pathway_names, f)
 
     print(f"Saved pretrained checkpoint to {save_dir}")
 
@@ -137,7 +131,7 @@ def load_pretrained(
     """Load a SpatialTranscriptFormer from a pretrained checkpoint directory.
 
     Reads ``config.json`` to reconstruct architectural parameters, then
-    loads ``model.pth`` weights and (optionally) ``gene_names.json``.
+    loads ``model.pth`` weights and (optionally) ``pathway_names.json``.
 
     Args:
         checkpoint_dir: Path to directory containing ``config.json`` and
@@ -187,16 +181,16 @@ def load_pretrained(
     model.to(device)
     model.eval()
 
-    # 4. Gene names (optional)
-    gene_names_path = os.path.join(checkpoint_dir, "gene_names.json")
-    if os.path.isfile(gene_names_path):
-        with open(gene_names_path, "r") as f:
-            model.gene_names = json.load(f)
+    # 4. Pathway names (optional)
+    pathway_names_path = os.path.join(checkpoint_dir, "pathway_names.json")
+    if os.path.isfile(pathway_names_path):
+        with open(pathway_names_path, "r") as f:
+            model.pathway_names = json.load(f)
     else:
-        model.gene_names = None
+        model.pathway_names = None
 
     print(
         f"Loaded SpatialTranscriptFormer from {checkpoint_dir} "
-        f"({config['num_genes']} genes, {config['num_pathways']} pathways)"
+        f"({config['num_pathways']} pathways)"
     )
     return model

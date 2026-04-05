@@ -1,5 +1,5 @@
 """
-Merged tests: test_spatial_augment.py, test_augmentation_sync.py, test_spatial_alignment.py
+Tests for spatial augmentation logic (dihedral groups) and coordinate alignment.
 """
 
 import torch
@@ -13,7 +13,9 @@ from spatial_transcript_former.recipes.hest.dataset import (
 )
 from spatial_transcript_former.models import SpatialTranscriptFormer
 
-# --- From test_spatial_augment.py ---
+# ---------------------------------------------------------------------------
+# Dihedral Logic
+# ---------------------------------------------------------------------------
 
 
 def test_apply_dihedral_augmentation_torch():
@@ -46,7 +48,9 @@ def test_apply_dihedral_augmentation_numpy():
     assert out.shape == coords.shape
 
 
-# --- From test_augmentation_sync.py ---
+# ---------------------------------------------------------------------------
+# Synchronization
+# ---------------------------------------------------------------------------
 
 
 def test_sync_logic():
@@ -92,7 +96,9 @@ def test_sync_logic():
             assert False, f"Pixel lost in op {op}"
 
 
-# --- From test_spatial_alignment.py ---
+# ---------------------------------------------------------------------------
+# Spatial Alignment
+# ---------------------------------------------------------------------------
 
 
 def test_spatial_mixing_with_large_coordinates():
@@ -104,7 +110,7 @@ def test_spatial_mixing_with_large_coordinates():
     token_dim = 64
 
     model = SpatialTranscriptFormer(
-        num_genes=10, token_dim=token_dim, n_layers=2, use_spatial_pe=True
+        token_dim=token_dim, n_layers=2, use_spatial_pe=True
     )
 
     # Create two patches that are physically adjacent (256px apart) but logically neighbors

@@ -182,9 +182,9 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
 #  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#  and can be added to the global gitignore or merged into this file. However, if you prefer,
 #  you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 
@@ -213,9 +213,74 @@ checkpoints/
 checkpoints_full/
 results/
 results_long_run/
+runs/
+vscode/
+.agent/
 
 # Images
 *.png
 *.jpg
 *.jpeg
 *.svg
+docs/research_proposal.tex
+.vscode/settings.json
+hest_data/.gitattributes
+hest_data/HEST_v1_3_0.csv
+hest_data/README.md
+hest_data/cellvit_seg/INT1_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/INT1_cellvit_seg.parquet
+hest_data/cellvit_seg/INT10_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/INT10_cellvit_seg.parquet
+hest_data/cellvit_seg/INT11_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/INT11_cellvit_seg.parquet
+hest_data/cellvit_seg/INT12_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/INT12_cellvit_seg.parquet
+hest_data/cellvit_seg/INT13_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/INT13_cellvit_seg.parquet
+hest_data/cellvit_seg/INT16_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/INT16_cellvit_seg.parquet
+hest_data/cellvit_seg/INT19_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/INT19_cellvit_seg.parquet
+hest_data/cellvit_seg/INT20_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/INT20_cellvit_seg.parquet
+hest_data/cellvit_seg/INT21_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/INT21_cellvit_seg.parquet
+hest_data/cellvit_seg/INT1_cellvit_seg.geojson
+hest_data/cellvit_seg/INT10_cellvit_seg.geojson
+hest_data/cellvit_seg/INT11_cellvit_seg.geojson
+hest_data/cellvit_seg/INT12_cellvit_seg.geojson
+hest_data/cellvit_seg/INT13_cellvit_seg.geojson
+hest_data/cellvit_seg/INT16_cellvit_seg.geojson
+hest_data/cellvit_seg/INT19_cellvit_seg.geojson
+hest_data/cellvit_seg/INT20_cellvit_seg.geojson
+hest_data/cellvit_seg/INT21_cellvit_seg.geojson
+hest_data/cellvit_seg/TENX175_cellvit_seg.geojson
+hest_data/cellvit_seg/TENX175_cellvit_seg.geojson.zip
+hest_data/cellvit_seg/TENX175_cellvit_seg.parquet
+hest_data/metadata/TENX175.json
+hest_data/patches/TENX175.h5
+hest_data/st/TENX175.h5ad
+hest_data/tissue_seg/TENX175_contours.geojson
+hest_data/wsis/TENX175.tif
+.idea/.gitignore
+.idea/csv-editor.xml
+.idea/deployment.xml
+.idea/jupyter-settings.xml
+.idea/misc.xml
+.idea/modules.xml
+.idea/SpatialTranscriptFormer.iml
+.idea/vcs.xml
+.idea/inspectionProfiles/profiles_settings.xml
+.idea/inspectionProfiles/Project_Default.xml
+.idea/runConfigurations/STF_Compute_Pathways.xml
+.idea/runConfigurations/STF_Train_PrimaryPathway.xml
+.gemini/settings.json
+.gemini/agents/literature-search.md
+.gemini/agents/test-triage.md
+
+# Large Data Artifacts
+global_genes_stats.csv
+*.sqlite
+HEST_v1_3_0.csv
+global_genes.json
+test_out.txt

@@ -1,92 +1,98 @@
 """
-Merged tests: test_compile.py, test_compile_backends.py
+Tests for torch.compile compatibility and environment validation.
 """
 
 import time
-
 import torch
 import pytest
-
-# --- From test_compile.py ---
-
-
-def foo(x, y):
-    a = torch.sin(x)
-    b = torch.cos(y)
-    return a + b
+from spatial_transcript_former.models.interaction import SpatialTranscriptFormer
 
 
-def test_compile():
+def test_torch_compile_feature_available():
+    """Verify that the current environment supports torch.compile."""
     if not hasattr(torch, "compile"):
-        print("torch.compile not found!")
-        return
-
-    print(f"PyTorch version: {torch.__version__}")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Testing compilation on {device}...")
-
-    x = torch.randn(10000, 10000).to(device)
-    y = torch.randn(10000, 10000).to(device)
-
-    # Eager execution
-    start = time.time()
-    for _ in range(5):
-        _ = foo(x, y)
-    torch.cuda.synchronize() if device == "cuda" else None
-    print(f"Eager time: {time.time() - start:.4f}s")
-
-    # Compile
-    print("Compiling...")
-    try:
-        opt_foo = torch.compile(foo)
-
-        # Warmup
-        _ = opt_foo(x, y)
-
-        # Compiled execution
-        start = time.time()
-        for _ in range(5):
-            _ = opt_foo(x, y)
-        torch.cuda.synchronize() if device == "cuda" else None
-        print(f"Compiled time: {time.time() - start:.4f}s")
-        print("Success!")
-    except Exception as e:
-        print(f"Compilation failed: {e}")
+        pytest.skip("torch.compile not found in this PyTorch version.")
 
 
-# --- From test_compile_backends.py ---
-
-
-def foo(x, y):
-    a = torch.sin(x)
-    b = torch.cos(y)
-    return a + b
-
-
-@pytest.mark.parametrize("backend", ["cudagraphs", "eager"])
-def test_compile_backend(backend):
+def test_generic_function_compilation():
+    """Verify that a simple function can be compiled and executed."""
     if not hasattr(torch, "compile"):
-        print("torch.compile not found!")
-        return
+        pytest.skip("torch.compile not found.")
 
-    print(f"\nTesting compilation with backend='{backend}'...")
+    def simple_op(x, y):
+        return torch.sin(x) + torch.cos(y)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    x = torch.randn(10000, 10000).to(device)
-    y = torch.randn(10000, 10000).to(device)
+    x = torch.randn(100, 100).to(device)
+    y = torch.randn(100, 100).to(device)
 
     try:
-        opt_foo = torch.compile(foo, backend=backend)
-
+        opt_op = torch.compile(simple_op)
         # Warmup
-        _ = opt_foo(x, y)
+        _ = opt_op(x, y)
+    except RuntimeError as e:
+        if "not supported on Python 3.14" in str(e):
+            pytest.skip(f"torch.compile not yet supported on this Python version: {e}")
+        raise e
 
-        # Compiled execution
-        start = time.time()
-        for _ in range(5):
-            _ = opt_foo(x, y)
-        torch.cuda.synchronize() if device == "cuda" else None
-        print(f"Backend '{backend}' time: {time.time() - start:.4f}s")
-        print("Success!")
+    # Execute
+    out = opt_op(x, y)
+    assert out.shape == (100, 100)
+
+
+def test_model_compilation_sanity():
+    """
+    Verify that the SpatialTranscriptFormer model can be compiled.
+    This is an important environment check for production/training performance.
+    """
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile not found.")
+
+    # Using a small model for fast compilation check
+    model = SpatialTranscriptFormer(
+        token_dim=64, n_heads=2, n_layers=1, pretrained=False
+    ).eval()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device)
+
+    try:
+        compiled_model = torch.compile(model)
+
+        # Mock input
+        features = torch.randn(1, 4, 2048).to(device)
+        coords = torch.randn(1, 4, 2).to(device)
+
+        # Warmup (this is where most errors occur)
+        with torch.no_grad():
+            _ = compiled_model(features, rel_coords=coords)
+
+        print("Model compilation successful!")
+    except RuntimeError as e:
+        if "not supported on Python 3.14" in str(e):
+            pytest.skip(f"torch.compile not supported on Python 3.14: {e}")
+        pytest.fail(
+            f"SpatialTranscriptFormer compilation failed with RuntimeError: {e}"
+        )
     except Exception as e:
-        print(f"Backend '{backend}' failed: {e}")
+        pytest.fail(f"SpatialTranscriptFormer compilation failed: {e}")
+
+
+@pytest.mark.parametrize("backend", ["eager", "inductor"])
+def test_compile_backends(backend):
+    """Test specific compilation backends for availability."""
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile not found.")
+
+    def simple_op(x):
+        return x * 2
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    x = torch.randn(10).to(device)
+
+    try:
+        opt_op = torch.compile(simple_op, backend=backend)
+        _ = opt_op(x)
+    except Exception as e:
+        # Some backends might not be supported on all OS/HW combinations
+        pytest.skip(f"Backend '{backend}' not supported: {e}")
