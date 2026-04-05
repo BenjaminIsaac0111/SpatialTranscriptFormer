@@ -127,3 +127,125 @@ class TestMembershipMatrix:
 # ---------------------------------------------------------------------------
 # Pathway ground truth
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Pathway Moran's I
+# ---------------------------------------------------------------------------
+
+
+class TestPathwayMoransI:
+    """Tests for per-pathway Moran's I computation and H5 serialisation."""
+
+    def test_spatially_coherent_pathway_has_high_morans(self):
+        """A pathway with strong spatial structure should have high Moran's I."""
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            _compute_pathway_morans_i,
+        )
+
+        np.random.seed(42)
+        # Grid of 100 spots
+        xs, ys = np.meshgrid(np.arange(10), np.arange(10))
+        coords = np.column_stack([xs.ravel(), ys.ravel()]).astype(np.float64)
+
+        n_spots = 100
+        n_pathways = 3
+
+        activities = np.zeros((n_spots, n_pathways), dtype=np.float32)
+        # Pathway 0: strong spatial gradient (high Moran's I)
+        activities[:, 0] = coords[:, 0].astype(np.float32)
+        # Pathway 1: random noise (low Moran's I)
+        activities[:, 1] = np.random.randn(n_spots).astype(np.float32)
+        # Pathway 2: constant (zero Moran's I)
+        activities[:, 2] = 1.0
+
+        morans = _compute_pathway_morans_i(activities, coords, k=6)
+        assert morans.shape == (n_pathways,)
+        assert morans.dtype == np.float32
+        # Spatially coherent pathway should have high I
+        assert morans[0] > 0.5
+        # Random pathway should have low I (clipped to >= 0)
+        assert morans[1] >= 0.0
+        assert morans[1] < 0.3
+        # Constant pathway: zero
+        assert morans[2] == pytest.approx(0.0, abs=1e-6)
+
+    def test_too_few_spots_returns_zeros(self):
+        """With fewer spots than k+1, should return zeros."""
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            _compute_pathway_morans_i,
+        )
+
+        activities = np.random.randn(3, 5).astype(np.float32)
+        coords = np.array([[0, 0], [1, 0], [0, 1]], dtype=np.float64)
+
+        morans = _compute_pathway_morans_i(activities, coords, k=6)
+        assert morans.shape == (5,)
+        np.testing.assert_array_equal(morans, 0.0)
+
+    def test_negative_morans_clipped_to_zero(self):
+        """Negative Moran's I should be clipped to 0."""
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            _compute_pathway_morans_i,
+        )
+
+        np.random.seed(123)
+        # Checkerboard pattern produces negative Moran's I
+        xs, ys = np.meshgrid(np.arange(10), np.arange(10))
+        coords = np.column_stack([xs.ravel(), ys.ravel()]).astype(np.float64)
+        n_spots = 100
+
+        activities = np.zeros((n_spots, 1), dtype=np.float32)
+        activities[:, 0] = ((xs.ravel() + ys.ravel()) % 2).astype(np.float32)
+
+        morans = _compute_pathway_morans_i(activities, coords, k=4)
+        # Should be clipped to 0, not negative
+        assert morans[0] >= 0.0
+
+    def test_h5_roundtrip_morans(self, tmp_path):
+        """pathway_morans_i should survive write/read roundtrip."""
+        import h5py
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            load_pathway_activities,
+        )
+
+        n_spots, n_pathways = 50, 5
+        acts = np.random.randn(n_spots, n_pathways).astype(np.float32)
+        barcodes_raw = [f"SPOT_{i}" for i in range(n_spots)]
+        barcodes_bytes = np.array(barcodes_raw, dtype="S")
+        pw_names = np.array([f"PW_{i}" for i in range(n_pathways)], dtype="S")
+        morans_orig = np.array([0.1, 0.5, 0.0, 0.8, 0.3], dtype=np.float32)
+
+        h5_path = str(tmp_path / "test_sample.h5")
+        with h5py.File(h5_path, "w") as f:
+            f.create_dataset("activities", data=acts)
+            f.create_dataset("barcodes", data=barcodes_bytes)
+            f.create_dataset("pathway_names", data=pw_names)
+            f.create_dataset("pathway_morans_i", data=morans_orig)
+
+        _, _, _, morans_loaded = load_pathway_activities(h5_path, barcodes_raw)
+        assert morans_loaded is not None
+        np.testing.assert_array_almost_equal(morans_loaded, morans_orig)
+
+    def test_h5_missing_morans_returns_none(self, tmp_path):
+        """Older H5 files without pathway_morans_i should return None."""
+        import h5py
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            load_pathway_activities,
+        )
+
+        n_spots, n_pathways = 20, 3
+        acts = np.random.randn(n_spots, n_pathways).astype(np.float32)
+        barcodes_raw = [f"SPOT_{i}" for i in range(n_spots)]
+        barcodes_bytes = np.array(barcodes_raw, dtype="S")
+        pw_names = np.array([f"PW_{i}" for i in range(n_pathways)], dtype="S")
+
+        h5_path = str(tmp_path / "test_old_sample.h5")
+        with h5py.File(h5_path, "w") as f:
+            f.create_dataset("activities", data=acts)
+            f.create_dataset("barcodes", data=barcodes_bytes)
+            f.create_dataset("pathway_names", data=pw_names)
+            # No pathway_morans_i dataset
+
+        _, _, _, morans_loaded = load_pathway_activities(h5_path, barcodes_raw)
+        assert morans_loaded is None

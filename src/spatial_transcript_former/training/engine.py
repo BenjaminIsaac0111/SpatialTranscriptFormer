@@ -5,12 +5,43 @@ Provides train_one_epoch() and validate() functions that handle
 both standard patch-level and whole-slide training modes.
 """
 
+import sys
 import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
 from spatial_transcript_former.models import SpatialTranscriptFormer
 from spatial_transcript_former.data.spatial_stats import spatial_coherence_score
+from spatial_transcript_former.training.losses import CompositeLoss, MaskedMSELoss
+
+
+def _prepare_pathway_weights(pathway_morans, device):
+    """Average per-sample Moran's I weights into a single (P,) vector.
+
+    Args:
+        pathway_morans: (B, P) tensor of per-sample Moran's I weights, or None.
+        device: Target device.
+
+    Returns:
+        (P,) tensor or None.
+    """
+    if pathway_morans is None:
+        return None
+    pw = pathway_morans.to(device)
+    if pw.dim() == 2:
+        pw = pw.mean(dim=0)  # Average across batch samples
+    return pw
+
+
+def _criterion_call(criterion, preds, targets, mask=None, pathway_weights=None):
+    """Call the criterion, passing pathway_weights only if supported."""
+    if pathway_weights is not None and isinstance(
+        criterion, (CompositeLoss, MaskedMSELoss)
+    ):
+        return criterion(preds, targets, mask=mask, pathway_weights=pathway_weights)
+    if mask is not None:
+        return criterion(preds, targets, mask=mask)
+    return criterion(preds, targets)
 
 
 def _optimizer_step(
@@ -22,12 +53,12 @@ def _optimizer_step(
         if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == total_batches:
             scaler.step(optimizer)
             scaler.update()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
     else:
         loss.backward()
         if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == total_batches:
             optimizer.step()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
 
 def _compute_masked_mse(preds, targets, mask):
@@ -62,22 +93,22 @@ def train_one_epoch(
     """
     model.train()
     running_loss = 0.0
-    optimizer.zero_grad()
-    pbar = tqdm(loader, desc="Training")
+    optimizer.zero_grad(set_to_none=True)
+    pbar = tqdm(loader, desc="Training", file=sys.stdout, dynamic_ncols=True)
 
     if whole_slide:
         for batch_idx, batch in enumerate(pbar):
-            # Unpack: (feats, genes, pathway_targets, coords, mask)
-            # We ignore genes directly, focusing strictly on pathways
-            feats, genes, pathway_targets, coords, mask = batch
-            feats = feats.to(device)
-            coords = coords.to(device)
-            mask = mask.to(device)
+            # Unpack: (feats, None, pathway_targets, coords, mask, pathway_morans)
+            feats, _, pathway_targets, coords, mask, pathway_morans = batch
+            feats = feats.to(device, non_blocking=True)
+            coords = coords.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
             if pathway_targets is None:
                 raise ValueError(
                     "pathway_targets is None, but training now requires pathway targets."
                 )
-            pathway_targets = pathway_targets.to(device)
+            pathway_targets = pathway_targets.to(device, non_blocking=True)
+            pw = _prepare_pathway_weights(pathway_morans, device)
 
             with torch.amp.autocast("cuda", enabled=scaler is not None):
                 if isinstance(model, SpatialTranscriptFormer) and not getattr(
@@ -89,11 +120,22 @@ def train_one_epoch(
                         mask=mask,
                         rel_coords=coords,
                     )
-                    loss = criterion(preds, pathway_targets, mask=mask)
+                    loss = _criterion_call(
+                        criterion,
+                        preds,
+                        pathway_targets,
+                        mask=mask,
+                        pathway_weights=pw,
+                    )
                 else:
                     preds = model(feats)
                     bag_target = _compute_bag_target(pathway_targets, mask)
-                    loss = criterion(preds, bag_target)
+                    loss = _criterion_call(
+                        criterion,
+                        preds,
+                        bag_target,
+                        pathway_weights=pw,
+                    )
 
                 loss = loss / grad_accum_steps
 
@@ -105,14 +147,17 @@ def train_one_epoch(
             running_loss += current_loss
             pbar.set_postfix({"loss": f"{current_loss:.4f}"})
     else:
-        for batch_idx, (images, genes, pathway_targets, rel_coords) in enumerate(pbar):
-            images = images.to(device)
-            rel_coords = rel_coords.to(device)
+        for batch_idx, batch in enumerate(pbar):
+            # Unpack: (images, None, pathway_targets, rel_coords, pathway_morans)
+            images, _, pathway_targets, rel_coords, pathway_morans = batch
+            images = images.to(device, non_blocking=True)
+            rel_coords = rel_coords.to(device, non_blocking=True)
             if pathway_targets is None:
                 raise ValueError(
                     "pathway_targets is None, but training now requires pathway targets."
                 )
-            pathway_targets = pathway_targets.to(device)
+            pathway_targets = pathway_targets.to(device, non_blocking=True)
+            pw = _prepare_pathway_weights(pathway_morans, device)
 
             with torch.amp.autocast("cuda", enabled=scaler is not None):
                 if isinstance(model, SpatialTranscriptFormer):
@@ -120,7 +165,12 @@ def train_one_epoch(
                 else:
                     outputs = model(images)
 
-                loss = criterion(outputs, pathway_targets)
+                loss = _criterion_call(
+                    criterion,
+                    outputs,
+                    pathway_targets,
+                    pathway_weights=pw,
+                )
                 loss = loss / grad_accum_steps
 
             _optimizer_step(
@@ -150,22 +200,28 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
     spatial_coherence_list = []
 
     with torch.no_grad():
-        for batch in tqdm(loader, desc="Validation"):
+        for batch in tqdm(
+            loader, desc="Validation", file=sys.stdout, dynamic_ncols=True
+        ):
             if whole_slide:
-                feats, genes, pathway_targets, coords, mask = batch
-                feats = feats.to(device)
-                coords = coords.to(device)
-                mask = mask.to(device)
+                # Unpack: (feats, None, pathway_targets, coords, mask, pathway_morans)
+                feats, _, pathway_targets, coords, mask, pathway_morans = batch
+                feats = feats.to(device, non_blocking=True)
+                coords = coords.to(device, non_blocking=True)
+                mask = mask.to(device, non_blocking=True)
                 if pathway_targets is None:
                     raise ValueError("pathway_targets is None in validation.")
-                pathway_targets = pathway_targets.to(device)
+                pathway_targets = pathway_targets.to(device, non_blocking=True)
+                pw = _prepare_pathway_weights(pathway_morans, device)
             else:
-                images, genes, pathway_targets, rel_coords = batch
-                images = images.to(device)
-                rel_coords = rel_coords.to(device)
+                # Unpack: (images, None, pathway_targets, rel_coords, pathway_morans)
+                images, _, pathway_targets, rel_coords, pathway_morans = batch
+                images = images.to(device, non_blocking=True)
+                rel_coords = rel_coords.to(device, non_blocking=True)
                 if pathway_targets is None:
                     raise ValueError("pathway_targets is None in validation.")
-                pathway_targets = pathway_targets.to(device)
+                pathway_targets = pathway_targets.to(device, non_blocking=True)
+                pw = _prepare_pathway_weights(pathway_morans, device)
 
             with torch.amp.autocast("cuda", enabled=use_amp):
                 attn = None
@@ -204,9 +260,20 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                     and isinstance(model, SpatialTranscriptFormer)
                     and not getattr(model, "weak_supervision", False)
                 ):
-                    loss = criterion(outputs, targets, mask=mask)
+                    loss = _criterion_call(
+                        criterion,
+                        outputs,
+                        targets,
+                        mask=mask,
+                        pathway_weights=pw,
+                    )
                 else:
-                    loss = criterion(outputs, targets)
+                    loss = _criterion_call(
+                        criterion,
+                        outputs,
+                        targets,
+                        pathway_weights=pw,
+                    )
 
                 # --- Interpretability Metrics (MAE & PCC) ---
                 eval_preds = outputs

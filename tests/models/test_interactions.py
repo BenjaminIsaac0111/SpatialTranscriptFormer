@@ -297,9 +297,16 @@ def test_engine_passes_coords_to_forward():
     fake_coords = torch.randn(2, 5, 2)
     fake_mask = torch.zeros(2, 5).bool()
 
-    # Dataloader yielding (feats, genes, pathway_targets, coords, mask)
+    # Dataloader yielding (feats, genes, pathway_targets, coords, mask, pathway_morans)
     loader = [
-        (torch.randn(2, 5, 512), None, torch.randn(2, 5, 50), fake_coords, fake_mask)
+        (
+            torch.randn(2, 5, 512),
+            None,
+            torch.randn(2, 5, 50),
+            fake_coords,
+            fake_mask,
+            None,
+        )
     ]
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -333,6 +340,7 @@ def test_engine_validate_passes_coords():
             torch.randn(2, 5, 50),
             fake_coords,
             torch.zeros(2, 5).bool(),
+            None,
         )
     ]
 

@@ -2,7 +2,6 @@ import os
 import torch
 import numpy as np
 import h5py
-import matplotlib.pyplot as plt
 from spatial_transcript_former.recipes.hest.utils import setup_dataloaders
 
 
@@ -12,8 +11,6 @@ def _load_histology(h5ad_path):
     Returns: (image_array, scale_factor) or (None, 1.0) on failure.
     """
     try:
-        import h5py
-
         with h5py.File(h5ad_path, "r") as f:
             if "uns" not in f or "spatial" not in f["uns"]:
                 return None, 1.0
@@ -78,7 +75,6 @@ def run_inference_plot(model, args, sample_id, epoch, device):
 
     model.eval()
     preds_list = []
-    pathways_list = []
     targets_list = []
     coords_list = []
     masks_list = []
@@ -87,13 +83,13 @@ def run_inference_plot(model, args, sample_id, epoch, device):
     with torch.no_grad():
         for batch in val_loader:
             if args.whole_slide:
-                image_features, _, target, coords, mask = batch
+                image_features, _, target, coords, mask, _ = batch
                 image_features = image_features.to(device)
                 coords = coords.to(device)
                 mask = mask.to(device)
                 target = target.to(device)
             else:
-                image_features, _, target, coords = batch
+                image_features, _, target, coords, _ = batch
                 image_features = image_features.to(device)
                 coords = coords.to(device)
                 mask = torch.ones(target.shape[0], target.shape[1], device=device)

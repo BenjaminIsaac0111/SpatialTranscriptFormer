@@ -21,9 +21,6 @@ def parse_args():
         help="Explicit feature directory (overrides auto-detection)",
     )
     g.add_argument(
-        "--num-genes", type=int, default=get_config("training.num_genes", 1000)
-    )
-    g.add_argument(
         "--max-samples", type=int, default=None, help="Limit samples for debugging"
     )
     g.add_argument(
@@ -59,6 +56,13 @@ def parse_args():
         type=str,
         default=None,
         help="Directory of pre-computed pathway activity .h5 files",
+    )
+    parser.add_argument(
+        "--morans-pathway-weight",
+        action="store_true",
+        help="Weight MSE loss per-pathway by Moran's I spatial autocorrelation. "
+        "Requires pathway .h5 files to contain pathway_morans_i "
+        "(re-run stf-compute-pathways --overwrite to add them).",
     )
 
     # Model
@@ -101,6 +105,9 @@ def parse_args():
     g.add_argument("--epochs", type=int, default=get_config("training.epochs", 10))
     g.add_argument(
         "--batch-size", type=int, default=get_config("training.batch_size", 32)
+    )
+    g.add_argument(
+        "--num-workers", type=int, default=4, help="DataLoader worker processes"
     )
     g.add_argument("--grad-accum-steps", type=int, default=1)
     g.add_argument(

@@ -1,83 +1,133 @@
 # Pathway Mapping for Clinical Relevance
 
-Mapping predicted gene expression into biological pathways is key to making the `SpatialTranscriptFormer` clinically interpretable. Instead of looking at 1,000 individual genes, clinicians can look at the activity of specific processes (e.g., "Wnt Signaling" or "EMT").
+Mapping predicted pathway activities directly to histological context is the core purpose of the `SpatialTranscriptFormer`. Instead of predicting ~1,000 individual gene expression values, the model outputs a compact vector of **biological pathway activity scores** (e.g., 50 MSigDB Hallmark pathways) at each tissue spot. This is a bit more directly interpretable than predicting gene expression: clinicians can compare spatial "Wnt Signalling" or "EMT" activation maps rather than sifting through thousands of gene-level predictions and mapping them to pathways.
 
-## 1. Mapping Resources
+---
 
-We recommend using the following curated databases for mapping:
+## 1. How Pathway Targets are Computed
 
-- **MSigDB Hallmark**: 50 gene sets that summarize specific biological states or processes. This is the "gold standard" for general cancer research because it's non-redundant and well-defined.
-  - **License**: MSigDB Hallmark sets (v6.0–v7.5.1, v2022.1+) are subject to the **CC BY 4.0** license.
-  - **Copyright**: © 2004–2025 Broad Institute, Inc., MIT, and Regents of the University of California.
-- **KEGG & Reactome**: More detailed, hierarchical pathways that describe specific biochemical reactions.
-- **Gene Ontology (GO)**: Useful for finding genes associated with specific molecular functions or cellular components.
+Pathway activity scores are pre-computed offline from raw HEST `.h5ad` files using the `stf-compute-pathways` CLI tool (`src/spatial_transcript_former/recipes/hest/compute_pathway_activities.py`). This decouples target generation from model training and means any biological database can be used as a scoring backend without changing the model. One thing to note is that the pathway targets are computed from the raw counts, not the normalized counts and moran 1 is also precomputed for now, though I may change this to be diffencialy learned (or both?).
 
-## 2. Technical Mapping Approach
+### Processing Pipeline (per sample)
 
-There are three ways to implement this in the current architecture:
+For each `.h5ad` file, the following steps are applied in order:
 
-### A. Post-Hoc Enrichment (Diagnostics)
-
-After the model makes predictions (N spots x G genes), we run a statistical test (e.g., Gene Set Enrichment Analysis or a simple hypergeometric test) to see which pathways are "upregulated" in specific spatial regions.
-
-- **Tool**: `gseapy` or a custom mapping script.
-- **Use Case**: Generating a "Pathway Activation Map" from a trained model's output.
-
-### B. Interaction Model via Multi-Task Learning (MTL)
-
-The **SpatialTranscriptFormer** interaction model inherently represents pathway activations as part of its attention mechanism and output process. Rather than a simple linear bottleneck, it utilizes learnable pathway tokens and Multi-Task Learning (MTL).
-
-#### 1. Informed Supervision via Auxiliary Loss
-
-In this mode, the network receives direct supervision on its pathway tokens, guided by established biological databases (e.g., MSigDB):
-
-- **Architecture Flow**:
-    1. **Interaction**: Learnable pathway tokens $P$ interact with Histology patch features $H$ via self-attention (e.g., $p2h$, $h2p$).
-    2. **Activation**: Pathway scores $S \in \mathbb{R}^P$ are computed using a learnable temperature-scaled cosine similarity between the pathway tokens and image patch tokens.
-    3. **Gene Reconstruction**: $\hat{y} = S \cdot \mathbf{W}_{recon} + b$, where $\mathbf{W}_{recon}$ is initialized using the binary pathway membership matrix $M$.
-- **MTL Auxiliary Loss**: To prevent standard bottleneck collapse, an explicit auxiliary loss bridges the spatial representations directly to biological data. The pathway scores $S$ are supervised against a pathway ground truth using a Pearson Correlation Coefficient (PCC) loss.
-  - To prevent highly expressed housekeeping genes dominating the signal, the raw spatial gene counts ($Y_{genes}$) are first **spatially Z-score normalized** ($Z_{genes}$).
-  - These are then projected onto the pathway matrix and mean-aggregated by member count ($C$):
-  $$L_{total} = L_{gene} + \lambda_{pathway} (1 - PCC(S, \frac{Z_{genes} \cdot M^T}{C}))$$
-- **Benefit**: The model is forced to explicitly align its internal interaction tokens with concrete biological pathways, granting direct interpretability where every gene gets an equal vote.
-
-## 3. Generalizing to HEST1k Tissues
-
-The model supports any dataset within the HEST1k collection (e.g., Breast, Kidney, Lung, Colon). Instead of being bound to a single disease context, users can leverage the `--custom-gmt` flag to map genes to pathways relevant to their specific investigation.
-
-### Example: Profiling the Tumor Microenvironment
-
-Regardless of the tissue of origin (e.g., Kidney versus Breast), researchers often track core functional states within the tumor microenvironment. A user might define a `.gmt` file to explicitly monitor:
-
-| Pathway Concept | Hallmarks / Relevant Genes | Interpretive Value across Tissues |
+| Step | Operation | Rationale |
 | :--- | :--- | :--- |
-| **Hypoxia & Angiogenesis** | `VEGFA`, `FLT1`, `HIF1A` | Identifies oxygen-deprived or highly vascularized tumor cores. |
-| **Immune Infiltration** | `CD8A`, `GZMB`, `IFNG` | Maps regions of active anti-tumor immune response. |
-| **Stromal / EMT** | `VIM`, `SNAI1`, `ZEB1` | Highlights desmoplastic stroma and invasion fronts. |
-| **Proliferation** | `MKI67`, `PCNA`, `MYC` | Pinpoints highly active, dividing cell populations. |
+| **1. QC Filtering** | Remove low-quality spots (min UMIs, min detected genes, max MT%) on **raw counts** | QC before normalisation prevents low-quality spots from distorting library-size estimates |
+| **2. CP10k Normalisation** | Scale each spot to 10,000 total counts, then apply `log1p` | Corrects for sequencing depth differences between spots |
+| **3. Gene Z-Scoring** | Standardise each gene across surviving spots (mean=0, std=1) | Eliminates housekeeping gene dominance; every gene gets equal weight |
+| **4. Pathway Aggregation** | For each pathway: take the mean z-score of its member genes present in the matrix | Produces a single, comparable activity score per pathway per spot |
+| **5. Moran I** | Compute Moran's I for each gene on the raw counts | Computes spatial autocorrelation for each gene |
 
-By supplying these functional groupings via `--custom-gmt`, the model's MTL process explicitly aligns its spatial interaction tokens to monitor these exact states across any whole-slide image in the HEST1k dataset.
+Pathways with fewer than `--min-genes` (default: 5) detected members are filled with zeros. Samples with fewer than `--min-pathways` (default: 25) scorable pathways are excluded entirely.
 
-## 4. Implementation Status
+### Default QC Thresholds
 
-### Implemented
+These defaults follow standard scRNA-seq / spatial transcriptomics QC practice though they may need to be adjusted for different tissue types or fine tuned for different datasets.
 
-- **MSigDB Hallmarks Initialization** (`--pathway-init` flag): Downloads the GMT file, matches genes against `global_genes.json`, and initializes `gene_reconstructor.weight` with the binary membership matrix. See [`pathways.py`](../src/spatial_transcript_former/data/pathways.py).
-  - 50 Hallmark pathways (default fixed fallback when using `--pathway-init`).
-  - GMT file cached in `.cache/` after first download.
-- **Custom Pathway Definitions** (`--custom-gmt` flag): Users can override the default Hallmarks by providing a URL or local path to a `.gmt` file, enabling custom database integrations (e.g., KEGG, Reactome, or highly specific tissue masks).
+| Parameter | Default | Flag |
+| :--- | :--- | :--- |
+| Min UMI count per spot | 500 | `--qc-min-umis` |
+| Min detected genes per spot | 200 | `--qc-min-genes` |
+| Max mitochondrial read fraction | 15% | `--qc-max-mt` |
+| CP10k normalisation target | 10,000 | `--target-sum` |
+
+### Output Format
+
+Each sample is saved as a compressed HDF5 file at `<data_dir>/pathway_activities/<sample_id>.h5`:
+
+```text
+activities      float32 (n_spots, n_pathways)   # z-scored pathway activity matrix
+barcodes        bytes   (n_spots,)               # spot barcode strings
+pathway_names   bytes   (n_pathways,)            # pathway name labels
+attrs:
+  n_spots_before_qc   int     # total spots in raw h5ad
+  n_spots_after_qc    int     # spots surviving QC
+  qc_min_umis         int
+  qc_min_genes        int
+  qc_max_mt           float
+  n_scored_pathways   int     # pathways meeting the min_genes threshold
+```
+
+These files are consumed at training time by `HEST_FeatureDataset` when `--pathway-targets-dir` is provided (which defaults to `<data_dir>/pathway_activities`).
 
 ### Usage
 
 ```bash
-# With biological initialization (50 MSigDB Hallmarks)
-python -m spatial_transcript_former.train \
-    --model interaction --pathway-init ...
+# Compute with defaults (human-only samples auto-detected from HEST metadata)
+stf-compute-pathways --data-dir hest_data
+
+# Custom QC thresholds
+stf-compute-pathways --data-dir hest_data --qc-max-mt 0.10 --qc-min-umis 1000
+
+# Specific samples only
+stf-compute-pathways --data-dir hest_data --sample-ids MEND29 TENX88
+
+# Overwrite existing outputs
+stf-compute-pathways --data-dir hest_data --overwrite
 ```
 
-- **Spatial Pathway Maps**: Visualize pathway activations as spatial heatmaps overlaid on histology using `stf-predict`. See the [README](../README.md) for inference instructions.
+---
 
-### Future Work
+## 2. Pathway Databases
 
-- **Post-Hoc Enrichment**: `gseapy` integration for pathway activation maps from model outputs without architectural bottlenecks.
-- **End-to-End Risk Assessment Module**: Developing a downstream prediction system that takes the spatially-resolved pathway activations and gene expressions derived from the model and maps them directly to clinical risk and survival outcomes.
+### Current: MSigDB Hallmark Gene Sets
+
+The default scoring backend uses the **50 MSigDB Hallmark gene sets**, which summarise distinct, well-defined biological states and processes. These are ideal for cancer research because they are non-redundant and clinically well-characterised.
+
+- **License**: MSigDB Hallmark sets (v6.0–v7.5.1, v2022.1+) are subject to the **CC BY 4.0** license.
+- **Copyright**: © 2004–2025 Broad Institute, Inc., MIT, and Regents of the University of California.
+- The GMT file is downloaded automatically and cached in `.cache/` on first use.
+
+### Future: Extended Knowledge Bases
+
+The offline preprocessing pipeline is designed to be database-agnostic. Future work will add first-class support for:
+
+- **[decoupleR](https://decoupler-py.readthedocs.io) + [PROGENy](https://saezlab.github.io/progeny/)** (Saez lab) — mechanistic signalling pathway scores (14 cancer-relevant pathways) directly inferred from expression data.
+- **[LIANA+](https://liana-py.readthedocs.io)** (Saez lab) — ligand-receptor interaction scores for cell-cell communication.
+- **[CollecTRI](https://github.com/saezlab/collectri)** — transcription factor regulon activity.
+- **Custom GMT files** — already supported in the scoring layer via `--custom-gmt` (any GMT file, local or URL).
+
+---
+
+## 3. Why Offline Pre-Computation?
+
+Previous versions of SpatialTranscriptFormer used an **`AuxiliaryPathwayLoss`** that computed pathway pseudo-targets on-the-fly *from the training signal itself*, then supervised the model's internal pathway tokens against those computed values. This approach seemed to have fundamental circularity problem: the pathway targets were derived from the same gene expression the model was trying to predict.
+
+The current design eliminates this entirely:
+
+| Aspect | Old (Auxiliary Loss) | New (Pre-computed Targets) |
+| :--- | :--- | :--- |
+| Target source | Computed in-flight from training labels | Computed once, offline, from raw expression |
+| QC & normalisation | None | Per-spot QC → CP10k → z-score |
+| Model output | Gene expression (via gene reconstructor) | Pathway activity scores directly |
+| Loss objective | `L_gene + λ · (1 - PCC(scores, pseudo-targets))` | `MSE + PCC` against pre-computed activities |
+| Interpretability | Indirect (pathway scores were internal and needed to be mapped back to pathways) | Direct (output *is* the pathway activity) |
+
+---
+
+## 4. Generalising to Other Tissue Types
+
+Because pathways are pre-computed once and stored, you can easily swap the gene set for different biology. Use the `--custom-gmt` flag to point to any GTM file:
+
+```bash
+# Example: Score only EMT and immune infiltration pathways
+stf-compute-pathways --data-dir hest_data --custom-gmt path/to/my_custom.gmt
+```
+
+This makes the pipeline applicable to any disease of interest without changing the model architecture.
+
+---
+
+## 5. Spatial Pathway Visualisation
+
+After training, the `stf-predict` CLI and the `Predictor` Python API produce spatial heatmaps of pathway activation across the tissue. Each pathway gets its own overlay plot, allowing direct visual comparison between, e.g., hypoxia activation and VEGF signalling.
+
+```bash
+stf-predict --data-dir hest_data --sample-id MEND29 \
+    --model-path checkpoints/best_model.pth \
+    --model-type interaction
+```
+
+Plots are saved to `./results/` by default.

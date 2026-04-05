@@ -6,14 +6,15 @@ This document describes the architecture, design philosophy, and training object
 
 ## 1. Problem Statement
 
-**Goal**: Predict spatially-resolved gene expression from histology images.
+**Goal**: Predict spatially-resolved **biological pathway activity scores** directly from histology images.
 
-**Data**: Spatial transcriptomics datasets (a subset of HEST-1k, filtered to bowel cancer from human patients) where each tissue section has:
+**Data**: Spatial transcriptomics datasets (a subset of HEST-1k, filtered to human samples) where each tissue section has:
 
 - A whole-slide histology image (H&E)
 - Per-spot gene expression counts with spatial coordinates
+- **Pre-computed pathway activity targets** (50 MSigDB Hallmark pathways) derived offline via QC → CP10k normalisation → z-scoring → mean gene aggregation
 
-**Challenge**: Directly predicting ~1000 genes from image patches is high-dimensional, noisy, and biologically uninterpretable. We need a structured bottleneck that compresses the gene space into biologically meaningful abstractions.
+**Design Choice**: Rather than predicting ~1,000 individual genes, the model directly predicts pathway activity scores. These targets are biologically meaningful, spatially smoother than individual genes, and computed from an interpretable offline pipeline — eliminating the circular auxiliary loss used in previous versions.
 
 ---
 
@@ -45,9 +46,9 @@ Three additional design principles support these interactions:
 
 - **Frozen Foundation Model Backbone** — The visual backbone (CTransPath, Phikon, etc.) is a pre-trained pathology feature extractor. It is never fine-tuned. The model learns only the pathway-histology interactions, keeping training lightweight.
 
-- **Dense Spatial Supervision** — Unlike weak MIL (which uses slide-level labels), we supervise at the **spot level** using spatial transcriptomics. Every patch receives ground-truth expression, enabling the model to learn spatially-resolved pathway activation patterns.
+- **Dense Spatial Supervision** — Unlike weak MIL (which uses slide-level labels), we supervise at the **spot level** using pre-computed pathway activity targets. Every patch receives a ground-truth activity vector, enabling the model to learn spatially-resolved pathway activation patterns.
 
-- **Biological Initialisation** — The gene reconstruction weights are initialised from MSigDB Hallmark gene sets, providing a biologically-grounded starting point that the model refines during training.
+- **Offline Target Decoupling** — Pathway activity targets are pre-computed once from raw expression data (see [`PATHWAY_MAPPING.md`](PATHWAY_MAPPING.md)) and stored as `.h5` files. This cleanly separates biological knowledge integration from model training.
 
 ## 2.2 Spatial Learning
 
@@ -62,63 +63,51 @@ Together, these ensure the model learns *spatially-varying* pathway activation m
 ### 2.3 Architecture
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                          SpatialTranscriptFormer                            │
-│                                                                              │
-│  ┌─────────────┐   ┌──────────────┐   ┌──────────────────────────┐          │
-│  │  Frozen      │   │ Image        │   │ + Spatial PE             │          │
-│  │  Backbone    │──>│ Projection   │──>│   (2D Learned)           │          │
-│  │  (CTransPath)│   │ (Linear)     │   │                          │          │
-│  └─────────────┘   └──────────────┘   └────────┬─────────────────┘          │
-│                                                  │ Patch Tokens (S, D)       │
-│  ┌──────────────────────────┐                    │                           │
-│  │  Learnable Pathway       │                    │                           │
-│  │  Tokens (P, D)           │────────┐           │                           │
-│  │  (MSigDB Hallmarks)      │        │           │                           │
-│  └──────────────────────────┘        ▼           ▼                           │
-│                             ┌─────────────────────────────┐                  │
-│                             │  Transformer Encoder         │                  │
-│                             │  Sequence: [Pathways|Patches]│                  │
-│                             │                              │                  │
-│                             │  Full Interaction (default):  │                  │
-│                             │  • P↔P ✅  P→H ✅            │                  │
-│                             │  • H→P ✅  H↔H ✅            │                  │
-│                             │                              │                  │
-│                             │  Configurable via             │                  │
-│                             │  --interactions flag          │                  │
-│                             └──────────┬──────────────────┘                  │
-│                                        │                                     │
-│                             ┌──────────▼──────────────────┐                  │
-│                             │  Cosine Similarity Scoring   │                  │
-│                             │  with Learnable Temperature  │                  │
-│                             │                              │                  │
-│                             │  scores = cos(patch, pathway)│                  │
-│                             │           × τ                │                  │
-│                             └──────────┬──────────────────┘                  │
-│                                        │ Pathway Scores (S, P)               │
-│                            ┌───────────┴───────────┐                         │
-│                            │                       │                         │
-│                            ▼                       ▼                         │
-│             ┌──────────────────────┐  ┌───────────────────────────┐          │
-│             │  Gene Reconstructor  │  │  Auxiliary Pathway Loss   │          │
-│             │  (Linear: P → G)     │  │  PCC(scores, target_pw)   │          │
-│             │  Init: MSigDB        │  │  weighted by λ_aux        │          │
-│             └──────────┬───────────┘  └───────────┬───────────────┘          │
-│                        │                          │                          │
-│                        ▼                          ▼                          │
-│             Gene Expression (S, G)     ℒ_aux = λ(1 − PCC)                   │
-│                        │                          │                          │
-│                        └──────────┬───────────────┘                          │
-│                                   ▼                                          │
-│                        ℒ_total = ℒ_gene + ℒ_aux                             │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                           SpatialTranscriptFormer                             │
+│                                                                               │
+│  ┌─────────────┐   ┌──────────────┐   ┌──────────────────────────┐           │
+│  │  Frozen      │   │ Image        │   │ + Spatial PE             │           │
+│  │  Backbone    │──>│ Projection   │──>│   (2D Learned MLP)       │           │
+│  │  (CTransPath)│   │ (Linear)     │   │                          │           │
+│  └─────────────┘   └──────────────┘   └────────┬─────────────────┘           │
+│                                                  │ Patch Tokens (S, D)        │
+│  ┌──────────────────────────┐                    │                            │
+│  │  Learnable Pathway       │                    │                            │
+│  │  Tokens (P, D)           │────────┐           │                            │
+│  └──────────────────────────┘        ▼           ▼                            │
+│                              ┌─────────────────────────────┐                  │
+│                              │  Transformer Encoder         │                  │
+│                              │  Sequence: [Pathways|Patches]│                  │
+│                              │                              │                  │
+│                              │  Full Interaction (default): │                  │
+│                              │  • P↔P ✅  P→H ✅           │                  │
+│                              │  • H→P ✅  H↔H ✅           │                  │
+│                              │                              │                  │
+│                              │  Configurable via            │                  │
+│                              │  --interactions flag         │                  │
+│                              └──────────┬───────────────────┘                 │
+│                                         │                                     │
+│                              ┌──────────▼──────────────────┐                  │
+│                              │  Cosine Similarity Scoring   │                  │
+│                              │                              │                  │
+│                              │  norm_patch @ norm_pathway.T │                  │
+│                              │  → Pathway Scores (S, P)     │                  │
+│                              └──────────┬───────────────────┘                 │
+│                                         │                                     │
+│                              ┌──────────▼──────────────────┐                  │
+│                              │  Loss: MSE + PCC             │                  │
+│                              │  vs. pre-computed pathway    │                  │
+│                              │  activities (from .h5 files) │                  │
+│                              └─────────────────────────────┘                  │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 2.3 Key Components
 
 #### Frozen Backbone (Feature Extraction)
 
-Pre-computed features from a pathology foundation model. (The backbone is never fine-tuned, though this might change!)
+Pre-computed features from a pathology foundation model. (The backbone is not fine-tuned during training, though this might change!)
 
 | Backbone | Feature Dim | Source |
 | :--- | :--- | :--- |
@@ -158,12 +147,11 @@ Pathway scores are computed via L2-normalized cosine similarity with a learnable
 $$s_{ij} = \cos(\hat{h}_i, \hat{p}_j) \times \tau$$
 where $\hat{h}_i$ and $\hat{p}_j$ are the L2-normalized processed patch and pathway tokens respectively. This produces scores in $[-\tau, +\tau]$ with meaningful relative differences, avoiding the saturation that occurs with raw dot-products.
 
-#### Gene Reconstruction (Biologically-Informed)
+#### Direct Pathway Prediction
 
-A linear layer $W_{recon} \in \mathbb{R}^{G \times P}$ maps pathway scores to gene expression:
-$$\hat{y}_g = \sum_{k=1}^P s_k \cdot W_{gk} + b_g$$
-
-When `--pathway-init` is enabled, $W_{recon}$ is initialised from the MSigDB Hallmark gene sets as a binary membership matrix, giving the model a biologically-grounded starting point where each pathway is connected only to its known member genes.
+The model's output *is* the pathway activity score vector. There is no intermediate gene reconstruction layer. The cosine similarity scores between (processed) patch tokens and pathway tokens directly serve as the prediction:
+$$\hat{s}_{i,k} = \cos(\hat{h}_i, \hat{p}_k)$$
+where $\hat{h}_i$ and $\hat{p}_k$ are the L2-normalised patch and pathway tokens, respectively. These are supervised against pre-computed pathway activities (see [PATHWAY_MAPPING.md](PATHWAY_MAPPING.md)).
 
 ### 2.4 Training Modes
 
@@ -195,37 +183,27 @@ When `--pathway-init` is enabled, $W_{recon}$ is initialised from the MSigDB Hal
 
 ## 4. Loss Functions
 
-| `mse` | Masked MSE | Magnitude accuracy at each spot |
-| `pcc` | 1 − PCC | Spatial pattern coherence per gene (scale-invariant) |
-| `mse_pcc` | MSE + α(1 − PCC) | Balances absolute magnitude and spatial shape |
-| `zinb` | ZINB NLL | Zero-Inflated Negative Binomial negative log-likelihood |
+All losses in the current codebase operate on **pathway activity scores** (B, P) or (B, N, P), where P is the number of pathways. The targets are pre-computed offline — not derived from in-flight gene expression.
 
-### ZINB Loss
+| Key | Name | Description |
+| :--- | :--- | :--- |
+| `mse` | `MaskedMSELoss` | Mean squared error; penalises magnitude errors at each spot |
+| `pcc` | `PCCLoss` | 1 − PCC; penalises deviations in spatial pattern shape (scale-invariant) |
+| `mse_pcc` | `CompositeLoss` | MSE + α(1 − PCC); balances magnitude accuracy and spatial coherence |
 
-The Zero-Inflated Negative Binomial (ZINB) loss is designed for raw, highly dispersed count data. It models the data using three parameters:
+### Composite Loss (Recommended)
 
-- **$\pi$ (pi)**: Probability of zero-inflation (technical dropout).
-- **$\mu$ (mu)**: Mean of the negative binomial distribution.
-- **$\theta$ (theta)**: Inverse dispersion (clumping) parameter.
+The **MSE + PCC composite** (`mse_pcc`, default) is the recommended objective:
 
-The model outputs these parameters, and the loss computes the negative log-likelihood of the ground truth counts given this distribution.
+$$\mathcal{L} = \text{MSE}(\hat{s}, s) + \alpha \cdot (1 - \text{PCC}(\hat{s}, s))$$
 
-### Proposed Auxiliary Pathway Loss
+- **MSE** ensures the predicted activity magnitudes are accurate.
+- **PCC** ensures the *spatial pattern* of each pathway across the tissue matches the ground truth, regardless of scale. A model that predicts the same activity value everywhere scores PCC = 0 even if the mean is correct.
 
-To prevent bottleneck collapse and provide a direct gradient signal to the pathway tokens, we use the `AuxiliaryPathwayLoss`. This loss compares the model's internal pathway scores against "ground truth" pathway activations computed from the gene expression targets via MSigDB membership.
+The `--pcc-weight` flag controls $\alpha$ (default: 1.0).
 
-To prevent highly-expressed housekeeping genes from dominating the pathway's spatial pattern, the ground-truth targets are computed using **Z-score spatial normalization**:
-
-1. Every gene's spatial expression pattern is standardized (mean=0, variance=1) across the tissue slide.
-2. The normalized genes are projected onto the binary MSigDB pathway matrix.
-3. The resulting pathway scores are **mean-aggregated** (divided by the number of known member genes in each pathway) rather than raw-summed.
-
-This ensures every gene—including critical but lowly-expressed transcription factors—gets an equal vote in determining where a pathway is active.
-
-The total objective becomes:
-$$\mathcal{L} = \mathcal{L}_{gene} + \lambda_{aux} (1 - \text{PCC}(\text{pathway\_scores}, \text{target\_pathways}))$$
-
-The `--log-transform` flag applies `log1p` to targets, mitigating the heavy-tailed gene expression distribution where housekeeping genes dominate MSE.
+> [!NOTE]
+> The previous versions of this codebase included a `ZINBLoss` (for raw count data) and an `AuxiliaryPathwayLoss` (multi-task learning against on-the-fly pathway pseudo-targets). Both have been removed. The model now predicts pathway activity scores directly against pre-computed targets, making a single clean MSE+PCC objective sufficient.
 
 ---
 
@@ -239,11 +217,10 @@ The `--log-transform` flag applies `log1p` to targets, mitigating the heavy-tail
 | `--n-heads` | 4 | Number of attention heads |
 | `--n-layers` | 2 | Transformer layers (minimum 2) |
 | `--num-pathways` | 50 | Number of pathway bottleneck tokens |
-| `--pathway-init` | off | Initialize gene_reconstructor from MSigDB |
-| `--loss mse_pcc` | `mse` | Loss function (`mse`, `pcc`, `mse_pcc`, `zinb`) |
-| `--pcc-weight` | 1.0 | Weight for PCC term in composite loss |
-| `--pathway-loss-weight` | 0.0 | Weight for auxiliary pathway loss ($\lambda_{aux}$) |
+| `--pathway-prior` | `hallmarks` | Pathway prior for token count (`hallmarks` = 50, `progeny` = 14) |
+| `--pathway-targets-dir` | `<data-dir>/pathway_activities` | Directory of pre-computed `.h5` pathway activity files |
+| `--loss` | `mse_pcc` | Loss function: `mse`, `pcc`, `mse_pcc` |
+| `--pcc-weight` | 1.0 | Weight for PCC term in composite loss ($\alpha$) |
 | `--interactions` | `all` | Enabled interaction quadrants (`p2p p2h h2p h2h`) |
-| `--log-transform` | off | Apply log1p to targets |
 | `--return-attention` | off | Return attention maps from forward pass (for diagnostics) |
 | `--n-neighbors` | 0 | Number of context neighbors (for hybrid/GNN models) |

@@ -105,17 +105,21 @@ class PCCLoss(nn.Module):
 
 class MaskedMSELoss(nn.Module):
     """
-    MSE loss with optional masking for padded positions.
+    MSE loss with optional masking for padded positions and
+    optional per-pathway (per-gene) weighting.
 
     When no mask is provided, behaves identically to nn.MSELoss().
+    When pathway_weights is provided, each output dimension's MSE
+    is scaled by its weight before averaging.
     """
 
-    def forward(self, preds, target, mask=None):
+    def forward(self, preds, target, mask=None, pathway_weights=None):
         """
         Args:
             preds:  (B, G) or (B, N, G)
             target: (B, G) or (B, N, G)
             mask:   (B, N) boolean, True = padded (ignore). Optional.
+            pathway_weights: (G,) float tensor of per-pathway weights. Optional.
 
         Returns:
             Scalar MSE loss over valid positions.
@@ -125,7 +129,18 @@ class MaskedMSELoss(nn.Module):
         if mask is not None and preds.dim() == 3:
             # Expand mask to gene dimension: (B, N) -> (B, N, G)
             valid = ~mask.unsqueeze(-1).expand_as(diff)
+            if pathway_weights is not None:
+                # weights: (G,) -> (1, 1, G)
+                w = pathway_weights.unsqueeze(0).unsqueeze(0)
+                weighted = diff * valid.float() * w
+                return weighted.sum() / (valid.float() * w).sum()
             return (diff * valid.float()).sum() / valid.sum()
+
+        if pathway_weights is not None:
+            # preds is (B, G): weight each pathway dimension
+            # weights: (G,) -> (1, G)
+            w = pathway_weights.unsqueeze(0)
+            return (diff * w).mean(dim=0).sum() / w.sum()
 
         return diff.mean()
 
@@ -154,16 +169,18 @@ class CompositeLoss(nn.Module):
             self.mse = MaskedMSELoss()
         self.pcc = PCCLoss(eps=eps)
 
-    def forward(self, preds, target, mask=None):
+    def forward(self, preds, target, mask=None, pathway_weights=None):
         """
         Args:
             preds:  (B, G) or (B, N, G)
             target: (B, G) or (B, N, G)
             mask:   (B, N) boolean, True = padded (ignore). Optional.
+            pathway_weights: (G,) float tensor of per-pathway weights. Optional.
+                Applied to the MSE term only; PCC is left unweighted.
 
         Returns:
             Scalar composite loss.
         """
-        mse_val = self.mse(preds, target, mask)
+        mse_val = self.mse(preds, target, mask, pathway_weights=pathway_weights)
         pcc_val = self.pcc(preds, target, mask)
         return mse_val + self.alpha * pcc_val

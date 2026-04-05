@@ -283,3 +283,4 @@ global_genes_stats.csv
 *.sqlite
 HEST_v1_3_0.csv
 global_genes.json
+test_out.txt

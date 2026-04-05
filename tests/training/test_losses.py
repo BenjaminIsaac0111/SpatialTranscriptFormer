@@ -230,3 +230,91 @@ def test_pcc_edge_cases():
 
     loss_masked = pcc(preds_3d, target_3d, mask=mask)
     assert not torch.isnan(loss_masked)
+
+
+# ---------------------------------------------------------------------------
+# Pathway Weights (Moran's I weighting of MSE)
+# ---------------------------------------------------------------------------
+
+
+class TestPathwayWeights:
+    """Tests for per-pathway Moran's I weighting in losses."""
+
+    def test_uniform_weights_match_unweighted(self, tensors_2d):
+        """Uniform weights should produce same loss as no weights."""
+        preds, target = tensors_2d
+        G = preds.shape[1]
+        uniform = torch.ones(G)
+
+        loss_no_w = MaskedMSELoss()(preds, target)
+        loss_uniform = MaskedMSELoss()(preds, target, pathway_weights=uniform)
+        assert torch.allclose(loss_no_w, loss_uniform, atol=1e-5)
+
+    def test_nonuniform_weights_change_loss(self, tensors_2d):
+        """Non-uniform weights should produce a different loss."""
+        preds, target = tensors_2d
+        G = preds.shape[1]
+        weights = torch.rand(G) + 0.1  # avoid zeros
+
+        loss_no_w = MaskedMSELoss()(preds, target)
+        loss_w = MaskedMSELoss()(preds, target, pathway_weights=weights)
+        # Very unlikely to be identical with random weights
+        assert not torch.allclose(loss_no_w, loss_w, atol=1e-5)
+
+    def test_zero_weight_pathway_contributes_nothing(self):
+        """A pathway with weight 0 should contribute 0 to the loss."""
+        B, G = 8, 4
+        torch.manual_seed(42)
+        preds = torch.randn(B, G)
+        target = torch.randn(B, G)
+
+        # Weight pathway 0 at 0, rest at 1
+        weights = torch.tensor([0.0, 1.0, 1.0, 1.0])
+        loss_w = MaskedMSELoss()(preds, target, pathway_weights=weights)
+
+        # Reference: MSE on only pathways 1-3
+        diff_sq = (preds[:, 1:] - target[:, 1:]) ** 2
+        expected = diff_sq.mean()
+        assert torch.allclose(loss_w, expected, atol=1e-5)
+
+    def test_gradient_flow_with_weights(self, tensors_2d):
+        """Gradients should flow correctly with pathway weights."""
+        preds, target = tensors_2d
+        preds = preds.clone().requires_grad_(True)
+        G = preds.shape[1]
+        weights = torch.rand(G) + 0.1
+
+        loss = MaskedMSELoss()(preds, target, pathway_weights=weights)
+        loss.backward()
+        assert preds.grad is not None
+        assert preds.grad.shape == preds.shape
+
+    def test_3d_with_mask_and_weights(self, tensors_3d):
+        """Pathway weights should work with 3D inputs and masking."""
+        preds, target, mask = tensors_3d
+        G = preds.shape[2]
+        weights = torch.rand(G) + 0.1
+
+        loss = MaskedMSELoss()(preds, target, mask=mask, pathway_weights=weights)
+        assert loss.isfinite()
+
+    def test_composite_weights_affect_mse_not_pcc(self, tensors_2d):
+        """CompositeLoss should pass weights to MSE only, not PCC."""
+        preds, target = tensors_2d
+        G = preds.shape[1]
+        weights = torch.rand(G) + 0.1
+
+        # Compute parts manually
+        mse_weighted = MaskedMSELoss()(preds, target, pathway_weights=weights)
+        pcc_unweighted = PCCLoss()(preds, target)
+        expected = mse_weighted + 1.0 * pcc_unweighted
+
+        actual = CompositeLoss(alpha=1.0)(preds, target, pathway_weights=weights)
+        assert torch.allclose(expected, actual, atol=1e-5)
+
+    def test_composite_no_weights_unchanged(self, tensors_2d):
+        """CompositeLoss without weights should behave identically to before."""
+        preds, target = tensors_2d
+        loss_none = CompositeLoss(alpha=1.0)(preds, target, pathway_weights=None)
+        loss_orig = CompositeLoss(alpha=1.0)(preds, target)
+        assert torch.allclose(loss_none, loss_orig, atol=1e-6)

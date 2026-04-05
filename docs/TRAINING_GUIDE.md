@@ -11,6 +11,16 @@ Ensure you have the `hest_data` and your conda environment is active.
 conda activate SpatialTranscriptFormer
 ```
 
+### Pre-Compute Pathway Activity Targets
+
+Before any training run, you must pre-compute the pathway activity targets from raw expression data. This step applies per-spot QC, CP10k normalisation, and z-scoring.
+
+```bash
+stf-compute-pathways --data-dir hest_data
+```
+
+This will produce `.h5` files in `hest_data/pathway_activities/` which are consumed by the trainer automatically. See **[Pathway Mapping](PATHWAY_MAPPING.md)** for details on QC thresholds and scoring methodology.
+
 ---
 
 ## 1. Single Patch Regression (Baselines)
@@ -47,7 +57,7 @@ python -m spatial_transcript_former.train \
 
 ## 2. Whole-Slide MIL (Multiple Instance Learning)
 
-Aggregates all patches from a slide to predict the average expression. Recommended to use **precomputed features** for speed.
+Aggregates all patches from a slide to predict the average expression. Recommended to use **precomputed features** from the `stf-compute-features` CLI tool for speed. Foundation models like ctranspath can be used as backbones.
 
 ### Attention MIL (Weak Supervision)
 
@@ -91,7 +101,7 @@ The core model of this repository. Captures dense interactions between pathways 
 
 ### Standard Configuration (Dense Supervision)
 
-Uses precomputed features and local spatial masking. Predicts expression at every spot.
+Uses precomputed features and local spatial masking. Predicts pathway activity scores at every spot.
 
 ```bash
 python -m spatial_transcript_former.train \
@@ -103,29 +113,26 @@ python -m spatial_transcript_former.train \
     --precomputed \
     --whole-slide \
     --use-amp \
-    --log-transform \
     --epochs 100
 ```
 
-### With Biological Pathway Initialization
+### Using PROGENy-Style Priors (14 Pathways) - Currently Not Implemented
 
-Initialize the gene reconstruction weights from MSigDB Hallmark gene sets (50 biological pathways). This provides a biologically-grounded starting point.
+Use `--pathway-prior progeny` to set the number of pathway tokens to 14, matching the dimensionality of PROGENy-style signalling pathway databases. This is useful when your pre-computed targets were derived from a 14-pathway database rather than the 50 MSigDB Hallmarks.
 
 ```bash
 python -m spatial_transcript_former.train \
     --data-dir A:\hest_data \
     --model interaction \
     --backbone ctranspath \
-    --use-nystrom \
+    --pathway-prior progeny \
     --precomputed \
     --whole-slide \
-    --pathway-init \
     --use-amp \
-    --log-transform \
     --epochs 100
 ```
 
-> **Note**: `--pathway-init` overrides `--num-pathways` to 50 (the number of Hallmark gene sets). The GMT file is cached in `.cache/` after first download.
+> **Note**: `--pathway-prior progeny` sets `--num-pathways` to 14 automatically. Ensure your pre-computed pathway targets match this dimensionality.
 
 ### Recommended: Using Presets
 
@@ -145,16 +152,16 @@ python scripts/run_preset.py --preset stf_medium
 python scripts/run_preset.py --preset stf_large
 ```
 
-#### Disease-Specific Priors (Colorectal Cancer)
+#### Disease-Specific Priors
 
-To learn representations specifically constrained to phenotypes of a target disease, you can explicitly filter the initialization pathway bottleneck using the `--pathways` argument. The `crc` presets demonstrate this by shrinking the dimensionality down from 50 generic hallmarks to 14 CRC-specific pathways (e.g. Wnt/Beta-catenin, EMT, Angiogenesis).
+To learn representations constrained to specific disease phenotypes, you can filter the pre-computed pathway targets and pathway tokens using the `--pathways` argument. This is useful when you want to focus on a specific subset of pathways relevant to your disease of interest.
+
+The `crc` presets in `scripts/run_preset.py` demonstrate this, reducing from 50 Hallmarks to a CRC-relevant subset.
 
 ```bash
-# Small CRC Variant (14 explicit pathways)
+# Small CRC Variant
 python scripts/run_preset.py --preset stf_crc_small
 ```
-
-These presets are defined directly in `scripts/run_preset.py`, serving as a template for how you can introduce your own biological priors for other diseases.
 
 ### Choosing Interaction Modes
 
@@ -205,11 +212,11 @@ This produces a sorted comparison table and `comparison.csv`.
 
 ## 5. Experiment Logging
 
-Each training run automatically produces:
+Each training run automatically produces a directory of outputs:
 
 | File | Description |
 | :--- | :--- |
-| `training_log.csv` | Per-epoch metrics (train_loss, val_loss, attn_correlation) |
+| `training_logs.sqlite` | Per-epoch metrics (train_loss, val_loss, attn_correlation) |
 | `results_summary.json` | Full config + final metrics + runtime |
 | `best_model_<name>.pth` | Best checkpoint (by val loss) |
 | `latest_model_<name>.pth` | Latest checkpoint (for resume) |
@@ -229,14 +236,14 @@ python -m spatial_transcript_former.train --resume --output-dir runs/my_experime
 | `--precomputed` | Use saved features instead of raw H&E images. | Use for fast experimentation. |
 | `--whole-slide` | Dense prediction across the whole slide. | Required for MIL and slide-level STF. |
 | `--weak-supervision` | Bag-level training for MIL models. | Use with `attention_mil` or `transmil`. |
-| `--pathway-init` | Initialize gene_reconstructor from MSigDB Hallmarks. | Use with `interaction` model. |
+| `--pathway-targets-dir` | Directory of pre-computed `.h5` pathway activity files. | Defaults to `<data-dir>/pathway_activities`. |
 | `--feature-dir` | Explicit path to precomputed features directory. | Overrides auto-detection. |
-| `--loss` | Loss function: `mse`, `pcc`, `mse_pcc`, `zinb`. | `mse_pcc` or `zinb` recommended. |
-| `--pathway-loss-weight` | Weight ($\lambda$) for auxiliary pathway supervision. | Set `0.5` or `1.0` with `interaction` model. |
+| `--loss` | Loss function: `mse`, `pcc`, `mse_pcc`. | `mse_pcc` recommended. |
+| `--pcc-weight` | Weight ($\alpha$) for PCC term in composite loss. | Default 1.0. |
+| `--pathway-prior` | Pathway prior for token count (`hallmarks`=50). | Use `hallmarks` for MSigDB Hallmarks. |
 | `--interactions` | Enabled attention quadrants: `p2p`, `p2h`, `h2p`, `h2h`. | Default: `all` (Full Interaction). |
-| `--plot-pathways-list` | Names of explicitly requested pathways to visualize as heatmaps during periodic validation. | Use with `--plot-pathways`. e.g. `HYPOXIA ANGIOGENESIS` |
-| `--log-transform` | Apply log1p to gene expression targets. | Recommended for raw count data. |
-| `--num-genes` | Number of HVGs to predict (default: 1000). | Match your `global_genes.json`. |
+| `--plot-pathways-list` | Names of pathways to visualize as heatmaps during validation. | e.g. `HYPOXIA ANGIOGENESIS` |
+| `--num-pathways` | Number of pathway bottleneck tokens (overridden by `--pathway-prior`). | Match your pre-computed targets. |
 | `--mask-radius` | Euclidean distance for spatial attention gating. | Usually between 200 and 800. |
 | `--n-neighbors` | Number of context neighbors to load. | Set `> 0` for hybrid/GNN models. |
 | `--use-amp` | Mixed precision training. | Recommended on modern GPUs. |
@@ -248,7 +255,8 @@ python -m spatial_transcript_former.train --resume --output-dir runs/my_experime
 
 ## Tips for Success
 
-1. **Feature Extraction**: Run `hpc/prepare_data.slurm` or `scripts/extract_features.py` before training with `--precomputed`.
-2. **Output**: Checkpoints, logs, and JSON summaries are saved to `--output-dir` (default: `./checkpoints`).
-3. **Debug Mode**: Use `--max-samples 3 --epochs 1` to verify your setup before a full run.
-4. **Results Aggregation**: Use `hpc/collect_results.py` to compare experiments across multiple runs.
+1. **Pathway Pre-Computation**: Always run `stf-compute-pathways --data-dir hest_data` before training. The trainer will error if pathway targets are missing.
+2. **Feature Extraction**: Run `hpc/prepare_data.slurm` or `scripts/extract_features.py` before training with `--precomputed`.
+3. **Output**: Checkpoints, logs, and JSON summaries are saved to `--output-dir` (default: `./checkpoints`).
+4. **Debug Mode**: Use `--max-samples 3 --epochs 1` to verify your setup before a full run.
+5. **Results Aggregation**: Use `hpc/collect_results.py` to compare experiments across multiple runs.

@@ -35,7 +35,7 @@ class TinySpatialDataset(SpatialDataset):
         return len(self._features)
 
     def __getitem__(self, idx):
-        return self._features[idx], None, self._pathways[idx], self._coords[idx]
+        return self._features[idx], None, self._pathways[idx], self._coords[idx], None
 
 
 class TinyModel(nn.Module):

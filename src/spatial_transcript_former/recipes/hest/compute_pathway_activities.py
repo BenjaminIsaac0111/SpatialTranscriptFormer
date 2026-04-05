@@ -36,6 +36,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from spatial_transcript_former.data.spatial_stats import _build_knn_weights, morans_i
+
 from spatial_transcript_former.data.pathways import (
     MSIGDB_URLS,
     download_msigdb_gmt,
@@ -190,6 +192,43 @@ def _score_pathways(expr_matrix, gene_names, pathway_dict, min_genes=5):
     return activities, all_pathways, n_scored
 
 
+def _compute_pathway_morans_i(
+    activities: np.ndarray,
+    coords: np.ndarray,
+    k: int = 6,
+) -> np.ndarray:
+    """Compute Moran's I for each pathway across spots.
+
+    Parameters
+    ----------
+    activities : np.ndarray, shape (n_spots, n_pathways)
+        Pathway activity matrix (output of ``_score_pathways``).
+    coords : np.ndarray, shape (n_spots, 2)
+        Spatial coordinates for each spot.
+    k : int
+        Number of nearest neighbours for the spatial weight graph.
+
+    Returns
+    -------
+    morans : np.ndarray, shape (n_pathways,), float32
+        Per-pathway Moran's I scores.  Values are clipped to [0, inf)
+        so that only positively autocorrelated pathways receive weight;
+        negatively autocorrelated or random pathways get weight 0.
+    """
+    n_spots, n_pathways = activities.shape
+    if n_spots < k + 1:
+        return np.zeros(n_pathways, dtype=np.float32)
+
+    W = _build_knn_weights(coords, k=k)
+    scores = np.empty(n_pathways, dtype=np.float32)
+    for p in range(n_pathways):
+        scores[p] = morans_i(activities[:, p], W)
+
+    # Clip negative values — only positive spatial autocorrelation is useful
+    np.clip(scores, 0.0, None, out=scores)
+    return scores
+
+
 def compute_pathway_activities_for_sample(
     h5ad_path: str,
     output_path: str,
@@ -281,13 +320,45 @@ def compute_pathway_activities_for_sample(
         )
     logger.info(f"[{sample_name}] Scored {n_scored}/{total_pathways} pathways")
 
-    for i, pw in enumerate(all_pathways):
-        col = activities[:, i]
-        if col.any():
-            logger.info(
-                f"[{sample_name}]   {pw}: min={col.min():.3f}, "
-                f"mean={col.mean():.3f}, max={col.max():.3f}"
-            )
+    # Only log individual pathway stats if verbose is enabled
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        for i, pw in enumerate(all_pathways):
+            col = activities[:, i]
+            if col.any():
+                logger.debug(
+                    f"[{sample_name}]   {pw}: min={col.min():.3f}, "
+                    f"mean={col.mean():.3f}, max={col.max():.3f}"
+                )
+
+    # Compute per-pathway Moran's I spatial autocorrelation weights
+    coords = (
+        np.column_stack(
+            [adata.obs["array_row"].values, adata.obs["array_col"].values]
+        ).astype(np.float64)
+        if "array_row" in adata.obs.columns
+        else None
+    )
+
+    # Fallback: use obsm spatial coordinates if array_row/col not available
+    if coords is None:
+        for key in ["spatial", "X_spatial"]:
+            if key in adata.obsm:
+                coords = np.array(adata.obsm[key], dtype=np.float64)[:, :2]
+                break
+
+    pathway_morans = None
+    if coords is not None and len(coords) >= 7:  # need k+1 spots minimum
+        pathway_morans = _compute_pathway_morans_i(activities, coords, k=6)
+        logger.info(
+            f"[{sample_name}] Pathway Moran's I: "
+            f"min={pathway_morans.min():.3f}, mean={pathway_morans.mean():.3f}, "
+            f"max={pathway_morans.max():.3f}"
+        )
+    else:
+        logger.warning(
+            f"[{sample_name}] Could not compute pathway Moran's I "
+            f"(no spatial coordinates or too few spots)"
+        )
 
     barcodes = np.array(list(adata.obs_names), dtype="S")
     pathway_names = np.array(all_pathways, dtype="S")
@@ -297,6 +368,8 @@ def compute_pathway_activities_for_sample(
         f.create_dataset("activities", data=activities, compression="gzip")
         f.create_dataset("barcodes", data=barcodes)
         f.create_dataset("pathway_names", data=pathway_names)
+        if pathway_morans is not None:
+            f.create_dataset("pathway_morans_i", data=pathway_morans)
         # QC metadata for downstream auditing
         f.attrs["n_spots_before_qc"] = n_before
         f.attrs["n_spots_after_qc"] = n_after
@@ -334,6 +407,9 @@ def load_pathway_activities(
         Pathway name labels.
     valid_mask : np.ndarray, shape (N_barcodes,), bool
         True for barcodes that were found in the activity file.
+    pathway_morans_i : np.ndarray or None, shape (P,), float32
+        Per-pathway Moran's I weights.  ``None`` for older files that
+        were computed before this field was added.
     """
     with h5py.File(h5_path, "r") as f:
         stored_acts = f["activities"][:]  # (M, P)
@@ -341,6 +417,11 @@ def load_pathway_activities(
         pathway_names = [
             n.decode() if isinstance(n, bytes) else n for n in f["pathway_names"][:]
         ]
+        pathway_morans_i = (
+            f["pathway_morans_i"][:].astype(np.float32)
+            if "pathway_morans_i" in f
+            else None
+        )
 
     # Build lookup: decoded barcode -> row index
     def _decode(b):
@@ -359,15 +440,10 @@ def load_pathway_activities(
             activities[j] = stored_acts[barcode_to_row[key]]
             valid_mask[j] = True
 
-    return activities, pathway_names, valid_mask
+    return activities, pathway_names, valid_mask, pathway_morans_i
 
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
-
     parser = argparse.ArgumentParser(
         description="Pre-compute Hallmark pathway activity scores for HEST samples."
     )
@@ -375,7 +451,7 @@ def main():
         "--data-dir",
         type=str,
         required=True,
-        help="Root HEST data directory (contains st/ subdirectory)",
+        help="Root HEST data directory (contains st/ subdirectory and HEST_v1_3_0.csv)",
     )
     parser.add_argument(
         "--output-dir",
@@ -435,15 +511,30 @@ def main():
         action="store_true",
         help="Re-compute even if output already exists",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable detailed debug logging for every pathway score",
+    )
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
 
     st_dir = os.path.join(args.data_dir, "st")
     output_dir = args.output_dir or os.path.join(args.data_dir, "pathway_activities")
 
     if not os.path.isdir(st_dir):
         raise FileNotFoundError(
-            f"Expected HEST st/ directory at {st_dir}. "
-            "Check --data-dir points to the root HEST data directory."
+            f"\n\n[ERROR] Could not find the Spatial Transcriptomics data directory at:\n  {st_dir}\n\n"
+            "The --data-dir should point to the root HEST directory that contains:\n"
+            "  - st/                   (directory with .h5ad files)\n"
+            "  - HEST_v1_3_0.csv       (metadata file)\n\n"
+            f"You provided: --data-dir {args.data_dir}\n"
+            "If your .h5ad files are elsewhere, please ensure the directory is named 'st'."
         )
 
     # Discover sample IDs
@@ -480,11 +571,19 @@ def main():
     )
     logger.info(f"Processing {len(sample_ids)} sample(s) -> {output_dir}")
 
+    processed = 0
+    skipped_existing = 0
     failed = []
-    skipped_pathways = []
+
     for sample_id in tqdm(sample_ids, desc="Samples"):
         h5ad_path = os.path.join(st_dir, f"{sample_id}.h5ad")
         output_path = os.path.join(output_dir, f"{sample_id}.h5")
+
+        if os.path.exists(output_path) and not args.overwrite:
+            skipped_existing += 1
+            if args.verbose:
+                logger.debug(f"Skipping {sample_id} — already exists.")
+            continue
 
         if not os.path.exists(h5ad_path):
             logger.warning(f"Missing: {h5ad_path} — skipping")
@@ -503,22 +602,18 @@ def main():
                 qc_max_mt=args.qc_max_mt,
                 overwrite=args.overwrite,
             )
+            processed += 1
         except Exception as e:
             logger.error(f"Failed on {sample_id}: {e}")
             failed.append(sample_id)
 
-    # Count outputs actually written
-    written = [
-        s
-        for s in sample_ids
-        if os.path.exists(os.path.join(output_dir, f"{s}.h5")) and s not in failed
-    ]
     logger.info(
-        f"Done: {len(written)}/{len(sample_ids)} samples saved, "
-        f"{len(failed)} failed. Output: {output_dir}"
+        f"Done: {processed} samples processed, {skipped_existing} skipped (existing), "
+        f"{len(failed)} failed. Total samples: {len(sample_ids)}"
     )
+    logger.info(f"Output directory: {output_dir}")
     if failed:
-        logger.warning(f"Failed samples: {failed}")
+        logger.warning(f"Failed samples list: {failed}")
 
 
 if __name__ == "__main__":

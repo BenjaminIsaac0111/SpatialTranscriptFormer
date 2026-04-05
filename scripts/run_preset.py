@@ -1,7 +1,5 @@
-import subprocess
 import argparse
 import sys
-import os
 
 from spatial_transcript_former.config import get_config
 
@@ -32,6 +30,7 @@ def make_stf_params(n_layers: int, token_dim: int, n_heads: int, batch_size: int
         "precomputed": True,
         "whole-slide": True,
         "use-amp": True,
+        "compile": True,
         "loss": "mse_pcc",
         "resume": True,
         "n-layers": n_layers,
@@ -122,10 +121,8 @@ def main():
     # Custom args allow appending more arguments to train.py
     args, unknown = parser.parse_known_args()
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "spatial_transcript_former.train",
+    # Build the argument list as if it were CLI args to train.py
+    train_args = [
         "--data-dir",
         args.data_dir,
         "--epochs",
@@ -133,27 +130,32 @@ def main():
     ]
 
     if args.max_samples:
-        cmd += ["--max-samples", str(args.max_samples)]
+        train_args += ["--max-samples", str(args.max_samples)]
 
     if args.output_dir:
-        cmd += ["--output-dir", args.output_dir]
+        train_args += ["--output-dir", args.output_dir]
     else:
         # Default output dir based on preset
-        cmd += ["--output-dir", f"./runs/{args.preset}"]
+        train_args += ["--output-dir", f"./runs/{args.preset}"]
 
     # Add preset arguments
-    cmd += params_to_args(PRESETS[args.preset])
+    train_args += params_to_args(PRESETS[args.preset])
 
     # Add any unknown arguments passed to this script
-    cmd += unknown
+    train_args += unknown
 
-    print(f"Executing: {' '.join(cmd)}")
+    print(f"Preset: {args.preset}")
+    print(f"Arguments: {' '.join(train_args)}")
 
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"Training failed with error: {e}")
-        sys.exit(1)
+    # Inject args and call train.main() directly in-process.
+    # This preserves the terminal's TTY handle so tqdm progress bars
+    # render correctly (subprocess breaks isatty() on Windows).
+    from spatial_transcript_former.train import main as train_main
+
+    sys.argv = ["stf-train"] + train_args
+
+    print(f"\n[run_preset] Starting training for preset '{args.preset}'...", flush=True)
+    train_main()
 
 
 if __name__ == "__main__":

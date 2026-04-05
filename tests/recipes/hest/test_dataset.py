@@ -139,14 +139,12 @@ def test_hest_dataset_augmentation_consistency(mock_h5_file):
     """Verify that HEST_Dataset applies the same augmentation to pixels and coords."""
     # We need neighborhood_indices to trigger apply_dihedral_augmentation
     coords = np.array([[10.0, 20.0], [30.0, 40.0]])
-    genes = np.zeros((2, 100))
     indices = np.array([0, 1])
     neighborhood_indices = np.array([[1]])  # center 0 has neighbor 1
 
     ds = HEST_Dataset(
         h5_path="mock.h5",
         spatial_coords=coords,
-        gene_matrix=genes,
         indices=indices,
         neighborhood_indices=neighborhood_indices,
         coords_all=coords,
@@ -187,15 +185,13 @@ def test_hest_feature_dataset_neighborhood_dropout():
     coords = torch.zeros((3, 2))
     barcodes = [b"p0", b"p1", b"p2"]
 
-    mock_gene_matrix = np.zeros((3, 10))
     mock_mask = [True, True, True]  # Must match length of barcodes
-    mock_names = ["gene1"]
 
     with (
         patch("torch.load") as mock_load,
         patch(
-            "spatial_transcript_former.recipes.hest.dataset.load_gene_expression_matrix"
-        ) as mock_gene_load,
+            "spatial_transcript_former.recipes.hest.dataset.get_h5ad_valid_mask"
+        ) as mock_mask_load,
     ):
 
         mock_load.return_value = {
@@ -203,7 +199,7 @@ def test_hest_feature_dataset_neighborhood_dropout():
             "coords": coords,
             "barcodes": barcodes,
         }
-        mock_gene_load.return_value = (mock_gene_matrix, mock_mask, mock_names)
+        mock_mask_load.return_value = mock_mask
 
         ds = HEST_FeatureDataset(
             feature_path="mock.pt",
@@ -215,7 +211,9 @@ def test_hest_feature_dataset_neighborhood_dropout():
         # Run multiple times to trigger the stochastic dropout
         dropout_occurred = False
         for _ in range(100):
-            f, _, _, _ = ds[0]
+            # Batch: (feats, genes, pathways, coords, morans)
+            f, g, _, _, _ = ds[0]
+            assert g is None, "Genes should be None in pathway-only mode"
             # Center (index 0) should NEVER be zero
             assert not torch.all(f[0] == 0)
 
