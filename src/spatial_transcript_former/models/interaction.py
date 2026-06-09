@@ -17,9 +17,10 @@ from .backbones import get_backbone
 class LearnedSpatialEncoder(nn.Module):
     """Encodes 2D spatial coordinates via a small learned MLP.
 
-    Unlike sinusoidal PE, this produces smooth, non-periodic embeddings
-    that vary gradually across the tissue. Coordinates are normalised to
-    [-1, 1] per-batch before encoding for scale invariance.
+    Inputs are expected to already be slide-stationary (centred and
+    standardised at the dataset level), so this module is permutation-
+    invariant per spot — the embedding for a spot depends only on its
+    own coordinates, not on what other spots are in the batch.
     """
 
     def __init__(self, dim):
@@ -30,23 +31,15 @@ class LearnedSpatialEncoder(nn.Module):
             nn.Linear(dim, dim),
         )
 
-    def _normalize_coords(self, coords):
-        """Normalize coordinates to [-1, 1] range per batch."""
-        # Centre at zero
-        coords = coords - coords.mean(dim=1, keepdim=True)
-        # Scale to [-1, 1]
-        scale = coords.abs().amax(dim=(1, 2), keepdim=True).clamp(min=1.0)
-        return coords / scale
-
     def forward(self, rel_coords):
         """
         Args:
-            rel_coords (torch.Tensor): (B, S, 2) spatial coordinates.
+            rel_coords (torch.Tensor): (B, S, 2) slide-stationary coordinates.
 
         Returns:
             torch.Tensor: (B, S, dim) positional embeddings.
         """
-        return self.mlp(self._normalize_coords(rel_coords))
+        return self.mlp(rel_coords)
 
 
 VALID_INTERACTIONS = {"p2p", "p2h", "h2p", "h2h"}

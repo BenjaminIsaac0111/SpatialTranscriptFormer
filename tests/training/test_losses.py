@@ -1,5 +1,6 @@
 """
-Tests for loss functions: MaskedMSELoss, PCCLoss, and CompositeLoss.
+Tests for loss functions: MaskedMSELoss, PCCLoss, CCCLoss, MaskedHuberLoss,
+CLIPAlignmentLoss, and CompositeLoss.
 """
 
 import pytest
@@ -7,9 +8,12 @@ import torch
 import torch.nn as nn
 
 from spatial_transcript_former.training.losses import (
+    CCCLoss,
+    CLIPAlignmentLoss,
+    CompositeLoss,
+    MaskedHuberLoss,
     MaskedMSELoss,
     PCCLoss,
-    CompositeLoss,
 )
 
 # ---------------------------------------------------------------------------
@@ -233,88 +237,199 @@ def test_pcc_edge_cases():
 
 
 # ---------------------------------------------------------------------------
-# Pathway Weights (Moran's I weighting of MSE)
+# MaskedHuberLoss
 # ---------------------------------------------------------------------------
 
 
-class TestPathwayWeights:
-    """Tests for per-pathway Moran's I weighting in losses."""
+class TestMaskedHuberLoss:
+    def test_near_zero_matches_mse(self):
+        """For small residuals (|x| << delta), Huber ≈ 0.5 * MSE."""
+        torch.manual_seed(0)
+        preds = torch.zeros(16, 50)
+        target = preds + 0.01  # tiny residuals, well within quadratic zone
+        huber = MaskedHuberLoss(delta=1.0)(preds, target)
+        mse = MaskedMSELoss()(preds, target)
+        # Huber = 0.5 * x^2, MSE = x^2 -> Huber ≈ 0.5 * MSE for small x
+        assert huber.item() == pytest.approx(0.5 * mse.item(), rel=1e-3)
 
-    def test_uniform_weights_match_unweighted(self, tensors_2d):
-        """Uniform weights should produce same loss as no weights."""
-        preds, target = tensors_2d
-        G = preds.shape[1]
-        uniform = torch.ones(G)
+    def test_large_residuals_sub_quadratic(self):
+        """For large residuals (|x| >> delta), Huber grows linearly, MSE quadratically."""
+        preds = torch.zeros(8, 10)
+        target = preds + 100.0  # far beyond delta=1.0
+        huber = MaskedHuberLoss(delta=1.0)(preds, target)
+        mse = MaskedMSELoss()(preds, target)
+        # Huber should be much smaller than MSE for large errors
+        assert huber.item() < mse.item()
 
-        loss_no_w = MaskedMSELoss()(preds, target)
-        loss_uniform = MaskedMSELoss()(preds, target, pathway_weights=uniform)
-        assert torch.allclose(loss_no_w, loss_uniform, atol=1e-5)
+    def test_mask_reduces_loss(self, tensors_3d):
+        """Masking padded positions should change the loss value."""
+        preds, target, mask = tensors_3d
+        loss_no_mask = MaskedHuberLoss()(preds, target)
+        loss_masked = MaskedHuberLoss()(preds, target, mask=mask)
+        assert not torch.allclose(loss_no_mask, loss_masked)
 
-    def test_nonuniform_weights_change_loss(self, tensors_2d):
-        """Non-uniform weights should produce a different loss."""
-        preds, target = tensors_2d
-        G = preds.shape[1]
-        weights = torch.rand(G) + 0.1  # avoid zeros
-
-        loss_no_w = MaskedMSELoss()(preds, target)
-        loss_w = MaskedMSELoss()(preds, target, pathway_weights=weights)
-        # Very unlikely to be identical with random weights
-        assert not torch.allclose(loss_no_w, loss_w, atol=1e-5)
-
-    def test_zero_weight_pathway_contributes_nothing(self):
-        """A pathway with weight 0 should contribute 0 to the loss."""
-        B, G = 8, 4
-        torch.manual_seed(42)
-        preds = torch.randn(B, G)
-        target = torch.randn(B, G)
-
-        # Weight pathway 0 at 0, rest at 1
-        weights = torch.tensor([0.0, 1.0, 1.0, 1.0])
-        loss_w = MaskedMSELoss()(preds, target, pathway_weights=weights)
-
-        # Reference: MSE on only pathways 1-3
-        diff_sq = (preds[:, 1:] - target[:, 1:]) ** 2
-        expected = diff_sq.mean()
-        assert torch.allclose(loss_w, expected, atol=1e-5)
-
-    def test_gradient_flow_with_weights(self, tensors_2d):
-        """Gradients should flow correctly with pathway weights."""
-        preds, target = tensors_2d
+    def test_gradient_flow(self, tensors_3d):
+        """Gradients should flow through MaskedHuberLoss."""
+        preds, target, mask = tensors_3d
         preds = preds.clone().requires_grad_(True)
-        G = preds.shape[1]
-        weights = torch.rand(G) + 0.1
-
-        loss = MaskedMSELoss()(preds, target, pathway_weights=weights)
+        loss = MaskedHuberLoss()(preds, target, mask=mask)
         loss.backward()
         assert preds.grad is not None
         assert preds.grad.shape == preds.shape
 
-    def test_3d_with_mask_and_weights(self, tensors_3d):
-        """Pathway weights should work with 3D inputs and masking."""
-        preds, target, mask = tensors_3d
-        G = preds.shape[2]
-        weights = torch.rand(G) + 0.1
+    def test_perfect_predictions_zero(self):
+        """Loss should be zero for identical preds and target."""
+        x = torch.randn(8, 20)
+        loss = MaskedHuberLoss()(x, x)
+        assert loss.item() == pytest.approx(0.0, abs=1e-6)
 
-        loss = MaskedMSELoss()(preds, target, mask=mask, pathway_weights=weights)
+
+# ---------------------------------------------------------------------------
+# CCCLoss
+# ---------------------------------------------------------------------------
+
+
+class TestCCCLoss:
+    def test_perfect_predictions_zero(self):
+        """Perfect predictions should give CCC=1, loss=0."""
+        x = torch.randn(50, 100)
+        loss = CCCLoss()(x, x)
+        assert loss.item() == pytest.approx(0.0, abs=1e-5)
+
+    def test_offset_penalised_more_than_pcc(self):
+        """A constant offset prediction should have CCC loss > PCC loss."""
+        torch.manual_seed(42)
+        x = torch.randn(50, 100)
+        # Shift predictions by a large constant — PCC is shift-invariant, CCC is not
+        y = x + 5.0
+        pcc_loss = PCCLoss()(x, y)
+        ccc_loss = CCCLoss()(x, y)
+        # PCC should be ~0 (perfect correlation), CCC should be larger
+        assert pcc_loss.item() == pytest.approx(0.0, abs=1e-4)
+        assert ccc_loss.item() > pcc_loss.item() + 0.1
+
+    def test_3d_with_mask(self, tensors_3d):
+        """CCCLoss should handle 3D inputs with mask."""
+        preds, target, mask = tensors_3d
+        loss = CCCLoss()(preds, target, mask=mask)
+        assert loss.isfinite()
+        assert 0.0 <= loss.item() <= 2.0
+
+    def test_gradient_flow(self, tensors_2d):
+        """Gradients should flow through CCCLoss."""
+        preds, target = tensors_2d
+        preds = preds.clone().requires_grad_(True)
+        loss = CCCLoss()(preds, target)
+        loss.backward()
+        assert preds.grad is not None
+
+    def test_anticorrelation(self):
+        """Negated inputs should give loss > 1 (CCC is strongly negative)."""
+        x = torch.randn(50, 100)
+        loss = CCCLoss()(x, -x)
+        # CCC of x and -x is negative, so 1 - CCC > 1
+        assert loss.item() > 1.0
+
+
+# ---------------------------------------------------------------------------
+# CLIPAlignmentLoss
+# ---------------------------------------------------------------------------
+
+
+class TestCLIPAlignmentLoss:
+    def test_batch_size_one_returns_zero(self):
+        """B=1 should return 0.0 without crashing."""
+        preds = torch.randn(1, 50)
+        target = torch.randn(1, 50)
+        loss = CLIPAlignmentLoss()(preds, target)
+        assert loss.item() == pytest.approx(0.0, abs=1e-6)
+        assert loss.requires_grad
+
+    def test_identical_batch_has_high_loss(self):
+        """If all predictions are identical, cross-entropy should be near log(B)."""
+        B, G = 16, 50
+        # All samples predict the same vector — worst case for CLIP
+        preds = torch.ones(B, G)
+        target = torch.randn(B, G)
+        loss = CLIPAlignmentLoss(temperature=1.0)(preds, target)
+        # Uniform distribution over B classes → cross-entropy ≈ log(B)
+        import math
+
+        assert loss.item() == pytest.approx(math.log(B), rel=0.05)
+
+    def test_perfect_batch_has_low_loss(self):
+        """Perfect predictions (preds == target) should give near-zero loss."""
+        torch.manual_seed(7)
+        x = torch.randn(8, 50)
+        loss = CLIPAlignmentLoss(temperature=0.07)(x, x)
+        # With identical embeddings the diagonal always wins → loss ≈ 0
+        assert loss.item() < 0.05
+
+    def test_3d_input_averaged(self, tensors_3d):
+        """3D inputs should be averaged over spatial dim before CLIP loss."""
+        preds, target, mask = tensors_3d
+        loss = CLIPAlignmentLoss()(preds, target, mask=mask)
         assert loss.isfinite()
 
-    def test_composite_weights_affect_mse_not_pcc(self, tensors_2d):
-        """CompositeLoss should pass weights to MSE only, not PCC."""
+    def test_gradient_flow(self, tensors_2d):
+        """Gradients should flow through CLIPAlignmentLoss."""
         preds, target = tensors_2d
-        G = preds.shape[1]
-        weights = torch.rand(G) + 0.1
+        preds = preds.clone().requires_grad_(True)
+        loss = CLIPAlignmentLoss()(preds, target)
+        loss.backward()
+        assert preds.grad is not None
 
-        # Compute parts manually
-        mse_weighted = MaskedMSELoss()(preds, target, pathway_weights=weights)
-        pcc_unweighted = PCCLoss()(preds, target)
-        expected = mse_weighted + 1.0 * pcc_unweighted
 
-        actual = CompositeLoss(alpha=1.0)(preds, target, pathway_weights=weights)
+# ---------------------------------------------------------------------------
+# CompositeLoss — new variants
+# ---------------------------------------------------------------------------
+
+
+class TestCompositeLossVariants:
+    def test_mse_ccc_gradients_flow(self, tensors_3d):
+        """CompositeLoss(pcc_type='ccc') gradients flow through both terms."""
+        preds, target, mask = tensors_3d
+        preds = preds.clone().requires_grad_(True)
+        loss = CompositeLoss(alpha=1.0, pcc_type="ccc")(preds, target, mask=mask)
+        loss.backward()
+        assert preds.grad is not None
+        padded_grad = preds.grad[0, 80:, :]
+        assert padded_grad.abs().sum() == 0.0
+
+    def test_mse_ccc_clip_all_three_terms(self, tensors_2d):
+        """CompositeLoss(pcc_type='ccc', clip_weight=0.5) should be > mse+ccc alone."""
+        preds, target = tensors_2d
+        torch.manual_seed(0)
+        loss_no_clip = CompositeLoss(alpha=1.0, pcc_type="ccc", clip_weight=0.0)(
+            preds, target
+        )
+        loss_with_clip = CompositeLoss(alpha=1.0, pcc_type="ccc", clip_weight=0.5)(
+            preds, target
+        )
+        # CLIP term adds a positive value so combined loss should differ
+        assert not torch.allclose(loss_no_clip, loss_with_clip)
+
+    def test_mse_ccc_clip_gradients_flow(self, tensors_2d):
+        """All three terms in mse+ccc+clip should contribute gradients."""
+        preds, target = tensors_2d
+        preds = preds.clone().requires_grad_(True)
+        loss = CompositeLoss(alpha=1.0, pcc_type="ccc", clip_weight=0.5)(preds, target)
+        loss.backward()
+        assert preds.grad is not None
+
+    def test_mse_huber_gradients_flow(self, tensors_2d):
+        """CompositeLoss(mse_type='huber') should produce valid gradients."""
+        preds, target = tensors_2d
+        preds = preds.clone().requires_grad_(True)
+        loss = CompositeLoss(alpha=1.0, mse_type="huber")(preds, target)
+        loss.backward()
+        assert preds.grad is not None
+
+    def test_regression_mse_pcc_unchanged(self, tensors_2d):
+        """Default CompositeLoss (pcc_type='pcc') should still equal MSE + PCC."""
+        preds, target = tensors_2d
+        mse_val = MaskedMSELoss()(preds, target)
+        pcc_val = PCCLoss()(preds, target)
+        expected = mse_val + 1.0 * pcc_val
+        actual = CompositeLoss(alpha=1.0)(preds, target)
         assert torch.allclose(expected, actual, atol=1e-5)
-
-    def test_composite_no_weights_unchanged(self, tensors_2d):
-        """CompositeLoss without weights should behave identically to before."""
-        preds, target = tensors_2d
-        loss_none = CompositeLoss(alpha=1.0)(preds, target, pathway_weights=None)
-        loss_orig = CompositeLoss(alpha=1.0)(preds, target)
-        assert torch.allclose(loss_none, loss_orig, atol=1e-6)

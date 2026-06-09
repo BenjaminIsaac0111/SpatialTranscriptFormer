@@ -3,9 +3,12 @@ import torch
 import torch.nn as nn
 from spatial_transcript_former.models import HE2RNA, ViT_ST, SpatialTranscriptFormer
 from spatial_transcript_former.training.losses import (
-    PCCLoss,
+    CCCLoss,
+    CLIPAlignmentLoss,
     CompositeLoss,
+    MaskedHuberLoss,
     MaskedMSELoss,
+    PCCLoss,
 )
 
 
@@ -83,14 +86,28 @@ def setup_model(args, device):
 
 def setup_criterion(args):
     """Create loss function from CLI args."""
+    clip_w = getattr(args, "clip_weight", 0.0)
+    clip_t = getattr(args, "clip_temp", 0.07)
+
     if args.loss == "pcc":
         return PCCLoss()
+    elif args.loss == "ccc":
+        return CCCLoss()
     elif args.loss == "mse_pcc":
         return CompositeLoss(alpha=args.pcc_weight)
-    elif args.loss == "poisson":
-        return nn.PoissonNLLLoss(log_input=True)
-    elif args.loss == "logcosh":
-        print("Using HuberLoss as proxy for LogCosh")
-        return nn.HuberLoss()
+    elif args.loss == "mse_ccc":
+        return CompositeLoss(alpha=args.pcc_weight, pcc_type="ccc")
+    elif args.loss == "mse_ccc_clip":
+        # CLIP term here is the batch-discriminative regulariser in
+        # pathway-output space (see CLIPAlignmentLoss docstring). Available
+        # for opt-in experiments; not part of the current default track.
+        return CompositeLoss(
+            alpha=args.pcc_weight,
+            pcc_type="ccc",
+            clip_weight=clip_w or 0.5,
+            clip_temperature=clip_t,
+        )
+    elif args.loss == "mse_huber":
+        return CompositeLoss(alpha=args.pcc_weight, mse_type="huber", pcc_type="ccc")
     else:
         return MaskedMSELoss()

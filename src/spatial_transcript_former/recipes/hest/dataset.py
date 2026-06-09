@@ -414,24 +414,28 @@ class HEST_FeatureDataset(SpatialDataset):
         mask_bool = np.array(mask, dtype=bool)
         self.features = features[mask_bool]  # (N_valid, D)
         coords_valid = coords[mask_bool].numpy()
-        self.coords = torch.from_numpy(
+        grid_coords = torch.from_numpy(
             normalize_coordinates(coords_valid)
-        )  # (N_valid, 2)
+        ).float()  # (N_valid, 2) — integer-grid units
+
+        # Slide-stationary normalisation: centre at slide centroid, divide by
+        # per-slide scale. PE consumers therefore see coordinates that depend
+        # only on this slide's geometry, not on batch composition.
+        center = grid_coords.mean(dim=0, keepdim=True)
+        scale = grid_coords.std(dim=0).max().clamp(min=1.0)
+        self.coords = (grid_coords - center) / scale  # (N_valid, 2)
         self.genes = None  # gene_matrix removed
         self.kdtree = KDTree(self.coords.numpy())
 
         # Load pathway activity targets if a directory is provided
         self.pathway_activities = None
-        self.pathway_morans_i = None
         if self.pathway_targets_dir is not None:
             sample_id = os.path.splitext(os.path.basename(self.feature_path))[0]
             h5_path = os.path.join(self.pathway_targets_dir, f"{sample_id}.h5")
             if os.path.exists(h5_path):
                 from .compute_pathway_activities import load_pathway_activities
 
-                acts, pw_names, _, pw_morans = load_pathway_activities(
-                    h5_path, list(barcodes)
-                )
+                acts, pw_names, _, _ = load_pathway_activities(h5_path, list(barcodes))
 
                 if self.target_pathway_names is not None:
                     # Filter pathways to match the requested subset
@@ -443,32 +447,19 @@ class HEST_FeatureDataset(SpatialDataset):
                             # If a requested pathway is missing, we'll use a zero column
                             indices.append(-1)
 
-                    # Subset and handle missing pathways (as zeros)
                     p = len(self.target_pathway_names)
                     subset_acts = np.zeros((acts.shape[0], p), dtype=np.float32)
-                    subset_morans = np.zeros(p, dtype=np.float32)
-
                     for i, idx in enumerate(indices):
                         if idx != -1:
                             subset_acts[:, i] = acts[:, idx]
-                            if pw_morans is not None:
-                                subset_morans[i] = pw_morans[idx]
 
                     self.pathway_activities = torch.tensor(
                         subset_acts[mask_bool], dtype=torch.float32
                     )
-                    self.pathway_morans_i = torch.tensor(
-                        subset_morans, dtype=torch.float32
-                    )
                 else:
-                    # No subsetting: load all pathways
                     self.pathway_activities = torch.tensor(
                         acts[mask_bool], dtype=torch.float32
                     )
-                    if pw_morans is not None:
-                        self.pathway_morans_i = torch.tensor(
-                            pw_morans, dtype=torch.float32
-                        )
 
     def __len__(self):
         return 1 if self.whole_slide_mode else len(self.coords)
@@ -493,11 +484,6 @@ class HEST_FeatureDataset(SpatialDataset):
                 else None
             ),
             co,
-            (
-                self.pathway_morans_i.clone()
-                if self.pathway_morans_i is not None
-                else None
-            ),
         )
 
     def _getitem_patch(self, idx):
@@ -561,8 +547,7 @@ class HEST_FeatureDataset(SpatialDataset):
             if self.pathway_activities is not None
             else None
         )
-        pathway_morans = self.pathway_morans_i  # (P,) or None — same for all spots
-        return feats, target_genes, pathway_acts, rel_coords, pathway_morans
+        return feats, target_genes, pathway_acts, rel_coords
 
 
 # ---------------------------------------------------------------------------
@@ -571,18 +556,17 @@ class HEST_FeatureDataset(SpatialDataset):
 
 
 def collate_fn_patch(batch):
-    """Collate ``(feats, genes, pathway_acts, coords, pathway_morans)`` tuples.
+    """Collate ``(feats, genes, pathway_acts, coords)`` tuples.
 
-    Handles ``pathway_acts=None`` and ``pathway_morans=None`` (when no
-    pathway targets dir is configured) by passing ``None`` through.
+    Handles ``pathway_acts=None`` (when no pathway targets dir is configured)
+    by passing ``None`` through.
 
     Args:
-        batch: List of ``(feats, genes, pathway_acts, coords, pathway_morans)``
-            tuples.
+        batch: List of ``(feats, genes, pathway_acts, coords)`` tuples.
 
     Returns:
-        tuple: ``(feats, genes, pathway_acts, coords, pathway_morans)`` where
-        ``pathway_acts`` and ``pathway_morans`` are stacked tensors or ``None``.
+        tuple: ``(feats, genes, pathway_acts, coords)`` where ``pathway_acts``
+        is a stacked tensor or ``None``.
     """
     feats = torch.stack([item[0] for item in batch])
     genes = (
@@ -591,9 +575,7 @@ def collate_fn_patch(batch):
     has_pathways = batch[0][2] is not None
     pathways = torch.stack([item[2] for item in batch]) if has_pathways else None
     coords = torch.stack([item[3] for item in batch])
-    has_morans = batch[0][4] is not None
-    morans = torch.stack([item[4] for item in batch]) if has_morans else None
-    return feats, genes, pathways, coords, morans
+    return feats, genes, pathways, coords
 
 
 # ---------------------------------------------------------------------------
@@ -692,23 +674,20 @@ def get_hest_feature_dataloader(
             """Pad variable-length slides to the longest in the batch.
 
             Args:
-                batch: List of ``(feats, genes, pathway_acts, coords, pathway_morans)``
-                    tuples where each tensor has a variable first dimension
-                    (number of patches).  ``pathway_acts`` and
-                    ``pathway_morans`` may be ``None``.
+                batch: List of ``(feats, genes, pathway_acts, coords)`` tuples
+                    where each tensor has a variable first dimension (number
+                    of patches).  ``pathway_acts`` may be ``None``.
 
             Returns:
                 tuple: ``(padded_feats, padded_genes, padded_pathway_acts,
-                padded_coords, mask, pathway_morans)`` where ``mask`` is
-                ``True`` for padding positions.  ``padded_pathway_acts`` and
-                ``pathway_morans`` are ``None`` when not loaded.
+                padded_coords, mask)`` where ``mask`` is ``True`` for padding
+                positions.  ``padded_pathway_acts`` is ``None`` when not
+                loaded.
             """
-            # lengths and common dims
             lengths = [item[0].shape[0] for item in batch]
             max_len = max(lengths)
             d_dim = batch[0][0].shape[1]
             has_pathways = batch[0][2] is not None
-            has_morans = batch[0][4] is not None
             bs = len(batch)
 
             padded_feats = torch.zeros(bs, max_len, d_dim)
@@ -722,13 +701,7 @@ def get_hest_feature_dataloader(
             else:
                 padded_pathways = None
 
-            # pathway_morans is per-sample (P,), no spatial padding needed
-            if has_morans:
-                stacked_morans = torch.stack([item[4] for item in batch])  # (B, P)
-            else:
-                stacked_morans = None
-
-            for i, (f, g, pw, c, _pm) in enumerate(batch):
+            for i, (f, g, pw, c) in enumerate(batch):
                 l = lengths[i]
                 padded_feats[i, :l] = f
                 padded_coords[i, :l] = c
@@ -742,7 +715,6 @@ def get_hest_feature_dataloader(
                 padded_pathways,
                 padded_coords,
                 mask,
-                stacked_morans,
             )
 
         return DataLoader(

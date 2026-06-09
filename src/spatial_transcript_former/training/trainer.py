@@ -22,6 +22,7 @@ Example::
     trainer.save_pretrained("./release/v1/", gene_names=my_genes)
 """
 
+import math
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -215,25 +216,19 @@ class Trainer:
     # ------------------------------------------------------------------
 
     def _build_scheduler(self):
-        warmup = optim.lr_scheduler.LinearLR(
-            self.optimizer,
-            start_factor=0.01,
-            total_iters=max(1, self.warmup_epochs),
-        )
-        cosine = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer,
-            T_max=max(1, self.epochs - self.warmup_epochs),
-            eta_min=1e-6,
-        )
+        base_lr = self.optimizer.param_groups[0]["lr"]
+        eta_min = 1e-6
+        warmup_epochs = self.warmup_epochs
+        total_epochs = self.epochs
 
-        if self.warmup_epochs > 0:
-            self.scheduler = optim.lr_scheduler.SequentialLR(
-                self.optimizer,
-                schedulers=[warmup, cosine],
-                milestones=[self.warmup_epochs],
-            )
-        else:
-            self.scheduler = cosine
+        def lr_lambda(epoch):
+            if epoch < warmup_epochs:
+                return 0.01 + 0.99 * epoch / max(1, warmup_epochs)
+            progress = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
+            cosine = 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+            return (eta_min / base_lr) + (1.0 - eta_min / base_lr) * cosine
+
+        self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
 
     def _resume_from_checkpoint(self):
         schedulers = {"main": self.scheduler}

@@ -3,7 +3,9 @@ import sys
 
 from spatial_transcript_former.config import get_config
 
-# Curated list of MSigDB Hallmarks with strong evidence of involvement in Colorectal/Bowel Cancer
+# Curated list of MSigDB Hallmarks with strong evidence of involvement in Colorectal/Bowel Cancer.
+# All 14 pathways have been validated to exhibit significant spatial autocorrelation
+# (Mean Moran's I > 0.20) across 85 HEST samples.
 CRC_PATHWAYS = [
     "HALLMARK_WNT_BETA_CATENIN_SIGNALING",
     "HALLMARK_TGF_BETA_SIGNALING",
@@ -70,11 +72,72 @@ PRESETS = {
     "stf_small": make_stf_params(n_layers=4, token_dim=384, n_heads=8, batch_size=8),
     "stf_medium": make_stf_params(n_layers=6, token_dim=512, n_heads=8, batch_size=8),
     "stf_large": make_stf_params(n_layers=12, token_dim=768, n_heads=12, batch_size=8),
-    # --- Biologically-Prioritized Variants (e.g. Colorectal Cancer) ---
-    "stf_crc_tiny": {**make_stf_params(2, 256, 4, 8), "pathways": CRC_PATHWAYS},
-    "stf_crc_small": {**make_stf_params(4, 384, 8, 8), "pathways": CRC_PATHWAYS},
-    "stf_crc_medium": {**make_stf_params(6, 512, 8, 8), "pathways": CRC_PATHWAYS},
-    "stf_crc_large": {**make_stf_params(12, 768, 12, 8), "pathways": CRC_PATHWAYS},
+    # --- Biologically-Prioritized CRC Variants: MSE + CCC ---
+    # CCC penalises mean/variance offset that PCC ignores — better regression agreement.
+    "stf_crc_tiny": {
+        **make_stf_params(2, 256, 4, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_ccc",
+    },
+    "stf_crc_small": {
+        **make_stf_params(4, 384, 8, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_ccc",
+    },
+    "stf_crc_medium": {
+        **make_stf_params(6, 512, 8, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_ccc",
+    },
+    "stf_crc_large": {
+        **make_stf_params(12, 768, 12, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_ccc",
+    },
+    # --- Biologically-Prioritized CRC Variants: MSE + CCC + CLIP ---
+    # Adds CLIP alignment to prevent variance collapse (all predictions collapsing to mean).
+    "stf_crc_tiny_clip": {
+        **make_stf_params(2, 256, 4, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_ccc_clip",
+    },
+    "stf_crc_small_clip": {
+        **make_stf_params(4, 384, 8, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_ccc_clip",
+    },
+    "stf_crc_medium_clip": {
+        **make_stf_params(6, 512, 8, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_ccc_clip",
+    },
+    "stf_crc_large_clip": {
+        **make_stf_params(12, 768, 12, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_ccc_clip",
+    },
+    # --- Biologically-Prioritized CRC Variants: Huber + CCC ---
+    # Huber replaces MSE for robustness against outlier pathway activity values.
+    "stf_crc_tiny_huber": {
+        **make_stf_params(2, 256, 4, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_huber",
+    },
+    "stf_crc_small_huber": {
+        **make_stf_params(4, 384, 8, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_huber",
+    },
+    "stf_crc_medium_huber": {
+        **make_stf_params(6, 512, 8, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_huber",
+    },
+    "stf_crc_large_huber": {
+        **make_stf_params(12, 768, 12, 8),
+        "pathways": CRC_PATHWAYS,
+        "loss": "mse_huber",
+    },
 }
 
 

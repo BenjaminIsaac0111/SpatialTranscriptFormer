@@ -5,6 +5,7 @@ Tests for training summary visualization and spatial statistics (Moran's I, Cohe
 import os
 import tempfile
 
+import h5py
 import pytest
 import numpy as np
 import matplotlib
@@ -71,6 +72,101 @@ def mock_data(pathway_names):
     pathway_pred = np.random.randn(N, P).astype(np.float32)
     pathway_truth = np.random.randn(N, P).astype(np.float32)
     return coords, pathway_pred, pathway_truth
+
+
+# ---------------------------------------------------------------------------
+# _get_pathway_names
+# ---------------------------------------------------------------------------
+
+
+class TestGetPathwayNames:
+    """Tests for the three-tier pathway name resolution in visualization.py."""
+
+    def _make_args(self, pathways=None, pathway_targets_dir=None):
+        """Minimal args namespace."""
+        import argparse
+
+        args = argparse.Namespace()
+        args.pathways = pathways
+        args.pathway_targets_dir = pathway_targets_dir
+        return args
+
+    def test_explicit_pathways_used_directly(self):
+        """When args.pathways matches num_expected, return it immediately."""
+        from spatial_transcript_former.visualization import _get_pathway_names
+
+        names = ["HALLMARK_WNT_BETA_CATENIN_SIGNALING", "HALLMARK_KRAS_SIGNALING_UP"]
+        args = self._make_args(pathways=names)
+        result = _get_pathway_names(args, num_expected=2)
+        assert result == names
+
+    def test_explicit_pathways_length_mismatch_falls_through(self, tmp_path):
+        """If args.pathways length != num_expected, fall through to h5 lookup."""
+        from spatial_transcript_former.visualization import _get_pathway_names
+
+        # Write an h5 with 3 pathway names
+        h5_file = tmp_path / "sample.h5"
+        pw_names = [b"HALLMARK_A", b"HALLMARK_B", b"HALLMARK_C"]
+        with h5py.File(h5_file, "w") as f:
+            f.create_dataset("pathway_names", data=pw_names)
+
+        # args.pathways has 2 names but num_expected is 3 — mismatch
+        args = self._make_args(
+            pathways=["HALLMARK_X", "HALLMARK_Y"],
+            pathway_targets_dir=str(tmp_path),
+        )
+        result = _get_pathway_names(args, num_expected=3)
+        assert result == ["HALLMARK_A", "HALLMARK_B", "HALLMARK_C"]
+
+    def test_h5_names_loaded_from_targets_dir(self, tmp_path):
+        """When args.pathways is None, names are read from the .h5 file."""
+        from spatial_transcript_former.visualization import _get_pathway_names
+
+        pw_names = [b"HALLMARK_HYPOXIA", b"HALLMARK_APOPTOSIS", b"HALLMARK_P53_PATHWAY"]
+        h5_file = tmp_path / "TENX001.h5"
+        with h5py.File(h5_file, "w") as f:
+            f.create_dataset("pathway_names", data=pw_names)
+
+        args = self._make_args(pathway_targets_dir=str(tmp_path))
+        result = _get_pathway_names(args, num_expected=3)
+        assert result == [
+            "HALLMARK_HYPOXIA",
+            "HALLMARK_APOPTOSIS",
+            "HALLMARK_P53_PATHWAY",
+        ]
+
+    def test_h5_names_decoded_from_bytes(self, tmp_path):
+        """Byte-string pathway names in .h5 should be decoded to str."""
+        from spatial_transcript_former.visualization import _get_pathway_names
+
+        h5_file = tmp_path / "sample.h5"
+        with h5py.File(h5_file, "w") as f:
+            f.create_dataset("pathway_names", data=[b"PATHWAY_A", b"PATHWAY_B"])
+
+        args = self._make_args(pathway_targets_dir=str(tmp_path))
+        result = _get_pathway_names(args, num_expected=2)
+        assert all(isinstance(n, str) for n in result)
+
+    def test_fallback_to_generic_names(self):
+        """When no pathways and no h5 dir, return generic Pathway_i labels."""
+        from spatial_transcript_former.visualization import _get_pathway_names
+
+        args = self._make_args()
+        result = _get_pathway_names(args, num_expected=4)
+        assert result == ["Pathway_0", "Pathway_1", "Pathway_2", "Pathway_3"]
+
+    def test_h5_length_mismatch_falls_to_generic(self, tmp_path):
+        """If h5 pathway count != num_expected, fall through to generic names."""
+        from spatial_transcript_former.visualization import _get_pathway_names
+
+        h5_file = tmp_path / "sample.h5"
+        with h5py.File(h5_file, "w") as f:
+            f.create_dataset("pathway_names", data=[b"HALLMARK_A", b"HALLMARK_B"])
+
+        # h5 has 2 but we expect 5
+        args = self._make_args(pathway_targets_dir=str(tmp_path))
+        result = _get_pathway_names(args, num_expected=5)
+        assert result == [f"Pathway_{i}" for i in range(5)]
 
 
 # ---------------------------------------------------------------------------

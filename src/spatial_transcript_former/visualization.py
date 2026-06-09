@@ -39,26 +39,39 @@ def _load_histology(h5ad_path):
 
 
 def _get_pathway_names(args, num_expected: int):
-    """Get pathway names to match the expected number of pathways."""
-    try:
-        from spatial_transcript_former.data.pathways import (
-            get_pathway_init,
-            MSIGDB_URLS,
-        )
-        from spatial_transcript_former.data import GeneVocab
+    """Get pathway names to match the expected number of pathways.
 
-        vocab = GeneVocab.from_json(args.data_dir, num_genes=args.num_genes)
-        urls = [MSIGDB_URLS["hallmarks"]]
-        _, pw_names = get_pathway_init(
-            vocab.genes,
-            gmt_urls=urls,
-            verbose=False,
-            filter_names=getattr(args, "pathways", None),
-        )
-        if len(pw_names) == num_expected:
-            return pw_names
-    except Exception:
-        pass
+    Resolution order:
+    1. args.pathways (explicit subset, e.g. CRC_PATHWAYS) — exact, fast.
+    2. First .h5 file found in args.pathway_targets_dir — reads the
+       pathway_names dataset written by stf-compute-pathways.
+    3. Generic fallback: ["Pathway_0", ...].
+    """
+    # 1. Explicit pathway list (e.g. CRC run configured with --pathways)
+    explicit = getattr(args, "pathways", None)
+    if explicit and len(explicit) == num_expected:
+        return list(explicit)
+
+    # 2. Load names from a pathway activity .h5 file
+    targets_dir = getattr(args, "pathway_targets_dir", None)
+    if targets_dir and os.path.isdir(targets_dir):
+        for fname in os.listdir(targets_dir):
+            if not fname.endswith(".h5"):
+                continue
+            try:
+                with h5py.File(os.path.join(targets_dir, fname), "r") as f:
+                    if "pathway_names" in f:
+                        names = [
+                            n.decode() if isinstance(n, bytes) else n
+                            for n in f["pathway_names"][:]
+                        ]
+                        if len(names) == num_expected:
+                            return names
+            except Exception:
+                pass
+            break  # Only inspect the first .h5 found
+
+    # 3. Generic fallback
     return [f"Pathway_{i}" for i in range(num_expected)]
 
 
@@ -83,13 +96,13 @@ def run_inference_plot(model, args, sample_id, epoch, device):
     with torch.no_grad():
         for batch in val_loader:
             if args.whole_slide:
-                image_features, _, target, coords, mask, _ = batch
+                image_features, _, target, coords, mask = batch
                 image_features = image_features.to(device)
                 coords = coords.to(device)
                 mask = mask.to(device)
                 target = target.to(device)
             else:
-                image_features, _, target, coords, _ = batch
+                image_features, _, target, coords = batch
                 image_features = image_features.to(device)
                 coords = coords.to(device)
                 mask = torch.ones(target.shape[0], target.shape[1], device=device)
@@ -126,11 +139,6 @@ def run_inference_plot(model, args, sample_id, epoch, device):
     coords = all_coords.numpy()[0]
     mask = all_masks.numpy()[0]
 
-    # Un-log if necessary to get absolute counts
-    if getattr(args, "log_transform", False):
-        pathway_preds = np.expm1(pathway_preds)
-        pathway_truth = np.expm1(pathway_truth)
-
     # 3. Filter Valid Spots
     if args.whole_slide:
         valid_idx = ~mask.astype(bool)
@@ -145,9 +153,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
     # image. Let's fetch the raw coordinates directly from the .pt file.
     try:
         from spatial_transcript_former.data.paths import resolve_feature_dir
-        from spatial_transcript_former.recipes.hest.dataset import (
-            load_gene_expression_matrix,
-        )
+        from spatial_transcript_former.recipes.hest.dataset import get_h5ad_valid_mask
 
         feat_dir = resolve_feature_dir(
             args.data_dir,
@@ -163,13 +169,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
         h5ad_path = os.path.join(st_dir, f"{sample_id}.h5ad")
 
         # We need the same valid mask used by the dataset
-        _, pt_mask, _ = load_gene_expression_matrix(
-            h5ad_path,
-            barcodes,
-            selected_gene_names=None,
-            num_genes=1,
-        )
-        pt_mask_bool = np.array(pt_mask, dtype=bool)
+        pt_mask_bool = get_h5ad_valid_mask(h5ad_path, barcodes)
 
         if len(raw_coords[pt_mask_bool]) == len(coords):
             coords = raw_coords[pt_mask_bool]
