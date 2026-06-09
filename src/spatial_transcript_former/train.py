@@ -15,11 +15,6 @@ import numpy as np
 from spatial_transcript_former.config import get_config
 from spatial_transcript_former.models import HE2RNA, ViT_ST, SpatialTranscriptFormer
 from spatial_transcript_former.utils import set_seed
-from spatial_transcript_former.training.losses import (
-    PCCLoss,
-    CompositeLoss,
-    MaskedMSELoss,
-)
 from spatial_transcript_former.training.engine import train_one_epoch, validate
 from spatial_transcript_former.training.experiment_logger import ExperimentLogger
 from spatial_transcript_former.visualization import run_inference_plot
@@ -34,6 +29,48 @@ from spatial_transcript_former.training.checkpoint import (
     save_checkpoint,
     load_checkpoint,
 )
+from spatial_transcript_former.checkpoint import save_pretrained
+from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+    PATHWAY_FILE_VERSION,
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_pathway_names(args):
+    """Best-effort recovery of pathway names for ``save_pretrained``.
+
+    Order:
+      1. ``args.pathways`` if it's a non-empty list.
+      2. The ``pathway_names`` dataset of the first .h5 in
+         ``args.pathway_targets_dir``.
+      3. ``None`` (skip writing pathway_names.json).
+    """
+    explicit = getattr(args, "pathways", None)
+    if explicit and isinstance(explicit, (list, tuple)) and len(explicit) > 0:
+        return list(explicit)
+
+    targets_dir = getattr(args, "pathway_targets_dir", None)
+    if targets_dir and os.path.isdir(targets_dir):
+        for fname in sorted(os.listdir(targets_dir)):
+            if not fname.endswith(".h5"):
+                continue
+            try:
+                import h5py
+
+                with h5py.File(os.path.join(targets_dir, fname), "r") as f:
+                    if "pathway_names" in f:
+                        return [
+                            n.decode() if isinstance(n, bytes) else n
+                            for n in f["pathway_names"][:]
+                        ]
+            except Exception:
+                pass
+            break  # only inspect the first .h5
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -92,6 +129,11 @@ def main():
     scaler = torch.amp.GradScaler("cuda") if args.use_amp else None
     print(f"Loss: {criterion.__class__.__name__}")
     print(f"LR schedule: {warmup_epochs}-epoch warmup -> cosine annealing to 1e-6")
+    print(
+        f"Targets: pathway_format_version={PATHWAY_FILE_VERSION} "
+        "(mean log1p CP10k of pathway members). "
+        "Validation MAE/loss are in those units; best-model selection uses CCC."
+    )
 
     # 3. Output & Logger
     os.makedirs(args.output_dir, exist_ok=True)
@@ -99,10 +141,13 @@ def main():
     logger = ExperimentLogger(args.output_dir, config_dict)
 
     # 4. Resume
-    start_epoch, best_val_loss = 0, float("inf")
+    # ``best_val_metric`` tracks the highest val_ccc seen so far (CCC is
+    # higher-is-better and pathway-scale-invariant; preferable to MSE-based
+    # selection now that targets live in raw log1p CP10k units).
+    start_epoch, best_val_metric = 0, -float("inf")
     schedulers = {"main": main_scheduler}
     if args.resume:
-        start_epoch, best_val_loss, loaded_schedulers = load_checkpoint(
+        start_epoch, best_val_metric, loaded_schedulers = load_checkpoint(
             model, optimizer, scaler, schedulers, args.output_dir, args.model, device
         )
 
@@ -156,6 +201,8 @@ def main():
             epoch_row["val_mae"] = round(val_metrics["val_mae"], 4)
         if val_metrics.get("val_pcc") is not None:
             epoch_row["val_pcc"] = round(val_metrics["val_pcc"], 4)
+        if val_metrics.get("val_ccc") is not None:
+            epoch_row["val_ccc"] = round(val_metrics["val_ccc"], 4)
         if val_metrics.get("pred_variance") is not None:
             epoch_row["pred_variance"] = round(val_metrics["pred_variance"], 6)
         if val_metrics.get("spatial_coherence") is not None:
@@ -179,12 +226,28 @@ def main():
 
         logger.log_epoch(epoch + 1, epoch_row)
 
-        # Save best
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        # Save best — selection driven by CCC (higher is better)
+        val_ccc = val_metrics.get("val_ccc")
+        if val_ccc is not None and val_ccc > best_val_metric:
+            best_val_metric = val_ccc
+
+            # Legacy state_dict path (kept for tools that still load .pth directly)
             best_path = os.path.join(args.output_dir, f"best_model_{args.model}.pth")
             torch.save(model.state_dict(), best_path)
-            print(f"Saved best model -> {best_path}")
+
+            # Self-contained checkpoint directory (config.json + model.pth +
+            # optional pathway_names.json) so inference can rebuild the model
+            # without re-specifying architecture flags.
+            best_dir = os.path.join(args.output_dir, f"best_{args.model}")
+            try:
+                save_pretrained(
+                    model,
+                    best_dir,
+                    pathway_names=_resolve_pathway_names(args),
+                )
+            except Exception as e:
+                print(f"  (skipped save_pretrained bundle: {e})")
+            print(f"Saved best model (val_ccc={val_ccc:.4f}) -> {best_path}")
 
         # Save latest
         save_checkpoint(
@@ -193,7 +256,7 @@ def main():
             scaler,
             schedulers,
             epoch,
-            best_val_loss,
+            best_val_metric,
             args.output_dir,
             args.model,
         )
@@ -205,8 +268,11 @@ def main():
             run_inference_plot(model, args, vis_id, epoch + 1, device)
 
     # 6. Finalize
-    logger.finalize(best_val_loss)
-    print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
+    logger.finalize(best_val_metric)
+    if best_val_metric == -float("inf"):
+        print("\nTraining complete. No valid CCC was recorded.")
+    else:
+        print(f"\nTraining complete. Best val CCC: {best_val_metric:.4f}")
 
 
 if __name__ == "__main__":

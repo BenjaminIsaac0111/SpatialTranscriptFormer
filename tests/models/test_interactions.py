@@ -297,7 +297,7 @@ def test_engine_passes_coords_to_forward():
     fake_coords = torch.randn(2, 5, 2)
     fake_mask = torch.zeros(2, 5).bool()
 
-    # Dataloader yielding (feats, genes, pathway_targets, coords, mask, pathway_morans)
+    # Dataloader yielding (feats, genes, pathway_targets, coords, mask)
     loader = [
         (
             torch.randn(2, 5, 512),
@@ -305,7 +305,6 @@ def test_engine_passes_coords_to_forward():
             torch.randn(2, 5, 50),
             fake_coords,
             fake_mask,
-            None,
         )
     ]
 
@@ -340,7 +339,6 @@ def test_engine_validate_passes_coords():
             torch.randn(2, 5, 50),
             fake_coords,
             torch.zeros(2, 5).bool(),
-            None,
         )
     ]
 
@@ -360,21 +358,29 @@ def test_engine_validate_passes_coords():
     ), "Validate engine passed wrong coordinate tensor!"
 
 
-def test_spatial_encoder_normalization():
-    """Verify LearnedSpatialEncoder handles extreme coords and centers them."""
-    encoder = LearnedSpatialEncoder(64)
-    # Extreme coordinates: very far and very close
-    coords = torch.tensor([[[1000.0, 1000.0], [1000.1, 1000.1]]])
-    normed = encoder._normalize_coords(coords)
+def test_spatial_encoder_per_spot_independence():
+    """LearnedSpatialEncoder output for spot i must depend only on coords[i].
 
-    # Should be centered (mean 0)
-    assert torch.allclose(normed.mean(dim=1), torch.zeros(1, 2), atol=1e-5)
-    # Should be bounded by [-1, 1]
-    assert normed.abs().max() <= 1.0
+    Slide-stationary normalisation is now done in the dataset, so the encoder
+    itself is per-spot stateless. Permuting other spots in the batch must not
+    change a given spot's embedding.
+    """
+    encoder = LearnedSpatialEncoder(64).eval()
 
-    # Verify forward doesn't crash
-    out = encoder(coords)
-    assert out.shape == (1, 2, 64)
+    coords_a = torch.tensor([[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]])
+    coords_b = torch.tensor(
+        [[[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]]]
+    )  # same set, reordered
+
+    with torch.no_grad():
+        out_a = encoder(coords_a)
+        out_b = encoder(coords_b)
+
+    # Spot 0 ((0,0)) is in the same position in both — embedding must match
+    assert torch.allclose(out_a[0, 0], out_b[0, 0], atol=1e-6)
+    # Spot (1,0) at index 1 in batch a, index 2 in batch b — same embedding
+    assert torch.allclose(out_a[0, 1], out_b[0, 2], atol=1e-6)
+    assert out_a.shape == (1, 3, 64)
 
 
 def test_interaction_mask_bits():

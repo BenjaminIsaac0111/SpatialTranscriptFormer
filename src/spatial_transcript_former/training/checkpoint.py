@@ -1,16 +1,27 @@
 import os
 import torch
 
+from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+    PATHWAY_FILE_VERSION,
+)
+
 
 def save_checkpoint(
-    model, optimizer, scaler, schedulers, epoch, best_val_loss, output_dir, model_name
+    model, optimizer, scaler, schedulers, epoch, best_val_metric, output_dir, model_name
 ):
-    """Save training state for resuming."""
+    """Save training state for resuming.
+
+    ``best_val_metric`` semantics: highest val_ccc seen so far (higher is
+    better). Stored as ``best_val_metric`` and mirrored into the legacy
+    ``best_val_loss`` key so older tools that read the field still parse it.
+    """
     save_dict = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
-        "best_val_loss": best_val_loss,
+        "best_val_metric": best_val_metric,
+        "best_val_loss": best_val_metric,  # legacy key, same value
+        "pathway_format_version": PATHWAY_FILE_VERSION,
     }
     if scaler is not None:
         save_dict["scaler_state_dict"] = scaler.state_dict()
@@ -29,12 +40,12 @@ def load_checkpoint(
     Load checkpoint if it exists.
 
     Returns:
-        tuple: (start_epoch, best_val_loss, loaded_schedulers)
+        tuple: (start_epoch, best_val_metric, loaded_schedulers)
     """
     ckpt_path = os.path.join(output_dir, f"latest_model_{model_name}.pth")
     if not os.path.exists(ckpt_path):
         print(f"No checkpoint found at {ckpt_path}. Starting from scratch.")
-        return 0, float("inf"), False
+        return 0, -float("inf"), False
 
     print(f"Resuming from {ckpt_path}...")
     try:
@@ -43,7 +54,7 @@ def load_checkpoint(
         print(
             f"Failed to load checkpoint at {ckpt_path} due to error: {e}. Starting from scratch."
         )
-        return 0, float("inf"), False
+        return 0, -float("inf"), False
 
     incompatible_keys = model.load_state_dict(
         checkpoint["model_state_dict"], strict=False
@@ -67,10 +78,27 @@ def load_checkpoint(
         print(
             f"Failed to load optimizer/scheduler states due to architecture change ({e}). Starting from scratch."
         )
-        return 0, float("inf"), False
+        return 0, -float("inf"), False
+
+    # Refuse to resume if the targets the checkpoint was trained against
+    # don't match the current preprocessing format.
+    ckpt_pfv = checkpoint.get("pathway_format_version", None)
+    if ckpt_pfv is not None and int(ckpt_pfv) != PATHWAY_FILE_VERSION:
+        print(
+            f"Checkpoint pathway_format_version={ckpt_pfv} does not match "
+            f"current {PATHWAY_FILE_VERSION}. Refusing to resume — "
+            "regenerate targets and start fresh."
+        )
+        return 0, -float("inf"), False
 
     start_epoch = checkpoint.get("epoch", -1) + 1
-    best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+    best_val_metric = checkpoint.get(
+        "best_val_metric", checkpoint.get("best_val_loss", -float("inf"))
+    )
+    # Old checkpoints stored loss (lower is better) under best_val_loss; once
+    # that lands in our higher-is-better tracker it's unusable. Reset it.
+    if "best_val_metric" not in checkpoint:
+        best_val_metric = -float("inf")
 
     print(f"Resumed at epoch {start_epoch + 1}")
-    return start_epoch, best_val_loss, loaded_schedulers
+    return start_epoch, best_val_metric, loaded_schedulers

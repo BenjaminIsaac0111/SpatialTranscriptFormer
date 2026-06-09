@@ -5,19 +5,23 @@ For each sample .h5ad, this script:
   1. Loads the raw gene expression matrix (spots x genes)
   2. Applies per-spot QC (min UMIs, min genes, max MT%) on raw counts
   3. Applies CP10k normalisation + log1p to surviving spots
-  4. Z-scores each gene across spots, then computes per-pathway mean z-score
+  4. Computes per-pathway scores as the mean log1p CP10k expression of
+     member genes (no per-slide normalisation — targets are slide-stationary)
   5. Saves the resulting activity matrix to
      <data_dir>/pathway_activities/<sample_id>.h5
 
 Pathway scores are computed from MSigDB Hallmark gene sets (50 pathways).
-For each pathway, the score per spot is the mean z-scored expression of
-member genes present in the expression matrix.
+The score for spot s and pathway p is the simple per-spot mean of the log1p
+CP10k expression across the pathway's member genes that are present in the
+sample. CP10k handles depth normalisation; no per-slide statistics enter the
+score, so the same biological state in two slides yields the same target.
 
 Non-human samples are auto-skipped via HEST metadata. Samples with
 fewer than ``--min-pathways`` scored pathways are excluded.
 
 The saved files are consumed at training time by HEST_FeatureDataset when
-``pathway_targets_dir`` is provided.
+``pathway_targets_dir`` is provided. Files carry a ``format_version``
+attribute; loaders refuse mismatched versions and ask for a recompute.
 
 Usage::
 
@@ -45,6 +49,13 @@ from spatial_transcript_former.data.pathways import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# File-format version stamped into each pathway-activities .h5 file.
+# Bumped whenever the on-disk semantics of `activities` change.
+#   v1: per-slide z-scored pathway-mean (deprecated — slide-relative drift).
+#   v2: plain mean of log1p CP10k expression of pathway members.
+PATHWAY_FILE_VERSION = 2
 
 
 def _load_expression(
@@ -145,7 +156,13 @@ def _load_hallmark_sets(cache_dir: str = ".cache"):
 
 
 def _score_pathways(expr_matrix, gene_names, pathway_dict, min_genes=5):
-    """Score pathway activities via mean z-scored expression of member genes.
+    """Score pathway activities as the mean log1p CP10k expression of member genes.
+
+    The score for spot s and pathway p is the simple per-spot mean across the
+    pathway's member genes that are present in ``gene_names``. This is depth-
+    normalised (via the prior CP10k step) and slide-stationary by construction:
+    no per-slide statistics enter the score, so the same biological state in
+    two different slides yields the same target value.
 
     Parameters
     ----------
@@ -172,12 +189,6 @@ def _score_pathways(expr_matrix, gene_names, pathway_dict, min_genes=5):
     gene_to_idx = {g: i for i, g in enumerate(gene_names)}
     n_spots = expr_matrix.shape[0]
 
-    # Z-score each gene across spots (zero-variance genes get z=0)
-    means = expr_matrix.mean(axis=0)
-    stds = expr_matrix.std(axis=0)
-    stds[stds == 0] = 1.0  # avoid division by zero
-    z_matrix = (expr_matrix - means) / stds
-
     all_pathways = list(pathway_dict.keys())
     activities = np.zeros((n_spots, len(all_pathways)), dtype=np.float32)
     n_scored = 0
@@ -186,7 +197,7 @@ def _score_pathways(expr_matrix, gene_names, pathway_dict, min_genes=5):
         col_indices = [gene_to_idx[g] for g in pw_genes if g in gene_to_idx]
         if len(col_indices) < min_genes:
             continue
-        activities[:, i] = z_matrix[:, col_indices].mean(axis=1)
+        activities[:, i] = expr_matrix[:, col_indices].mean(axis=1)
         n_scored += 1
 
     return activities, all_pathways, n_scored
@@ -370,6 +381,8 @@ def compute_pathway_activities_for_sample(
         f.create_dataset("pathway_names", data=pathway_names)
         if pathway_morans is not None:
             f.create_dataset("pathway_morans_i", data=pathway_morans)
+        # File-format version — bumped when the semantics of `activities` change.
+        f.attrs["format_version"] = PATHWAY_FILE_VERSION
         # QC metadata for downstream auditing
         f.attrs["n_spots_before_qc"] = n_before
         f.attrs["n_spots_after_qc"] = n_after
@@ -408,10 +421,24 @@ def load_pathway_activities(
     valid_mask : np.ndarray, shape (N_barcodes,), bool
         True for barcodes that were found in the activity file.
     pathway_morans_i : np.ndarray or None, shape (P,), float32
-        Per-pathway Moran's I weights.  ``None`` for older files that
-        were computed before this field was added.
+        Per-pathway Moran's I diagnostic.  ``None`` if the field is absent.
+
+    Raises
+    ------
+    ValueError
+        If the file's ``format_version`` attribute is missing or does not
+        match :data:`PATHWAY_FILE_VERSION`. Re-run ``stf-compute-pathways
+        --overwrite`` to regenerate the file with the current schema.
     """
     with h5py.File(h5_path, "r") as f:
+        version = f.attrs.get("format_version", None)
+        if version is None or int(version) != PATHWAY_FILE_VERSION:
+            raise ValueError(
+                f"Pathway file {h5_path!r} has format_version="
+                f"{version!r}, but this build expects "
+                f"{PATHWAY_FILE_VERSION}. Re-run "
+                "`stf-compute-pathways --overwrite` to regenerate."
+            )
         stored_acts = f["activities"][:]  # (M, P)
         stored_barcodes = f["barcodes"][:]  # bytes array
         pathway_names = [

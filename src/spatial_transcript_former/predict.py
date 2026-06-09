@@ -217,7 +217,13 @@ class Predictor:
             )
 
         features = features.to(self.device)
-        coords = coords.to(self.device)
+        coords = coords.to(self.device).float()
+
+        # Match the dataset-side slide-stationary normalisation so the model
+        # sees coordinates on the same scale it was trained on.
+        center = coords.mean(dim=1, keepdim=True)
+        scale = coords.std(dim=1).max(dim=-1, keepdim=True).values.clamp(min=1.0)
+        coords = (coords - center) / scale.unsqueeze(1)
 
         with torch.amp.autocast("cuda", enabled=self.use_amp):
             result = self.model(
@@ -382,8 +388,8 @@ def plot_training_summary(
 
     Args:
         coords: (N, 2) spatial coordinates.
-        pathway_pred: (N, P) predicted pathway activations (spatial z-score).
-        pathway_truth: (N, P) ground truth pathway activations (spatial z-score).
+        pathway_pred: (N, P) predicted pathway activations (mean log1p CP10k).
+        pathway_truth: (N, P) ground truth pathway activations (mean log1p CP10k).
         pathway_names: List of P pathway names.
         sample_id: Identifier for the plot title.
         histology_img: Optional RGB image for background.
@@ -437,7 +443,7 @@ def plot_training_summary(
     fig.patch.set_facecolor("#0f172a")
 
     plt.suptitle(
-        f"Pathway Validation (Spatial Z-Score): {sample_id}",
+        f"Pathway Validation: {sample_id}",
         fontsize=18,
         color="white",
         fontweight="bold",
@@ -446,11 +452,13 @@ def plot_training_summary(
     for i, idx in enumerate(selected_indices):
         name = plot_names[i]
 
-        # Pred and Truth for this pathway (z-score scale)
+        # Pred and Truth for this pathway (mean log1p CP10k units)
         p = pathway_pred[:, idx]
         t = pathway_truth[:, idx]
 
-        # Vmin/Vmax for shared z-score scale
+        # Shared vmin/vmax across truth and prediction so both panels are
+        # directly comparable. Per-pathway range, since absolute scales
+        # differ across pathways under raw-mean targets.
         vmin = min(p.min(), t.min())
         vmax = max(p.max(), t.max())
 
@@ -506,7 +514,7 @@ def plot_training_summary(
         aspect=40,
         pad=0.05,
     )
-    cbar.set_label("Relative Expression (Spatial Z-Score)", fontsize=14, labelpad=10)
+    cbar.set_label("Pathway score (mean log1p CP10k)", fontsize=14, labelpad=10)
     cbar.ax.tick_params(labelsize=12)
 
     plt.savefig(save_path, dpi=200, bbox_inches="tight", facecolor="#0f172a")

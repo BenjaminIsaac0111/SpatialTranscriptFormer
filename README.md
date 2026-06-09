@@ -42,7 +42,7 @@ For more details, see the **[Python API Reference](docs/API.md)**.
 - **Modular Architecture**: Decoupled backbones, interaction modules, and pathway output heads.
 - **Quad-Flow Interaction**: Configurable attention between Pathways and Histology patches (`p2p`, `p2h`, `h2p`, `h2h`).
 - **Pathway-Exclusive Prediction**: Directly predicts biological pathway activity scores (e.g., 50 MSigDB Hallmark pathways) — no intermediate gene reconstruction step.
-- **Offline Pathway Targets**: Ground-truth pathway activities are pre-computed offline (`stf-compute-pathways`) from raw gene expression using QC → CP10k normalisation → z-score → mean pathway aggregation. This eliminates the circular auxiliary loss used in previous versions.
+- **Offline Pathway Targets**: Ground-truth pathway activities are pre-computed offline (`stf-compute-pathways`) from raw gene expression using QC → CP10k normalisation → mean pathway aggregation. This eliminates the circular auxiliary loss used in previous versions.
 - **Spatial Pattern Coherence**: Optimised using a composite **MSE + PCC (Pearson Correlation) loss**.
 - **Foundation Model Ready**: Native support for **CTransPath**, **Phikon**, **Hibou**, **PLIP**, and **GigaPath**.
 
@@ -87,7 +87,7 @@ stf-download --organ Breast --disease Cancer --tech Visium --local_dir hest_data
 
 ### 2. Pre-Compute Pathway Activity Targets
 
-Before training, compute the offline pathway activity matrix for each sample. This step applies per-spot QC, CP10k normalisation, and z-scoring before aggregating gene expression into MSigDB Hallmark pathway scores.
+Before training, compute the offline pathway activity matrix for each sample. This step applies per-spot QC and CP10k normalisation, then aggregates gene expression into MSigDB Hallmark pathway scores as the per-spot mean over each pathway's member genes.
 
 ```bash
 stf-compute-pathways --data-dir hest_data
@@ -123,6 +123,7 @@ Visualization plots and spatial pathway activation maps will be saved to the `./
 
 - **[Models & Architecture](docs/MODELS.md)**: Deep dive into the pathway-exclusive prediction architecture, quad-flow interaction logic, and network scaling.
 - **[Pathway Mapping](docs/PATHWAY_MAPPING.md)**: Offline pathway scoring methodology, QC pipeline, and MSigDB integration.
+- **[SVG Exploratory Analysis](docs/SVG_HEST_EXPLORATORY_ANALYSIS.md)**: Detailed report on spatially variable pathway analysis across 95 HEST samples and data-driven target curation.
 - **[Data Structure](docs/DATA_FORMAT.md)**: Detailed breakdown of the HEST data structure on disk, metadata conventions, and preprocessing invariants.
 
 ## Development

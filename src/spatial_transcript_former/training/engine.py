@@ -12,33 +12,10 @@ import numpy as np
 from tqdm import tqdm
 from spatial_transcript_former.models import SpatialTranscriptFormer
 from spatial_transcript_former.data.spatial_stats import spatial_coherence_score
-from spatial_transcript_former.training.losses import CompositeLoss, MaskedMSELoss
 
 
-def _prepare_pathway_weights(pathway_morans, device):
-    """Average per-sample Moran's I weights into a single (P,) vector.
-
-    Args:
-        pathway_morans: (B, P) tensor of per-sample Moran's I weights, or None.
-        device: Target device.
-
-    Returns:
-        (P,) tensor or None.
-    """
-    if pathway_morans is None:
-        return None
-    pw = pathway_morans.to(device)
-    if pw.dim() == 2:
-        pw = pw.mean(dim=0)  # Average across batch samples
-    return pw
-
-
-def _criterion_call(criterion, preds, targets, mask=None, pathway_weights=None):
-    """Call the criterion, passing pathway_weights only if supported."""
-    if pathway_weights is not None and isinstance(
-        criterion, (CompositeLoss, MaskedMSELoss)
-    ):
-        return criterion(preds, targets, mask=mask, pathway_weights=pathway_weights)
+def _criterion_call(criterion, preds, targets, mask=None):
+    """Call the criterion, passing the mask only when provided."""
     if mask is not None:
         return criterion(preds, targets, mask=mask)
     return criterion(preds, targets)
@@ -98,8 +75,8 @@ def train_one_epoch(
 
     if whole_slide:
         for batch_idx, batch in enumerate(pbar):
-            # Unpack: (feats, None, pathway_targets, coords, mask, pathway_morans)
-            feats, _, pathway_targets, coords, mask, pathway_morans = batch
+            # Unpack: (feats, None, pathway_targets, coords, mask)
+            feats, _, pathway_targets, coords, mask = batch
             feats = feats.to(device, non_blocking=True)
             coords = coords.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
@@ -108,7 +85,6 @@ def train_one_epoch(
                     "pathway_targets is None, but training now requires pathway targets."
                 )
             pathway_targets = pathway_targets.to(device, non_blocking=True)
-            pw = _prepare_pathway_weights(pathway_morans, device)
 
             with torch.amp.autocast("cuda", enabled=scaler is not None):
                 if isinstance(model, SpatialTranscriptFormer) and not getattr(
@@ -125,7 +101,6 @@ def train_one_epoch(
                         preds,
                         pathway_targets,
                         mask=mask,
-                        pathway_weights=pw,
                     )
                 else:
                     preds = model(feats)
@@ -134,7 +109,6 @@ def train_one_epoch(
                         criterion,
                         preds,
                         bag_target,
-                        pathway_weights=pw,
                     )
 
                 loss = loss / grad_accum_steps
@@ -148,8 +122,8 @@ def train_one_epoch(
             pbar.set_postfix({"loss": f"{current_loss:.4f}"})
     else:
         for batch_idx, batch in enumerate(pbar):
-            # Unpack: (images, None, pathway_targets, rel_coords, pathway_morans)
-            images, _, pathway_targets, rel_coords, pathway_morans = batch
+            # Unpack: (images, None, pathway_targets, rel_coords)
+            images, _, pathway_targets, rel_coords = batch
             images = images.to(device, non_blocking=True)
             rel_coords = rel_coords.to(device, non_blocking=True)
             if pathway_targets is None:
@@ -157,7 +131,6 @@ def train_one_epoch(
                     "pathway_targets is None, but training now requires pathway targets."
                 )
             pathway_targets = pathway_targets.to(device, non_blocking=True)
-            pw = _prepare_pathway_weights(pathway_morans, device)
 
             with torch.amp.autocast("cuda", enabled=scaler is not None):
                 if isinstance(model, SpatialTranscriptFormer):
@@ -169,7 +142,6 @@ def train_one_epoch(
                     criterion,
                     outputs,
                     pathway_targets,
-                    pathway_weights=pw,
                 )
                 loss = loss / grad_accum_steps
 
@@ -188,13 +160,24 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
     """
     Validate the model.
 
-    Returns:
-        dict: {"val_loss": float, "attn_correlation": float or None}
+    Returns a metrics dict including ``val_loss``, ``val_mae``, ``val_pcc``,
+    ``val_ccc`` (averaged across pathways and slides), ``val_baseline_mae``
+    (the MAE of a constant-mean-of-targets predictor — a zero-information
+    skill baseline), ``val_pcc_per_pathway`` / ``val_ccc_per_pathway``
+    (per-pathway lists of slide-averaged values, ``None`` for pathways with
+    no spatial variance), plus ``pred_variance``, ``spatial_coherence`` and
+    ``attn_correlation``.
     """
     model.eval()
     running_loss = 0.0
     running_mae = 0.0
+    running_baseline_mae = 0.0
+    n_baseline_batches = 0
     pcc_list = []
+    ccc_list = []
+    # Per-pathway accumulators: index -> list of slide-level values
+    per_pathway_pcc: dict = {}
+    per_pathway_ccc: dict = {}
     pred_var_list = []
     attn_correlations = []
     spatial_coherence_list = []
@@ -204,24 +187,22 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
             loader, desc="Validation", file=sys.stdout, dynamic_ncols=True
         ):
             if whole_slide:
-                # Unpack: (feats, None, pathway_targets, coords, mask, pathway_morans)
-                feats, _, pathway_targets, coords, mask, pathway_morans = batch
+                # Unpack: (feats, None, pathway_targets, coords, mask)
+                feats, _, pathway_targets, coords, mask = batch
                 feats = feats.to(device, non_blocking=True)
                 coords = coords.to(device, non_blocking=True)
                 mask = mask.to(device, non_blocking=True)
                 if pathway_targets is None:
                     raise ValueError("pathway_targets is None in validation.")
                 pathway_targets = pathway_targets.to(device, non_blocking=True)
-                pw = _prepare_pathway_weights(pathway_morans, device)
             else:
-                # Unpack: (images, None, pathway_targets, rel_coords, pathway_morans)
-                images, _, pathway_targets, rel_coords, pathway_morans = batch
+                # Unpack: (images, None, pathway_targets, rel_coords)
+                images, _, pathway_targets, rel_coords = batch
                 images = images.to(device, non_blocking=True)
                 rel_coords = rel_coords.to(device, non_blocking=True)
                 if pathway_targets is None:
                     raise ValueError("pathway_targets is None in validation.")
                 pathway_targets = pathway_targets.to(device, non_blocking=True)
-                pw = _prepare_pathway_weights(pathway_morans, device)
 
             with torch.amp.autocast("cuda", enabled=use_amp):
                 attn = None
@@ -265,17 +246,15 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                         outputs,
                         targets,
                         mask=mask,
-                        pathway_weights=pw,
                     )
                 else:
                     loss = _criterion_call(
                         criterion,
                         outputs,
                         targets,
-                        pathway_weights=pw,
                     )
 
-                # --- Interpretability Metrics (MAE & PCC) ---
+                # --- Interpretability Metrics (MAE, PCC, CCC) ---
                 eval_preds = outputs
                 mae_diff = torch.abs(eval_preds - targets)
                 if (
@@ -286,59 +265,111 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                 ):
                     valid_mask = ~mask.unsqueeze(-1).expand_as(mae_diff)
                     mae_val = (mae_diff * valid_mask.float()).sum() / valid_mask.sum()
+
+                    # Skill baseline: predict the per-slide per-pathway mean
+                    # constant. MAE of that predictor is the natural reference
+                    # for "zero information" performance in the same units.
+                    valid_counts = (
+                        (~mask).float().sum(dim=1, keepdim=True).clamp(min=1.0)
+                    )
+                    target_means = (targets * (~mask).float().unsqueeze(-1)).sum(
+                        dim=1, keepdim=True
+                    ) / valid_counts.unsqueeze(-1)
+                    baseline_diff = torch.abs(targets - target_means)
+                    baseline_mae_val = (
+                        baseline_diff * valid_mask.float()
+                    ).sum() / valid_mask.sum()
                 else:
                     mae_val = mae_diff.mean()
+                    target_means = targets.mean(dim=0, keepdim=True)
+                    baseline_mae_val = torch.abs(targets - target_means).mean()
 
-                    if (
-                        torch.isfinite(eval_preds).all()
-                        and torch.isfinite(targets).all()
-                    ):
-                        # Calculate Spatial PCC (across spots N, for each gene G independently)
-                        # outputs/targets are (B, N, G) for whole_slide or (B, G) for patch
-                        if whole_slide:
-                            # Iterate over batches to correlate spatially for each slide
-                            B = eval_preds.shape[0]
-                            for b_idx in range(B):
-                                p_slide = eval_preds[b_idx]  # (N, G)
-                                t_slide = targets[b_idx]  # (N, G)
+                # PCC and CCC — computed for all model/mode combinations
+                if torch.isfinite(eval_preds).all() and torch.isfinite(targets).all():
+                    if whole_slide:
+                        for b_idx in range(eval_preds.shape[0]):
+                            p_slide = eval_preds[b_idx]  # (N, G)
+                            t_slide = targets[b_idx]  # (N, G)
+                            valid_idx = ~mask[b_idx]
+                            p_slide = p_slide[valid_idx]  # (V, G)
+                            t_slide = t_slide[valid_idx]  # (V, G)
 
-                                valid_idx = ~mask[b_idx]
-                                p_slide = p_slide[valid_idx]  # (V, G)
-                                t_slide = t_slide[valid_idx]  # (V, G)
+                            if p_slide.shape[0] >= 2:
+                                pred_mean = p_slide.mean(dim=0)  # (G,)
+                                tgt_mean = t_slide.mean(dim=0)  # (G,)
+                                vx = p_slide - pred_mean
+                                vy = t_slide - tgt_mean
+                                cov = (vx * vy).sum(dim=0)  # (G,)
+                                var_x = (vx**2).sum(dim=0)  # (G,)
+                                var_y = (vy**2).sum(dim=0)  # (G,)
 
-                                if p_slide.shape[0] >= 2:
-                                    vx = p_slide - p_slide.mean(dim=0, keepdim=True)
-                                    vy = t_slide - t_slide.mean(dim=0, keepdim=True)
-                                    num = torch.sum(vx * vy, dim=0)  # (G,)
-                                    den = torch.sqrt(
-                                        torch.sum(vx**2, dim=0) + 1e-8
-                                    ) * torch.sqrt(torch.sum(vy**2, dim=0) + 1e-8)
-                                    corr = num / den
+                                corr = cov / (
+                                    torch.sqrt(var_x + 1e-8) * torch.sqrt(var_y + 1e-8)
+                                )
+                                N_v = p_slide.shape[0]
+                                mean_diff_sq = (pred_mean - tgt_mean) ** 2
+                                ccc_vals = (2 * cov) / (
+                                    var_x + var_y + N_v * mean_diff_sq + 1e-8
+                                )
 
-                                    active_genes = torch.std(t_slide, dim=0) > 1e-6
-                                    if active_genes.any():
-                                        valid_corrs = corr[active_genes]
-                                        valid_corrs = valid_corrs[
-                                            torch.isfinite(valid_corrs)
-                                        ]
-                                        if len(valid_corrs) > 0:
-                                            pcc_list.append(valid_corrs.mean().item())
-                        else:
-                            # Patch level (B, G). Correlate across the batch B (which is spatial patches)
-                            vx = eval_preds - eval_preds.mean(dim=0, keepdim=True)
-                            vy = targets - targets.mean(dim=0, keepdim=True)
-                            num = torch.sum(vx * vy, dim=0)
-                            den = torch.sqrt(
-                                torch.sum(vx**2, dim=0) + 1e-8
-                            ) * torch.sqrt(torch.sum(vy**2, dim=0) + 1e-8)
-                            corr = num / den
+                                valid_genes = torch.std(t_slide, dim=0) > 1e-6
+                                if valid_genes.any():
+                                    vc = corr[valid_genes]
+                                    vc = vc[torch.isfinite(vc)]
+                                    if len(vc) > 0:
+                                        pcc_list.append(vc.mean().item())
+                                    vk = ccc_vals[valid_genes]
+                                    vk = vk[torch.isfinite(vk)]
+                                    if len(vk) > 0:
+                                        ccc_list.append(vk.mean().item())
 
-                            active_genes = torch.std(targets, dim=0) > 1e-6
-                            if active_genes.any():
-                                valid_corrs = corr[active_genes]
-                                valid_corrs = valid_corrs[torch.isfinite(valid_corrs)]
-                                if len(valid_corrs) > 0:
-                                    pcc_list.append(valid_corrs.mean().item())
+                                # Per-pathway accumulation (slide-level entries)
+                                valid_idx_genes = torch.where(valid_genes)[0].tolist()
+                                for g in valid_idx_genes:
+                                    c = corr[g].item()
+                                    k = ccc_vals[g].item()
+                                    if np.isfinite(c):
+                                        per_pathway_pcc.setdefault(g, []).append(c)
+                                    if np.isfinite(k):
+                                        per_pathway_ccc.setdefault(g, []).append(k)
+                    else:
+                        pred_mean = eval_preds.mean(dim=0)  # (G,)
+                        tgt_mean = targets.mean(dim=0)  # (G,)
+                        vx = eval_preds - pred_mean
+                        vy = targets - tgt_mean
+                        cov = (vx * vy).sum(dim=0)
+                        var_x = (vx**2).sum(dim=0)
+                        var_y = (vy**2).sum(dim=0)
+
+                        corr = cov / (
+                            torch.sqrt(var_x + 1e-8) * torch.sqrt(var_y + 1e-8)
+                        )
+                        B_size = eval_preds.shape[0]
+                        mean_diff_sq = (pred_mean - tgt_mean) ** 2
+                        ccc_vals = (2 * cov) / (
+                            var_x + var_y + B_size * mean_diff_sq + 1e-8
+                        )
+
+                        valid_genes = torch.std(targets, dim=0) > 1e-6
+                        if valid_genes.any():
+                            vc = corr[valid_genes]
+                            vc = vc[torch.isfinite(vc)]
+                            if len(vc) > 0:
+                                pcc_list.append(vc.mean().item())
+                            vk = ccc_vals[valid_genes]
+                            vk = vk[torch.isfinite(vk)]
+                            if len(vk) > 0:
+                                ccc_list.append(vk.mean().item())
+
+                        # Per-pathway accumulation (one entry per validation pass)
+                        valid_idx_genes = torch.where(valid_genes)[0].tolist()
+                        for g in valid_idx_genes:
+                            c = corr[g].item()
+                            k = ccc_vals[g].item()
+                            if np.isfinite(c):
+                                per_pathway_pcc.setdefault(g, []).append(c)
+                            if np.isfinite(k):
+                                per_pathway_ccc.setdefault(g, []).append(k)
 
                 # Spatial Attention Correlation (MIL weak supervision study)
                 if attn is not None and whole_slide:
@@ -354,6 +385,8 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
 
             running_loss += loss.item()
             running_mae += mae_val.item()
+            running_baseline_mae += baseline_mae_val.item()
+            n_baseline_batches += 1
 
             # Track prediction variance (collapse detector)
             with torch.no_grad():
@@ -387,7 +420,11 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
 
     avg_loss = running_loss / len(loader)
     avg_mae = running_mae / len(loader)
+    avg_baseline_mae = (
+        running_baseline_mae / n_baseline_batches if n_baseline_batches else None
+    )
     avg_pcc = sum(pcc_list) / len(pcc_list) if pcc_list else None
+    avg_ccc = sum(ccc_list) / len(ccc_list) if ccc_list else None
     avg_corr = (
         sum(attn_correlations) / len(attn_correlations) if attn_correlations else None
     )
@@ -399,8 +436,18 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
         else None
     )
 
+    # Collapse per-pathway accumulators to a single number per pathway.
+    pcc_per_pathway = {g: float(np.mean(v)) for g, v in per_pathway_pcc.items()}
+    ccc_per_pathway = {g: float(np.mean(v)) for g, v in per_pathway_ccc.items()}
+
+    corr_line = f"Validation MAE: {avg_mae:.4f}"
+    if avg_baseline_mae is not None:
+        corr_line += f" (baseline {avg_baseline_mae:.4f})"
     if avg_pcc is not None:
-        print(f"Validation MAE: {avg_mae:.4f} | PCC: {avg_pcc:.4f}")
+        corr_line += f" | PCC: {avg_pcc:.4f}"
+    if avg_ccc is not None:
+        corr_line += f" | CCC: {avg_ccc:.4f}"
+    print(corr_line)
     if avg_pred_var is not None:
         print(f"Prediction Variance: {avg_pred_var:.6f}")
     if avg_spatial_coherence is not None:
@@ -408,10 +455,23 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
     if avg_corr is not None:
         print(f"Spatial Attention Correlation: {avg_corr:.4f}")
 
+    # Per-pathway breakdown — top-3 best/worst by CCC, when available.
+    if ccc_per_pathway:
+        ranked = sorted(ccc_per_pathway.items(), key=lambda kv: kv[1])
+        worst = ranked[:3]
+        best = ranked[-3:][::-1]
+        fmt = lambda items: ", ".join(f"p{g}={v:.3f}" for g, v in items)
+        print(f"  best CCC pathways:  {fmt(best)}")
+        print(f"  worst CCC pathways: {fmt(worst)}")
+
     return {
         "val_loss": avg_loss,
         "val_mae": avg_mae,
+        "val_baseline_mae": avg_baseline_mae,
         "val_pcc": avg_pcc,
+        "val_ccc": avg_ccc,
+        "val_pcc_per_pathway": pcc_per_pathway,
+        "val_ccc_per_pathway": ccc_per_pathway,
         "pred_variance": avg_pred_var,
         "spatial_coherence": avg_spatial_coherence,
         "attn_correlation": avg_corr,

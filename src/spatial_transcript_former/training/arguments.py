@@ -40,29 +40,36 @@ def parse_args():
         choices=[
             "mse",
             "pcc",
+            "ccc",
             "mse_pcc",
-            "poisson",
-            "logcosh",
+            "mse_ccc",
+            "mse_ccc_clip",
+            "mse_huber",
         ],
     )
     parser.add_argument(
         "--pcc-weight",
         type=float,
         default=1.0,
-        help="Weight for PCC term in mse_pcc loss",
+        help="Weight for PCC/CCC term in composite losses",
+    )
+    parser.add_argument(
+        "--clip-weight",
+        type=float,
+        default=0.5,
+        help="Weight for CLIP alignment term (mse_ccc_clip only)",
+    )
+    parser.add_argument(
+        "--clip-temp",
+        type=float,
+        default=0.07,
+        help="Temperature τ for CLIP alignment loss",
     )
     parser.add_argument(
         "--pathway-targets-dir",
         type=str,
         default=None,
         help="Directory of pre-computed pathway activity .h5 files",
-    )
-    parser.add_argument(
-        "--morans-pathway-weight",
-        action="store_true",
-        help="Weight MSE loss per-pathway by Moran's I spatial autocorrelation. "
-        "Requires pathway .h5 files to contain pathway_morans_i "
-        "(re-run stf-compute-pathways --overwrite to add them).",
     )
 
     # Model
@@ -124,6 +131,13 @@ def parse_args():
     )
     g.add_argument("--compile", action="store_true")
     g.add_argument("--resume", action="store_true")
+    g.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Name used for checkpoint files and logs (defaults to --model if unset). "
+        "Set automatically by run_preset.py to the preset name.",
+    )
 
     # Advanced
     g = parser.add_argument_group("Advanced")

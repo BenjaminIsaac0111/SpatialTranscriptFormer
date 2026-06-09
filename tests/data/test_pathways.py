@@ -207,6 +207,7 @@ class TestPathwayMoransI:
         import h5py
         from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
             load_pathway_activities,
+            PATHWAY_FILE_VERSION,
         )
 
         n_spots, n_pathways = 50, 5
@@ -222,16 +223,18 @@ class TestPathwayMoransI:
             f.create_dataset("barcodes", data=barcodes_bytes)
             f.create_dataset("pathway_names", data=pw_names)
             f.create_dataset("pathway_morans_i", data=morans_orig)
+            f.attrs["format_version"] = PATHWAY_FILE_VERSION
 
         _, _, _, morans_loaded = load_pathway_activities(h5_path, barcodes_raw)
         assert morans_loaded is not None
         np.testing.assert_array_almost_equal(morans_loaded, morans_orig)
 
     def test_h5_missing_morans_returns_none(self, tmp_path):
-        """Older H5 files without pathway_morans_i should return None."""
+        """A current-version H5 without pathway_morans_i should return None."""
         import h5py
         from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
             load_pathway_activities,
+            PATHWAY_FILE_VERSION,
         )
 
         n_spots, n_pathways = 20, 3
@@ -245,7 +248,129 @@ class TestPathwayMoransI:
             f.create_dataset("activities", data=acts)
             f.create_dataset("barcodes", data=barcodes_bytes)
             f.create_dataset("pathway_names", data=pw_names)
+            f.attrs["format_version"] = PATHWAY_FILE_VERSION
             # No pathway_morans_i dataset
 
         _, _, _, morans_loaded = load_pathway_activities(h5_path, barcodes_raw)
         assert morans_loaded is None
+
+
+# ---------------------------------------------------------------------------
+# Score construction & file format
+# ---------------------------------------------------------------------------
+
+
+class TestPathwayScoring:
+    """Tests for `_score_pathways` semantics and on-disk file versioning."""
+
+    def test_score_is_simple_member_mean(self):
+        """activities[s, p] should equal mean of log1p CP10k expression of pathway p
+        members, computed on the input matrix as-is — no per-gene rescaling."""
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            _score_pathways,
+        )
+
+        # 3 spots, 4 genes
+        expr = np.array(
+            [
+                [1.0, 2.0, 3.0, 0.0],
+                [4.0, 0.0, 1.0, 2.0],
+                [0.0, 5.0, 2.0, 1.0],
+            ],
+            dtype=np.float32,
+        )
+        gene_names = ["A", "B", "C", "D"]
+        # Two pathways. PW1 has 3 members so is scored; PW2 has 1 so is skipped.
+        pathway_dict = {
+            "PW1": ["A", "B", "C"],
+            "PW2": ["D"],
+        }
+
+        activities, names, n_scored = _score_pathways(
+            expr, gene_names, pathway_dict, min_genes=3
+        )
+
+        assert activities.shape == (3, 2)
+        assert names == ["PW1", "PW2"]
+        assert n_scored == 1
+
+        expected_pw1 = expr[:, [0, 1, 2]].mean(axis=1)
+        np.testing.assert_array_almost_equal(activities[:, 0], expected_pw1)
+        # PW2 below min_genes — left at zero
+        np.testing.assert_array_almost_equal(activities[:, 1], np.zeros(3))
+
+    def test_score_is_slide_stationary(self):
+        """Adding a per-slide constant to expression shifts the score by the same
+        constant — so a scoring-only z-score (which would centre this away) is
+        not happening."""
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            _score_pathways,
+        )
+
+        np.random.seed(0)
+        expr = np.random.rand(8, 5).astype(np.float32)
+        gene_names = [f"G{i}" for i in range(5)]
+        pathway_dict = {"PW": ["G0", "G1", "G2"]}
+
+        acts_a, _, _ = _score_pathways(expr, gene_names, pathway_dict, min_genes=3)
+        acts_b, _, _ = _score_pathways(
+            expr + 5.0, gene_names, pathway_dict, min_genes=3
+        )
+
+        # Plain mean → constant-shift propagates exactly. (A z-scored variant
+        # would centre to ~0 for both, breaking this property.)
+        np.testing.assert_array_almost_equal(acts_b[:, 0] - acts_a[:, 0], 5.0)
+
+    def test_load_rejects_missing_version(self, tmp_path):
+        """A file with no format_version attribute must be rejected."""
+        import h5py
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            load_pathway_activities,
+        )
+
+        n_spots, n_pathways = 5, 2
+        h5_path = str(tmp_path / "no_version.h5")
+        with h5py.File(h5_path, "w") as f:
+            f.create_dataset(
+                "activities",
+                data=np.zeros((n_spots, n_pathways), dtype=np.float32),
+            )
+            f.create_dataset(
+                "barcodes",
+                data=np.array([f"S{i}" for i in range(n_spots)], dtype="S"),
+            )
+            f.create_dataset(
+                "pathway_names",
+                data=np.array([f"P{i}" for i in range(n_pathways)], dtype="S"),
+            )
+            # Intentionally omit f.attrs["format_version"]
+
+        with pytest.raises(ValueError, match="format_version"):
+            load_pathway_activities(h5_path, [f"S{i}" for i in range(n_spots)])
+
+    def test_load_rejects_old_version(self, tmp_path):
+        """A file with format_version=1 (old z-scored layout) must be rejected."""
+        import h5py
+        from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+            load_pathway_activities,
+        )
+
+        n_spots, n_pathways = 5, 2
+        h5_path = str(tmp_path / "v1.h5")
+        with h5py.File(h5_path, "w") as f:
+            f.create_dataset(
+                "activities",
+                data=np.zeros((n_spots, n_pathways), dtype=np.float32),
+            )
+            f.create_dataset(
+                "barcodes",
+                data=np.array([f"S{i}" for i in range(n_spots)], dtype="S"),
+            )
+            f.create_dataset(
+                "pathway_names",
+                data=np.array([f"P{i}" for i in range(n_pathways)], dtype="S"),
+            )
+            f.attrs["format_version"] = 1
+
+        with pytest.raises(ValueError, match="format_version"):
+            load_pathway_activities(h5_path, [f"S{i}" for i in range(n_spots)])

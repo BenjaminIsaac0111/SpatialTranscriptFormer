@@ -102,8 +102,14 @@ def save_pretrained(
     """
     os.makedirs(save_dir, exist_ok=True)
 
-    # 1. Config
+    # 1. Config (stamps the pathway-target format version so inference
+    # callers can detect mismatched preprocessing pipelines).
+    from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+        PATHWAY_FILE_VERSION,
+    )
+
     config = _model_config(model)
+    config["pathway_format_version"] = PATHWAY_FILE_VERSION
     with open(os.path.join(save_dir, "config.json"), "w") as f:
         json.dump(config, f, indent=2)
 
@@ -168,6 +174,21 @@ def load_pretrained(
 
     # Don't load pretrained backbone weights — we're loading our own
     config["pretrained"] = False
+
+    # Strip metadata fields that aren't constructor arguments. Validate the
+    # pathway-target format version so old checkpoints don't silently load
+    # against incompatible target semantics.
+    from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+        PATHWAY_FILE_VERSION,
+    )
+
+    saved_pfv = config.pop("pathway_format_version", None)
+    if saved_pfv is not None and int(saved_pfv) != PATHWAY_FILE_VERSION:
+        raise ValueError(
+            f"Checkpoint at {checkpoint_dir!r} was trained against pathway "
+            f"targets of format_version={saved_pfv}, but this build expects "
+            f"{PATHWAY_FILE_VERSION}. Re-train against current targets."
+        )
 
     # 2. Instantiate
     model = SpatialTranscriptFormer(**config)

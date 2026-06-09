@@ -293,7 +293,7 @@ def register_callbacks(app, args):
         )
 
         # Correlation / Errors
-        corr_cols = ["val_pcc", "val_mae"]
+        corr_cols = ["val_pcc", "val_ccc", "val_mae"]
         pcc_fig = go.Figure(data=_make_traces(data_dict, corr_cols, smoothing_window))
         pcc_fig.update_layout(
             title="Validation Metrics",
@@ -392,6 +392,14 @@ def register_callbacks(app, args):
                     create_kpi_card(
                         "Val PCC",
                         f"{last_row['val_pcc']:.4f}",
+                        f"{run_lbl}Epoch {last_epoch}",
+                    )
+                )
+            if "val_ccc" in df.columns:
+                kpi_elements.append(
+                    create_kpi_card(
+                        "Val CCC",
+                        f"{last_row['val_ccc']:.4f}",
                         f"{run_lbl}Epoch {last_epoch}",
                     )
                 )

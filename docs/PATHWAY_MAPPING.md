@@ -16,9 +16,8 @@ For each `.h5ad` file, the following steps are applied in order:
 | :--- | :--- | :--- |
 | **1. QC Filtering** | Remove low-quality spots (min UMIs, min detected genes, max MT%) on **raw counts** | QC before normalisation prevents low-quality spots from distorting library-size estimates |
 | **2. CP10k Normalisation** | Scale each spot to 10,000 total counts, then apply `log1p` | Corrects for sequencing depth differences between spots |
-| **3. Gene Z-Scoring** | Standardise each gene across surviving spots (mean=0, std=1) | Eliminates housekeeping gene dominance; every gene gets equal weight |
-| **4. Pathway Aggregation** | For each pathway: take the mean z-score of its member genes present in the matrix | Produces a single, comparable activity score per pathway per spot |
-| **5. Moran I** | Compute Moran's I for each gene on the raw counts | Computes spatial autocorrelation for each gene |
+| **3. Pathway Aggregation** | For each pathway: take the mean log1p CP10k expression of its member genes present in the matrix | Slide-stationary by construction — no per-slide statistics enter the score, so the same biological state in two slides yields the same target value |
+| **4. Moran I (diagnostic)** | Compute per-pathway Moran's I on the activity matrix | Records spatial autocorrelation alongside the targets; not used in the loss |
 
 Pathways with fewer than `--min-genes` (default: 5) detected members are filled with zeros. Samples with fewer than `--min-pathways` (default: 25) scorable pathways are excluded entirely.
 
@@ -38,10 +37,12 @@ These defaults follow standard scRNA-seq / spatial transcriptomics QC practice t
 Each sample is saved as a compressed HDF5 file at `<data_dir>/pathway_activities/<sample_id>.h5`:
 
 ```text
-activities      float32 (n_spots, n_pathways)   # z-scored pathway activity matrix
-barcodes        bytes   (n_spots,)               # spot barcode strings
-pathway_names   bytes   (n_pathways,)            # pathway name labels
+activities         float32 (n_spots, n_pathways)   # mean log1p CP10k pathway score
+barcodes           bytes   (n_spots,)               # spot barcode strings
+pathway_names      bytes   (n_pathways,)            # pathway name labels
+pathway_morans_i   float32 (n_pathways,)            # per-pathway Moran's I (diagnostic)
 attrs:
+  format_version      int     # on-disk schema version (current: 2)
   n_spots_before_qc   int     # total spots in raw h5ad
   n_spots_after_qc    int     # spots surviving QC
   qc_min_umis         int
@@ -49,6 +50,12 @@ attrs:
   qc_max_mt           float
   n_scored_pathways   int     # pathways meeting the min_genes threshold
 ```
+
+> **Breaking change (v2):** `activities` is now the simple mean of log1p
+> CP10k expression of pathway members — no per-slide z-score. Files written
+> by older builds carry `format_version=1` (or no version attribute) and are
+> rejected at load time. Re-run `stf-compute-pathways --overwrite` to
+> regenerate.
 
 These files are consumed at training time by `HEST_FeatureDataset` when `--pathway-targets-dir` is provided (which defaults to `<data_dir>/pathway_activities`).
 
@@ -100,7 +107,7 @@ The current design eliminates this entirely:
 | Aspect | Old (Auxiliary Loss) | New (Pre-computed Targets) |
 | :--- | :--- | :--- |
 | Target source | Computed in-flight from training labels | Computed once, offline, from raw expression |
-| QC & normalisation | None | Per-spot QC → CP10k → z-score |
+| QC & normalisation | None | Per-spot QC → CP10k → mean pathway aggregation |
 | Model output | Gene expression (via gene reconstructor) | Pathway activity scores directly |
 | Loss objective | `L_gene + λ · (1 - PCC(scores, pseudo-targets))` | `MSE + PCC` against pre-computed activities |
 | Interpretability | Indirect (pathway scores were internal and needed to be mapped back to pathways) | Direct (output *is* the pathway activity) |
