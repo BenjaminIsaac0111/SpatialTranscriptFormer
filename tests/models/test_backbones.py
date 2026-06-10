@@ -64,7 +64,7 @@ def test_trans_mil_backbone():
 
 def test_he2rna_backbone():
     num_pathways = 50
-    model = HE2RNA(num_genes=num_pathways, backbone="resnet50", pretrained=False)
+    model = HE2RNA(num_pathways=num_pathways, backbone="resnet50", pretrained=False)
     x = torch.randn(2, 3, 224, 224)
     out = model(x)
     assert out.shape == (2, num_pathways)
@@ -73,7 +73,7 @@ def test_he2rna_backbone():
 def test_vit_st_backbone():
     num_pathways = 50
     # Use resnet50 name to test fallback if vit_b_16 not available or just use vit_b_16 directly
-    model = ViT_ST(num_genes=num_pathways, model_name="resnet50", pretrained=False)
+    model = ViT_ST(num_pathways=num_pathways, model_name="resnet50", pretrained=False)
     x = torch.randn(2, 3, 224, 224)
     out = model(x)
     assert out.shape == (2, num_pathways)

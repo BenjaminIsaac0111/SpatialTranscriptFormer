@@ -56,7 +56,7 @@ The spatial relationships of gene expression are central to this model. It is no
 
 1. **Positional Encoding** — Each patch token receives a 2D sinusoidal encoding of its (x, y) coordinate on the tissue. This means the pathway tokens, when they attend to patches, can distinguish *where* each patch is. A pathway token can learn that EMT is localised at the tumour-stroma boundary, not uniformly across the slide.
 
-2. **PCC Loss (Spatial Pattern Coherence)** — The Pearson Correlation component in the composite loss measures whether the *spatial pattern* of each gene's predicted expression matches the ground truth pattern, independently of scale. A model that predicts the same value everywhere scores PCC = 0, even if the mean is correct. This directly penalises spatial collapse.
+2. **PCC Loss (Spatial Pattern Coherence)** — The Pearson Correlation component in the composite loss measures whether the *spatial pattern* of each pathway's predicted activity matches the ground truth pattern, independently of scale. A model that predicts the same value everywhere scores PCC = 0, even if the mean is correct. This directly penalises spatial collapse.
 
 Together, these ensure the model learns *spatially-varying* pathway activation maps rather than slide-level averages.
 
@@ -157,8 +157,8 @@ where $\hat{h}_i$ and $\hat{p}_k$ are the L2-normalised patch and pathway tokens
 
 | Mode | Input | Output | Supervision |
 | :--- | :--- | :--- | :--- |
-| **Dense (whole-slide)** | All patches from a slide | Per-patch gene predictions $(B, S, G)$ | Masked MSE+PCC at each spot |
-| **Global** | All patches from a slide | Slide-level prediction $(B, G)$ | Mean-pooled expression |
+| **Dense (whole-slide)** | All patches from a slide | Per-patch pathway predictions $(B, S, P)$ | Masked MSE+PCC at each spot |
+| **Global** | All patches from a slide | Slide-level pathway prediction $(B, P)$ | Mean-pooled pathway activities |
 
 ---
 

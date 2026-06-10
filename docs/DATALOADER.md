@@ -1,59 +1,64 @@
 # HEST Dataloader Documentation
 
-The `SpatialTranscriptFormer` uses a custom PyTorch dataloader designed for memory-efficient loading of large-scale spatial transcriptomics datasets.
+The `SpatialTranscriptFormer` uses custom PyTorch dataloaders designed for memory-efficient loading of large-scale spatial transcriptomics datasets. The framework supports two loading paths: loading raw histology patches or loading pre-extracted feature vectors.
 
 ## Core Implementation Details
 
-The implementation is located in `src/spatial_transcript_former/data/dataset.py`.
+The implementation is located in [dataset.py](../src/spatial_transcript_former/recipes/hest/dataset.py).
 
-### 1. `HEST_Dataset` Class
+### 1. Raw-Patch Loading Path
 
-This class implements the standard `torch.utils.data.Dataset` interface.
+This path is used when training or evaluating directly on pixel-space images.
 
-- **Lazy Loading**: To avoid overwhelming memory, it uses lazy loading for H5 file handles. File objects are initialized only when the first item is requested (typically within a worker process).
-- **Indexing**: It supports an optional `indices` map, which allows it to represent a subset of the original data (e.g., after filtering for valid ST spots) without duplicating arrays in memory.
-- **Transformation**: Images are permuted from `(H, W, C)` to `(C, H, W)` and normalized to `[0, 1]`.
+*   **`HEST_Dataset` Class**: Loads raw histology patches from a HEST `.h5` file. It supports:
+    *   **Lazy File Access**: File handles are created lazily inside each worker process to avoid pickling issues during multiprocessing.
+    *   **Neighbourhood Context**: Can retrieve a patch along with its $K$ nearest neighbours.
+    *   **Dihedral Augmentation**: Randomly rotates or flips patch pixels and coordinates in sync.
+*   **`get_hest_dataloader`**: High-level orchestrator that creates a `DataLoader` over raw patches for a list of sample IDs, combining individual datasets using `ConcatDataset`.
+*   **Returned Tuples**: Yields `(patches, None, rel_coords)` where the second element (formerly gene expression counts) is `None`.
 
-### 2. `load_gene_expression_matrix`
+### 2. Pre-Computed Feature Loading Path
 
-This utility function handles the complex process of aligning image patches to gene expression data.
+This is the default path used by the SpatialTranscriptFormer training pipeline (`--precomputed`), as it avoids repeated backbone inference.
 
-- **Barcode Alignment**: Since not every image patch in an `.h5` file necessarily has a corresponding transcriptomic profile in the `.h5ad` file, the function performs a lookup using the spot barcodes.
-- **Gene Selection**: It can either:
-  1. Select the top `N` most expressed genes from a single sample.
-  2. Align the current sample to a predefined list of global gene names (filling missing genes with zeros).
-- **Sparse Support**: It handles both dense and sparse (CSR) matrix formats in the `.h5ad` file.
+*   **`HEST_FeatureDataset` Class**: Loads pre-extracted feature vectors (e.g. CTransPath, Phikon) from `.pt` files and aligns them to pre-computed pathway activity targets from `.h5` files.
+    *   **Spot barcode alignment**: Filters features to keep only spots that passed quality control (QC) in the corresponding `.h5ad` file.
+    *   **Stationary Coordinate Normalisation**: Normalises coordinates relative to the slide's centroid and standard deviation so coordinates are invariant to batching.
+    *   **Patch Mode**: Returns a single spot feature vector, its local neighbourhood features (optionally with random dropout augmentation), pre-computed pathway targets, and relative coordinates.
+    *   **Whole-Slide Mode**: Returns all spots on the slide as a single sequence.
+*   **`get_hest_feature_dataloader`**: Builds a `DataLoader` over the feature datasets.
+    *   In **patch mode**, yields standard batched tensors `(feats, None, pathway_acts, coords)`.
+    *   In **whole-slide mode**, pads variable-length slides to the longest slide in the batch and appends a boolean padding mask. Yields `(padded_feats, None, padded_pathways, padded_coords, mask)`.
 
-### 3. `get_hest_dataloader`
+---
 
-The high-level orchestrator that creates a unified dataloader for multiple samples.
-
-- **Sample Concatenation**: It iterates through multiple sample IDs and creates individual `HEST_Dataset` instances, which are then combined using `torch.utils.data.ConcatDataset`.
-- **Global Gene Lock**: The first sample found "locks" the gene list (usually the top 1000 genes). Every subsequent sample in the loop is then aligned to this specific set of genes to ensure consistent input dimensions for the model.
-
-## Usage Example
+## Usage Example (Pre-Computed Features)
 
 ```python
-from spatial_transcript_former.data import get_hest_dataloader
+from spatial_transcript_former.recipes.hest.dataset import get_hest_feature_dataloader
 
-# IDs from your metadata split
+# Pre-selected training sample IDs
 train_ids = ['MEND29', 'TENX156', ...]
 
-dataloader = get_hest_dataloader(
-    root_dir="A:/hest_data",
+dataloader = get_hest_feature_dataloader(
+    root_dir="./hest_data",
     ids=train_ids,
     batch_size=32,
     shuffle=True,
     num_workers=4,
-    num_genes=1000
+    n_neighbors=6,
+    pathway_targets_dir="./hest_data/pathway_activities"
 )
 
-for patches, gene_counts in dataloader:
-    # patches shape: (BS, 3, 224, 224)
-    # gene_counts shape: (BS, 1000)
+for feats, _, pathway_acts, rel_coords in dataloader:
+    # feats shape: (BS, 1 + n_neighbors, feature_dim)
+    # pathway_acts shape: (BS, num_pathways)
+    # rel_coords shape: (BS, 1 + n_neighbors, 2)
     ...
 ```
 
-## Stratified Splitting
+---
 
-For robust evaluation, we use `split_hest_patients` in `src/spatial_transcript_former/data/splitting.py`. This ensures that all samples from a single patient go into the same split (Train/Val/Test), preventing data leakage due to biological similarities between slides from the same donor.
+## Patient-Aware Stratified Splitting
+
+To prevent data leakage due to biological similarities between multiple slides from the same donor, splits are stratified by patient. The splitting logic is located in [splitting.py](../src/spatial_transcript_former/recipes/hest/splitting.py) and exposed via the `stf-split` command.

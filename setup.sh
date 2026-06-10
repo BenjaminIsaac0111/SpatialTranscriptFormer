@@ -65,6 +65,6 @@ fi
 echo "You can then use the following commands:"
 echo "  stf-download --help"
 echo "  stf-split --help"
-echo "  stf-build-vocab --help"
+echo "  stf-compute-pathways --help"
 echo ""
 echo "To run tests, use: ./test.sh"

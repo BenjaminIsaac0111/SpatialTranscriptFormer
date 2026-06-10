@@ -1,15 +1,17 @@
 """
-Spatial statistics utilities for gene selection.
+Spatial statistics utilities for spatial transcriptomics.
 
 Provides lightweight, dependency-free Moran's I computation for
-identifying spatially variable genes (SVGs) from spatial
-transcriptomics data.
+evaluating spatial autocorrelation of genes and biological pathways.
 
-Moran's I measures spatial autocorrelation: whether nearby spots tend
-to have similar (positive I) or dissimilar (negative I) expression
-for a given gene. Genes with high Moran's I show distinct spatial
-patterns and are the strongest learning targets for
-SpatialTranscriptFormer.
+Historically, Moran's I was used to rank and select Spatially Variable
+Genes (SVGs) for reconstruction. In the strictly pathway-exclusive
+architecture, Moran's I serves two critical roles:
+1. As a pre-computed diagnostic to analyze spatial signatures and curate
+   pathway lists (ensuring targets are above background noise floors).
+2. As a dynamic validation metric (via ``spatial_coherence_score``)
+   that compares predicted vs. ground-truth spatial patterns, acting
+   as an effective detector for spot-level representation collapse.
 """
 
 import numpy as np
@@ -50,7 +52,7 @@ def _build_knn_weights(coords: np.ndarray, k: int = 6) -> csr_matrix:
 
 
 def morans_i(x: np.ndarray, W: csr_matrix) -> float:
-    """Compute Moran's I for a single variable.
+    """Compute Moran's I for a single variable (e.g. pathway activity or gene expression).
 
     .. math::
 
@@ -59,7 +61,7 @@ def morans_i(x: np.ndarray, W: csr_matrix) -> float:
                   {\\sum_i (x_i - \\bar{x})^2}
 
     Args:
-        x: (N,) array of values (e.g. gene expression per spot).
+        x: (N,) array of values (e.g. pathway activity score per spot).
         W: (N, N) sparse spatial weight matrix.
 
     Returns:
@@ -126,20 +128,20 @@ def spatial_coherence_score(
     """Compare spatial structure of predictions vs ground truth.
 
     Computes Moran's I for both the predicted and ground-truth
-    expression matrices, then returns the Pearson correlation between
-    the two Moran's I vectors. A score near 1.0 means the model
+    matrices (genes or pathways), then returns the Pearson correlation
+    between the two Moran's I vectors. A score near 1.0 means the model
     reproduces the correct spatial patterns; near 0 means random.
 
     To keep computation fast (this runs every validation epoch), only
-    the ``top_k_genes`` with highest ground-truth spatial variability
-    are evaluated.
+    the ``top_k_genes`` (or pathways) with highest ground-truth
+    spatial variability are evaluated.
 
     Args:
-        predicted: (N, G) predicted expression matrix.
-        ground_truth: (N, G) ground-truth expression matrix.
+        predicted: (N, G) predicted expression or pathway activity matrix.
+        ground_truth: (N, G) ground-truth expression or pathway activity matrix.
         coords: (N, 2) spatial coordinates.
         k: KNN neighbours for the spatial weight graph.
-        top_k_genes: Number of top-Moran's-I genes to evaluate.
+        top_k_genes: Number of top-Moran's-I features to evaluate.
 
     Returns:
         Pearson correlation between predicted and ground-truth

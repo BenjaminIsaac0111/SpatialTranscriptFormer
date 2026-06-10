@@ -10,7 +10,7 @@ Example::
     from spatial_transcript_former.training import Trainer
     from spatial_transcript_former.training.losses import CompositeLoss
 
-    model = SpatialTranscriptFormer(num_genes=460, backbone_name="phikon", ...)
+    model = SpatialTranscriptFormer(num_pathways=50, backbone_name="phikon", ...)
     trainer = Trainer(
         model=model,
         train_loader=train_dl,
@@ -19,7 +19,7 @@ Example::
         epochs=100,
     )
     results = trainer.fit()
-    trainer.save_pretrained("./release/v1/", gene_names=my_genes)
+    trainer.save_pretrained("./release/v1/", pathway_names=my_pathways)
 """
 
 import math
@@ -380,7 +380,7 @@ class Trainer:
     # ------------------------------------------------------------------
 
     def save_pretrained(
-        self, path: str, gene_names: Optional[List[str]] = None
+        self, path: str, pathway_names: Optional[List[str]] = None
     ) -> None:
         """Export an inference-ready checkpoint (strips optimizer state).
 
@@ -390,4 +390,4 @@ class Trainer:
             save_pretrained as _save_pretrained,
         )
 
-        _save_pretrained(self.model, path, gene_names=gene_names)
+        _save_pretrained(self.model, path, pathway_names=pathway_names)

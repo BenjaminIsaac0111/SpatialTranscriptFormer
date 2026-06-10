@@ -7,7 +7,7 @@ This workflow enables training the Spatial TranscriptFormer using pre-computed f
 Run the extraction script to process H&E patches and save feature tensors to `he_features/`.
 
 ```powershell
-python src/spatial_transcript_former/data/extract_features.py --data-dir A:\hest_data --backbone resnet50 --batch-size 32
+stf-extract --data-dir hest_data --backbone resnet50 --batch-size 32
 ```
 
 **Arguments:**
@@ -22,7 +22,7 @@ python src/spatial_transcript_former/data/extract_features.py --data-dir A:\hest
 Train the model using the `--precomputed` flag. The script will automatically filter for samples that have existing feature files.
 
 ```powershell
-python src/spatial_transcript_former/train.py --data-dir A:\hest_data --model interaction --precomputed --epochs 50 --batch-size 32 --n-neighbors 6
+stf-train --data-dir hest_data --model interaction --precomputed --epochs 50 --batch-size 32 --n-neighbors 6
 ```
 
 **Key Arguments:**
@@ -36,7 +36,7 @@ python src/spatial_transcript_former/train.py --data-dir A:\hest_data --model in
 To model long-range interactions (similar to Jaume et al.), use the `--use-global-context` flag. This will mix randomly sampled patches from the entire slide into the context window for each training sample.
 
 ```powershell
-python src/spatial_transcript_former/train.py --data-dir A:\hest_data --model interaction --precomputed --use-global-context --global-context-size 256
+stf-train --data-dir hest_data --model interaction --precomputed --use-global-context --global-context-size 256
 ```
 
 - `--use-global-context`: Enables mixing of global patches.
@@ -47,7 +47,7 @@ python src/spatial_transcript_former/train.py --data-dir A:\hest_data --model in
 To use **only global context** (and the center patch), simply set neighbors to 0:
 
 ```powershell
-python src/spatial_transcript_former/train.py --data-dir A:\hest_data --model interaction --precomputed --use-global-context --global-context-size 256 --n-neighbors 0
+stf-train --data-dir hest_data --model interaction --precomputed --use-global-context --global-context-size 256 --n-neighbors 0
 ```
 
 This will construct a sequence of `[Center Patch] + [256 Random Global Patches]`.

@@ -9,27 +9,13 @@ Best-practices alignment and literature-driven improvement leads for SpatialTran
 
 These areas already follow industry best practices:
 
-- **Global Gene Vocabulary** — `build_vocab.py` enforces a consistent feature space
-  across all samples, preventing feature mismatch at training and inference time.
-- **SVG-aware Gene Selection** — Moran's I scoring is implemented in
-  `data/spatial_stats.py` and exposed via `stf-build-vocab --svg-weight`. Genes with
-  high spatial autocorrelation are the strongest learning targets for a spatially-aware
-  model.
-- **Spatial Coherence Validation** — `spatial_coherence_score()` compares predicted
-  vs. ground-truth Moran's I for the top-50 SVGs, logging a Pearson correlation as a
-  validation metric alongside MSE/PCC. Computed automatically in `training/engine.py`.
-- **Spatial Context via Neighbourhoods** — KD-tree-based neighbour aggregation in
-  `HEST_FeatureDataset` provides local spatial context to patch features.
-- **Coordinate Standardisation** — `normalize_coordinates()` prevents spatial scale
-  bias between slides from different platforms (Visium, Visium HD, etc.).
-- **Pathway-Aware Feature Selection** — MSigDB pathway gene prioritisation in the
-  vocabulary builder ensures biologically relevant signal even with a limited gene
-  budget.
-- **Statistical Loss Modelling** — `ZINBLoss` accounts for the overdispersion and
-  sparsity inherent in raw count data.
-- **Histology-Gene Integration** — The quad-flow architecture follows recommended
-  multi-modal integration patterns; pathway tokens act as a structured biological
-  bottleneck analogous to the Perceiver cross-attention design.
+- **Global Pathway Targets** — Pre-computed using a standardized offline script (`stf-compute-pathways`) and stored as slide-stationary matrices, eliminating gene-to-pathway conversion latency during training.
+- **Spatially Variable Pathway Targets** — Ground-truth targets represent curated MSigDB Hallmark pathway activity scores, which exhibit much higher spatial coherence than noisy individual gene expression values.
+- **Spatial Coherence Validation** — Diagnostic Moran's I is computed for each pathway across slide spots to confirm predicted patterns retain biological spatial autocorrelation.
+- **Spatial Context via Neighbourhoods** — KD-tree-based neighbour aggregation in `HEST_FeatureDataset` provides local spatial context to patch features.
+- **Coordinate Standardisation** — `normalize_coordinates()` prevents spatial scale bias between slides from different platforms (Visium, Visium HD, etc.).
+- **Direct Pathway Supervision** — Decoupled pathway target supervision eliminates circular auxiliary losses and noise from high-dimensional gene reconstruction.
+- **Histology-Pathway Integration** — The quad-flow architecture follows recommended multi-modal integration patterns; pathway tokens act as a structured biological bottleneck analogous to the Perceiver cross-attention design.
 
 ---
 
@@ -153,60 +139,30 @@ Status key: ✅ Implemented | 🔧 Open | 💡 Research lead
 
 ### Vocabulary & Preprocessing
 
-**1. Mitochondrial gene filtering** 🔧 — High priority, low effort
+**1. Mitochondrial gene filtering** ✅ — Completed
 
-`global_genes_stats.csv` shows MT-CO3 and MT-CO2 in the top-20 most expressed genes.
-Mitochondrial genes (`MT-*`) reflect cell health and apoptotic state, not spatial
-morphological patterns, and are universally filtered in standard ST preprocessing.
-Their presence inflates expression-rank scores for non-informative targets.
+Mitochondrial genes (`MT-*`) reflect cell health and apoptotic state, not spatial morphological patterns. Standard spot-level QC filters out mitochondrial reads.
+*Implementation*: The `stf-compute-pathways` pipeline filters out mitochondrial reads based on a configurable max MT fraction (`--qc-max-mt`, default: 0.15) during target pre-computation.
 
-*Fix*: Exclude genes matching the `MT-` prefix before ranking in `build_vocab.py`.
+**2. SVG-weighted vocab rebuild** 🚫 — Superseded
 
-**2. SVG-weighted vocab rebuild** 🔧 — High priority, low effort
+Superseded by the transition to a pathway-exclusive prediction paradigm, removing gene-level vocabulary alignment entirely.
 
-The current `global_genes.json` was built with expression-only ranking — the
-`global_genes_stats.csv` has no `morans_i` column, confirming `--svg-weight=0.0` was
-used. SVG selection is now validated standard practice (SpatialDE, SPARK, NNSVG are
-catalogued as de facto tools in the guidebook).
+**3. Vectorise `morans_i` calculations** 🚫 — N/A
 
-*Fix*: Re-run `stf-build-vocab --svg-weight 0.5 --svg-k 6` after applying the
-MT-gene filter above.
+Computing spatial autocorrelation over 50 pathway activities is computationally negligible, eliminating the need to vectorise high-dimensional gene-level Moran's I loops.
 
-**3. Vectorise `morans_i_batch`** 🔧 — Medium priority, low effort
+**4. Dispersion-based (HVG) gene filtering** 🚫 — Superseded
 
-`spatial_stats.py:morans_i_batch` loops over G genes with individual Python calls.
-For 38,839 genes across many samples this is the bottleneck for SVG-weighted runs.
-One sparse matrix multiply replaces the loop:
+Superseded by the transition to a pathway-exclusive prediction paradigm.
 
-```python
-z   = expression - expression.mean(axis=0)   # (N, G)
-lag = W.dot(z)                                # (N, G)
-num = (z * lag).sum(axis=0)                   # (G,)
-den = (z**2).sum(axis=0)                      # (G,)
-scores = np.where(den > 1e-12, (n / W_sum) * num / den, 0.0)
-```
+**5. Standardised library-size normalisation** ✅ — Completed
 
-**4. Dispersion-based (HVG) gene filtering** 🔧 — Medium priority, medium effort
+Spots are normalised to 10,000 counts (CP10k) before applying `log1p` during the offline pre-computation step.
 
-Beyond total counts and spatial variability, filtering for **Highly Variable Genes**
-using dispersion metrics (as in `sc.pp.highly_variable_genes`) focuses the model on
-genes that carry biological variation between tissue states rather than static
-structural signal. This is complementary to Moran's I: HVG captures across-sample
-variation while Moran's I captures within-sample spatial structure.
+**6. Per-spot quality control** ✅ — Completed
 
-**5. Standardised library-size normalisation** 🔧 — Medium-High priority, medium effort
-
-The pipeline currently lacks a standardised CPM/CP10k normalisation step before
-`log1p`. Without it, sequencing depth variation between spots biases predictions
-toward highly-sequenced spots. Standard: normalise to 10,000 counts per spot, then
-`log1p`.
-
-**6. Per-spot quality control** 🔧 — Medium priority, medium effort
-
-Explicit QC thresholds (minimum UMI count, minimum detected genes, maximum
-mitochondrial fraction) in the dataset loading scripts would protect the model from
-training on low-quality "noise" spots. The mitochondrial fraction threshold directly
-complements the MT-gene vocabulary filter above.
+Explicit QC thresholds (minimum UMI count, minimum detected genes, maximum mitochondrial fraction) are enforced at target pre-computation time via `stf-compute-pathways`.
 
 ---
 
@@ -335,20 +291,20 @@ would suffice.
 
 | # | Direction | Priority | Effort | Status |
 |---|-----------|----------|--------|--------|
-| 1 | MT-gene filter in `build_vocab.py` | High | Low | 🔧 Open |
-| 2 | Rebuild vocab with `--svg-weight 0.5` | High | Low | 🔧 Open |
-| 3 | Vectorise `morans_i_batch` | Medium | Low | 🔧 Open |
-| 4 | HVG dispersion-based gene filtering | Medium | Medium | 🔧 Open |
-| 5 | Library-size normalisation (CP10k) | Medium-High | Medium | 🔧 Open |
-| 6 | Per-spot QC thresholds | Medium | Medium | 🔧 Open |
+| 1 | MT-gene filter in `stf-compute-pathways` | High | Low | ✅ Implemented |
+| 2 | Rebuild vocab (Superseded by pathway targets) | High | Low | 🚫 Superseded |
+| 3 | Vectorise `morans_i` calculations | Medium | Low | 🚫 N/A (Low Dim) |
+| 4 | HVG dispersion-based gene filtering | Medium | Medium | 🚫 Superseded |
+| 5 | Library-size normalisation (CP10k) | Medium-High | Medium | ✅ Implemented |
+| 6 | Per-spot QC thresholds | Medium | Medium | ✅ Implemented |
 | 7 | Pre-compute pathway targets (decoupleR + PROGENy) | High | Medium | 💡 Lead |
-| 8 | Moran's I weighted gene loss | High | Low | 🔧 Open |
+| 8 | Moran's I weighted gene loss | High | Low | 🚫 Superseded |
 | 9 | PROGENy pathway token initialisation | High | Medium | 💡 Lead |
 | 10 | Cell–cell interaction tokens (LIANA+) | Low | High | 💡 Lead |
 | 11 | Cell-type deconvolution secondary head | Medium | High | 💡 Lead |
 | 12 | Nat. Comms. 2025 benchmark evaluation | High | Medium | 🔧 Open |
 | 13 | Scale to Visium HD / Xenium | Low | High | 💡 Lead |
-| 14 | Preprocessing data contract doc | Low | Low | 🔧 Open |
+| 14 | Preprocessing data contract doc | Low | Low | ✅ Implemented |
 
 ---
 
