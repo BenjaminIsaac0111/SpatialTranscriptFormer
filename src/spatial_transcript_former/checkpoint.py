@@ -4,7 +4,7 @@ Public-facing checkpoint serialization for SpatialTranscriptFormer.
 Saves and loads a self-contained checkpoint directory containing:
     - config.json    — architecture hyper-parameters
     - model.pth      — model weights (state_dict)
-    - pathway_names.json — ordered list of gene symbols (optional)
+    - pathway_names.json — ordered list of pathway names (optional)
 """
 
 import json
@@ -98,7 +98,7 @@ def save_pretrained(
         model: A :class:`SpatialTranscriptFormer` instance.
         save_dir: Directory to write files into (created if needed).
         pathway_names: Optional ordered list of pathway names matching the
-            model's ``num_genes`` output dimension.
+            model's ``num_pathways`` output dimension.
     """
     os.makedirs(save_dir, exist_ok=True)
 
@@ -148,7 +148,7 @@ def load_pretrained(
 
     Returns:
         SpatialTranscriptFormer: The loaded model in eval mode with
-            ``gene_names`` attribute set (or ``None``).
+            ``pathway_names`` attribute set (or ``None``).
     """
     from spatial_transcript_former.models.interaction import (
         SpatialTranscriptFormer,

@@ -241,7 +241,6 @@ def get_hest_dataloader(
         shuffle (bool): Whether to shuffle at each epoch.
         num_workers (int): DataLoader worker processes.
         transform (callable, optional): Transform applied to each patch tensor.
-        num_genes (int): Number of genes per sample.
         n_neighbors (int): Number of spatial neighbours to include per patch.
             ``0`` disables neighbourhood mode.
         augment (bool): Whether to apply dihedral augmentations.
@@ -362,9 +361,6 @@ class HEST_FeatureDataset(SpatialDataset):
     Args:
         feature_path (str): Path to the ``.pt`` feature file.
         h5ad_path (str): Path to the corresponding ``.h5ad`` expression file.
-        num_genes (int): Number of genes expected in targets.
-        selected_gene_names (List[str], optional): Gene names to align targets
-            to.  ``None`` uses discovery mode on the first loaded sample.
         n_neighbors (int): Spatial neighbours to include per patch.
         use_global_context (bool): Whether to append randomly sampled
             slide-level context patches to each neighbourhood sequence.

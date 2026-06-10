@@ -73,6 +73,6 @@ if ($HFNeedLogin) {
 Write-Host "You can then use the following commands:"
 Write-Host "  stf-download --help"
 Write-Host "  stf-split --help"
-Write-Host "  stf-build-vocab --help"
+Write-Host "  stf-compute-pathways --help"
 Write-Host ""
 Write-Host "To run tests, use: .\test.ps1"

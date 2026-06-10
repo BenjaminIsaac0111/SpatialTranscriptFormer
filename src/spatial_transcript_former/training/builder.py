@@ -27,13 +27,13 @@ def setup_model(args, device):
 
     if args.model == "he2rna":
         model = HE2RNA(
-            num_genes=args.num_pathways,
+            num_pathways=args.num_pathways,
             backbone=args.backbone,
             pretrained=args.pretrained,
         )
     elif args.model == "vit_st":
         model = ViT_ST(
-            num_genes=args.num_pathways,
+            num_pathways=args.num_pathways,
             model_name=args.backbone if "vit_" in args.backbone else "vit_b_16",
             pretrained=args.pretrained,
         )

@@ -29,7 +29,7 @@ Tests are organized under `tests/` in subdirectories that reflect the source pac
 
 | Directory | Test Files | Coverage Area |
 | :--- | :--- | :--- |
-| `tests/data/` | `test_data_integrity.py`, `test_pathways.py`, `test_augmentation.py`, `test_visualization.py` | Gene vocabulary, pathway scoring, data augmentation, visualization utilities |
+| `tests/data/` | `test_data_integrity.py`, `test_pathways.py`, `test_augmentation.py`, `test_visualization.py` | Coordinate alignment, pathway scoring, data augmentation, visualization utilities |
 | `tests/models/` | `test_backbones.py`, `test_interactions.py`, `test_compilation.py` | Backbone loading, interaction model logic, `torch.compile` compatibility |
 | `tests/training/` | `test_losses.py`, `test_trainer.py`, `test_checkpoints.py`, `test_config.py` | Loss functions (MSE, PCC, composite), training loop, checkpoint serialization |
 | `tests/recipes/hest/` | HEST-specific dataset loading and split logic | HEST dataset and splitting |
@@ -43,7 +43,7 @@ Tests for the offline pathway activity computation pipeline (`compute_pathway_ac
 
 - Per-spot QC filtering (min UMIs, min genes, max MT%)
 - CP10k normalisation correctness
-- Z-scoring and mean pathway aggregation
+- CP10k scaling and mean pathway aggregation
 - Moran I calculation
 - `.h5` output format and barcode alignment
 

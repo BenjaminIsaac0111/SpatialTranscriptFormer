@@ -13,7 +13,7 @@ conda activate SpatialTranscriptFormer
 
 ### Pre-Compute Pathway Activity Targets
 
-Before any training run, you must pre-compute the pathway activity targets from raw expression data. This step applies per-spot QC, CP10k normalisation, and z-scoring.
+Before any training run, you must pre-compute the pathway activity targets from raw expression data. This step applies per-spot QC, CP10k normalisation, and mean pathway aggregation.
 
 ```bash
 stf-compute-pathways --data-dir hest_data
@@ -25,7 +25,7 @@ This will produce `.h5` files in `hest_data/pathway_activities/` which are consu
 
 ## 1. Single Patch Regression (Baselines)
 
-Predicts gene expression for a single 224x224 patch. No cross attention interactions between patches or pathways.
+Predicts pathway activity for a single 224x224 patch. No cross attention interactions between patches or pathways.
 
 ### HE2RNA (ResNet50)
 
@@ -57,7 +57,7 @@ python -m spatial_transcript_former.train \
 
 ## 2. Whole-Slide MIL (Multiple Instance Learning)
 
-Aggregates all patches from a slide to predict the average expression. Recommended to use **precomputed features** from the `stf-compute-features` CLI tool for speed. Foundation models like ctranspath can be used as backbones.
+Aggregates all patches from a slide to predict the average pathway activities. Recommended to use **precomputed features** from the `stf-compute-features` CLI tool for speed. Foundation models like ctranspath can be used as backbones.
 
 ### Attention MIL (Weak Supervision)
 

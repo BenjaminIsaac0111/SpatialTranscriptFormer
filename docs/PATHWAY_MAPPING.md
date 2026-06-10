@@ -59,6 +59,14 @@ attrs:
 
 These files are consumed at training time by `HEST_FeatureDataset` when `--pathway-targets-dir` is provided (which defaults to `<data_dir>/pathway_activities`).
 
+### The Role of Moran's I in the Project
+
+Historically, Moran's I was introduced to rank and select Spatially Variable Genes (SVGs) when the model was trained on high-dimensional gene expression reconstruction. With the transition to the strictly pathway-exclusive architecture, its role has shifted:
+
+- **Why it is NOT used in the Loss**: Down-weighting pathways with low Moran's I during training was dropped because it is counterproductive. Crucial cancer pathways (e.g., Wnt/β-catenin) can exhibit low spatial autocorrelation across spots due to constitutive activation (from driver mutations like APC), yet remain key targets that the model must predict.
+- **Why it is kept as a Diagnostic**: The pre-computed `pathway_morans_i` dataset in the `.h5` files acts as a slide-level spatial signature. It is used to curate disease-specific pathway sets (ensuring targets are above a background noise floor of ~0.15) and for offline biological analysis.
+- **Role in validation (Collapse Detection)**: During validation, the training engine dynamically computes the Pearson correlation of predicted vs. ground-truth Moran's I vectors across the pathways. If the model suffers from spot-level representation collapse (predicting identical mean values everywhere), the predicted Moran's I drops to 0, which immediately registers as a drop in the validation `spatial_coherence` score.
+
 ### Usage
 
 ```bash
