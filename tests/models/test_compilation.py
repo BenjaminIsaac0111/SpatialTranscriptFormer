@@ -33,6 +33,8 @@ def test_generic_function_compilation():
     except RuntimeError as e:
         if "not supported on Python 3.14" in str(e):
             pytest.skip(f"torch.compile not yet supported on this Python version: {e}")
+        if "Triton" in type(e).__name__ or "triton" in str(e):
+            pytest.skip(f"torch.compile not supported because Triton is missing: {e}")
         raise e
 
     # Execute
@@ -71,6 +73,8 @@ def test_model_compilation_sanity():
     except RuntimeError as e:
         if "not supported on Python 3.14" in str(e):
             pytest.skip(f"torch.compile not supported on Python 3.14: {e}")
+        if "Triton" in type(e).__name__ or "triton" in str(e):
+            pytest.skip(f"torch.compile not supported because Triton is missing: {e}")
         pytest.fail(
             f"SpatialTranscriptFormer compilation failed with RuntimeError: {e}"
         )
