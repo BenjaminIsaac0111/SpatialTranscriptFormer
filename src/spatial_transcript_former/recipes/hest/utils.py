@@ -286,6 +286,8 @@ def setup_dataloaders(args, train_ids, val_ids):
                 n_neighbors=args.n_neighbors,
                 transform=train_transform,
                 augment=args.augment,
+                pathway_targets_dir=getattr(args, "pathway_targets_dir", None),
+                pathway_names=getattr(args, "pathways", None),
             )
             if train_ids
             else None
@@ -299,6 +301,8 @@ def setup_dataloaders(args, train_ids, val_ids):
                 num_workers=args.num_workers,
                 n_neighbors=args.n_neighbors,
                 transform=val_transform,
+                pathway_targets_dir=getattr(args, "pathway_targets_dir", None),
+                pathway_names=getattr(args, "pathways", None),
             )
             if val_ids
             else None

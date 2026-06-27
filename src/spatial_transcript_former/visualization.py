@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import h5py
 from spatial_transcript_former.recipes.hest.utils import setup_dataloaders
+from spatial_transcript_former.models import SpatialTranscriptFormer
 
 
 def _load_histology(h5ad_path):
@@ -105,7 +106,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                 image_features, _, target, coords = batch
                 image_features = image_features.to(device)
                 coords = coords.to(device)
-                mask = torch.ones(target.shape[0], target.shape[1], device=device)
+                mask = torch.ones(target.shape[0], device=device)
                 target = target.to(device)
 
             # Forward pass
@@ -117,7 +118,10 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                     return_dense=True,
                 )
             else:
-                outputs = model(image_features, rel_coords=coords)
+                if isinstance(model, SpatialTranscriptFormer):
+                    outputs = model(image_features, rel_coords=coords)
+                else:
+                    outputs = model(image_features)
 
             preds_list.append(outputs.cpu())
             targets_list.append(target.cpu())
@@ -134,15 +138,20 @@ def run_inference_plot(model, args, sample_id, epoch, device):
     all_masks = torch.cat(masks_list, dim=1 if args.whole_slide else 0)
 
     # Squeeze batch dim for processing
-    pathway_preds = all_preds.numpy()[0]
-    pathway_truth = all_targets.numpy()[0]
-    coords = all_coords.numpy()[0]
-    mask = all_masks.numpy()[0]
-
-    # 3. Filter Valid Spots
     if args.whole_slide:
+        pathway_preds = all_preds.numpy()[0]
+        pathway_truth = all_targets.numpy()[0]
+        coords = all_coords.numpy()[0]
+        mask = all_masks.numpy()[0]
         valid_idx = ~mask.astype(bool)
     else:
+        pathway_preds = all_preds.numpy()
+        pathway_truth = all_targets.numpy()
+        if all_coords.ndim == 3:
+            coords = all_coords.squeeze(1).numpy()
+        else:
+            coords = all_coords.numpy()
+        mask = all_masks.numpy()
         valid_idx = mask.astype(bool)
 
     coords = coords[valid_idx]

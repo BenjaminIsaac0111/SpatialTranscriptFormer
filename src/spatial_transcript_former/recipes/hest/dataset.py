@@ -94,6 +94,7 @@ class HEST_Dataset(SpatialDataset):
         neighborhood_indices: Optional[np.ndarray] = None,
         coords_all: Optional[np.ndarray] = None,
         augment: bool = False,
+        pathway_activities: Optional[torch.Tensor] = None,
     ):
         self.h5_path = h5_path
         self.transform = transform
@@ -102,6 +103,7 @@ class HEST_Dataset(SpatialDataset):
         self.neighborhood_indices = neighborhood_indices
         self.coords_all = coords_all
         self.augment = augment
+        self.pathway_activities = pathway_activities
 
         # Opened lazily inside each DataLoader worker (see __getitem__).
         self.h5_file = None
@@ -161,7 +163,12 @@ class HEST_Dataset(SpatialDataset):
             rel_coords = torch.zeros((1, 2))
 
         # gene_counts removed (pathway-only)
-        return data, None, rel_coords
+        pathway_act = (
+            self.pathway_activities[idx]
+            if self.pathway_activities is not None
+            else None
+        )
+        return data, None, pathway_act, rel_coords
 
     def __del__(self):
         if self.h5_file:
@@ -226,6 +233,8 @@ def get_hest_dataloader(
     transform=None,
     n_neighbors: int = 0,
     augment: bool = False,
+    pathway_targets_dir: Optional[str] = None,
+    pathway_names: Optional[List[str]] = None,
 ):
     """Build a DataLoader over raw histology patches for a list of HEST sample IDs.
 
@@ -244,9 +253,11 @@ def get_hest_dataloader(
         n_neighbors (int): Number of spatial neighbours to include per patch.
             ``0`` disables neighbourhood mode.
         augment (bool): Whether to apply dihedral augmentations.
+        pathway_targets_dir (str, optional): Directory of precomputed pathway activities.
+        pathway_names (List[str], optional): Custom list of pathway names to filter targets.
 
     Returns:
-        DataLoader: Yields ``(patches, None, rel_coords)`` tuples.
+        DataLoader: Yields ``(patches, None, pathway_acts, rel_coords)`` tuples.
     """
     datasets = []
 
@@ -281,9 +292,10 @@ def get_hest_dataloader(
                 h5ad_path,
                 patch_barcodes,
             )
+            mask_bool = np.array(mask, dtype=bool)
 
-            coords_subset = coords_all[mask]
-            indices_subset = np.where(mask)[0]
+            coords_subset = coords_all[mask_bool]
+            indices_subset = np.where(mask_bool)[0]
 
             # Pre-compute KD-tree neighbours if requested
             neighborhood_indices = None
@@ -304,15 +316,46 @@ def get_hest_dataloader(
 
                 neighborhood_indices = np.array(final_neighbors)
 
+            # Load pathway activities if directory is provided
+            pathway_activities = None
+            if pathway_targets_dir is not None:
+                pw_h5_path = os.path.join(pathway_targets_dir, f"{sample_id}.h5")
+                if os.path.exists(pw_h5_path):
+                    from .compute_pathway_activities import load_pathway_activities
+                    acts, pw_names, _, _ = load_pathway_activities(pw_h5_path, list(patch_barcodes))
+
+                    if pathway_names is not None:
+                        # Filter pathways to match the requested subset
+                        p_indices = []
+                        for name in pathway_names:
+                            if name in pw_names:
+                                p_indices.append(pw_names.index(name))
+                            else:
+                                p_indices.append(-1)
+
+                        p = len(pathway_names)
+                        subset_acts = np.zeros((acts.shape[0], p), dtype=np.float32)
+                        for i, idx in enumerate(p_indices):
+                            if idx != -1:
+                                subset_acts[:, i] = acts[:, idx]
+
+                        pathway_activities = torch.tensor(
+                            subset_acts[mask_bool], dtype=torch.float32
+                        )
+                    else:
+                        pathway_activities = torch.tensor(
+                            acts[mask_bool], dtype=torch.float32
+                        )
+
             ds = HEST_Dataset(
                 h5_path,
                 coords_subset,
-                None,  # gene_matrix removed
                 indices=indices_subset,
                 transform=transform,
                 neighborhood_indices=neighborhood_indices,
                 coords_all=coords_all,
                 augment=augment,
+                pathway_activities=pathway_activities,
             )
             datasets.append(ds)
 
@@ -329,6 +372,7 @@ def get_hest_dataloader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
+        collate_fn=collate_fn_patch,
         pin_memory=True,
         persistent_workers=(num_workers > 0),
     )
