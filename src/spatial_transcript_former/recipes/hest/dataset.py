@@ -322,7 +322,10 @@ def get_hest_dataloader(
                 pw_h5_path = os.path.join(pathway_targets_dir, f"{sample_id}.h5")
                 if os.path.exists(pw_h5_path):
                     from .compute_pathway_activities import load_pathway_activities
-                    acts, pw_names, _, _ = load_pathway_activities(pw_h5_path, list(patch_barcodes))
+
+                    acts, pw_names, _, _ = load_pathway_activities(
+                        pw_h5_path, list(patch_barcodes)
+                    )
 
                     if pathway_names is not None:
                         # Filter pathways to match the requested subset

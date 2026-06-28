@@ -40,7 +40,9 @@ def run_experiment(model_name: str, cmd_args: List[str]) -> bool:
     """Run a single training experiment as an isolated subprocess."""
     print(f"\n========================================================")
     print(f"Starting experiment for: {model_name}")
-    print(f"Command: {sys.executable} -m spatial_transcript_former.train {' '.join(cmd_args)}")
+    print(
+        f"Command: {sys.executable} -m spatial_transcript_former.train {' '.join(cmd_args)}"
+    )
     print(f"========================================================\n")
 
     cmd = [sys.executable, "-m", "spatial_transcript_former.train"] + cmd_args
@@ -122,13 +124,13 @@ def build_markdown_table(results: Dict[str, Dict[str, Any]]) -> str:
         "Pred Var",
         "Spatial Coherence",
         "Runtime (s)",
-        "Peak VRAM (MB)"
+        "Peak VRAM (MB)",
     ]
-    
+
     rows = []
     rows.append("| " + " | ".join(headers) + " |")
     rows.append("| " + " | ".join(["---"] * len(headers)) + " |")
-    
+
     for model_name, m in results.items():
         row = [
             f"**{model_name}**",
@@ -137,13 +139,29 @@ def build_markdown_table(results: Dict[str, Dict[str, Any]]) -> str:
             f"{m.get('val_mae'):.4f}" if m.get("val_mae") is not None else "N/A",
             f"{m.get('val_pcc'):.4f}" if m.get("val_pcc") is not None else "N/A",
             f"{m.get('val_ccc'):.4f}" if m.get("val_ccc") is not None else "N/A",
-            f"{m.get('pred_variance'):.6f}" if m.get("pred_variance") is not None else "N/A",
-            f"{m.get('spatial_coherence'):.4f}" if m.get("spatial_coherence") is not None else "N/A",
-            f"{m.get('runtime_seconds'):.1f}" if m.get("runtime_seconds") is not None else "N/A",
-            f"{m.get('sys_gpu_mem_mb'):.1f}" if m.get("sys_gpu_mem_mb") is not None else "N/A",
+            (
+                f"{m.get('pred_variance'):.6f}"
+                if m.get("pred_variance") is not None
+                else "N/A"
+            ),
+            (
+                f"{m.get('spatial_coherence'):.4f}"
+                if m.get("spatial_coherence") is not None
+                else "N/A"
+            ),
+            (
+                f"{m.get('runtime_seconds'):.1f}"
+                if m.get("runtime_seconds") is not None
+                else "N/A"
+            ),
+            (
+                f"{m.get('sys_gpu_mem_mb'):.1f}"
+                if m.get("sys_gpu_mem_mb") is not None
+                else "N/A"
+            ),
         ]
         rows.append("| " + " | ".join(row) + " |")
-        
+
     return "\n".join(rows)
 
 
@@ -151,6 +169,7 @@ def plot_charts(results: Dict[str, Dict[str, Any]], output_path: str):
     """Generate comparative performance charts using matplotlib."""
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
@@ -164,56 +183,143 @@ def plot_charts(results: Dict[str, Dict[str, Any]], output_path: str):
         # PCC vs CCC Bar Chart
         x = range(len(models))
         width = 0.35
-        ax1.bar([i - width/2 for i in x], pcc_vals, width, label="PCC (Correlation)", color="#3498db")
-        ax1.bar([i + width/2 for i in x], ccc_vals, width, label="CCC (Concordance)", color="#2ecc71")
+        ax1.bar(
+            [i - width / 2 for i in x],
+            pcc_vals,
+            width,
+            label="PCC (Correlation)",
+            color="#3498db",
+        )
+        ax1.bar(
+            [i + width / 2 for i in x],
+            ccc_vals,
+            width,
+            label="CCC (Concordance)",
+            color="#2ecc71",
+        )
         ax1.set_ylabel("Score")
         ax1.set_title("Spatially-Resolved Pathway Correlation (PCC vs. CCC)")
         ax1.set_xticks(x)
         ax1.set_xticklabels(models, rotation=15)
         ax1.legend()
-        ax1.grid(axis='y', linestyle='--', alpha=0.7)
+        ax1.grid(axis="y", linestyle="--", alpha=0.7)
 
         # MAE Bar Chart
         ax2.bar(models, mae_vals, 0.5, color="#e74c3c")
         ax2.set_ylabel("MAE (Lower is Better)")
         ax2.set_title("Absolute Predictive Error (MAE)")
         ax2.set_xticklabels(models, rotation=15)
-        ax2.grid(axis='y', linestyle='--', alpha=0.7)
+        ax2.grid(axis="y", linestyle="--", alpha=0.7)
 
         plt.tight_layout()
         plt.savefig(output_path, dpi=150)
         print(f"Comparison charts saved to: {output_path}")
     except Exception as e:
-        print(f"Warning: Failed to generate charts (matplotlib may be missing or failed): {e}")
+        print(
+            f"Warning: Failed to generate charts (matplotlib may be missing or failed): {e}"
+        )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run complete model comparative experiments")
-    parser.add_argument("--data-dir", type=str, default="A:\\hest_data", help="HEST data directory")
-    parser.add_argument("--output-dir", type=str, default="./runs/comparison", help="Output runs directory")
-    parser.add_argument("--quick-test", action="store_true", help="Run a quick verification (1 epoch, 2 samples)")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for split repeatability")
-    parser.add_argument("--epochs-patch", type=int, default=5, help="Number of training epochs for patch baselines")
-    parser.add_argument("--epochs-mil", type=int, default=20, help="Number of training epochs for MIL/STF models")
-    
+    parser = argparse.ArgumentParser(
+        description="Run complete model comparative experiments"
+    )
+    parser.add_argument(
+        "--data-dir", type=str, default="A:\\hest_data", help="HEST data directory"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="./runs/comparison",
+        help="Output runs directory",
+    )
+    parser.add_argument(
+        "--quick-test",
+        action="store_true",
+        help="Run a quick verification (1 epoch, 2 samples)",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for split repeatability"
+    )
+    parser.add_argument(
+        "--epochs-patch",
+        type=int,
+        default=5,
+        help="Number of training epochs for patch baselines",
+    )
+    parser.add_argument(
+        "--epochs-mil",
+        type=int,
+        default=20,
+        help="Number of training epochs for MIL/STF models",
+    )
+
     # Slurm & Execution Options
-    parser.add_argument("--slurm", action="store_true", help="Generate Slurm scripts instead of running locally")
-    parser.add_argument("--submit", action="store_true", help="Submit generated Slurm jobs immediately (requires --slurm)")
-    parser.add_argument("--collect-only", action="store_true", help="Only collect results and generate report/charts without running training")
-    
+    parser.add_argument(
+        "--slurm",
+        action="store_true",
+        help="Generate Slurm scripts instead of running locally",
+    )
+    parser.add_argument(
+        "--submit",
+        action="store_true",
+        help="Submit generated Slurm jobs immediately (requires --slurm)",
+    )
+    parser.add_argument(
+        "--collect-only",
+        action="store_true",
+        help="Only collect results and generate report/charts without running training",
+    )
+
     # Slurm Resource Options
-    parser.add_argument("--slurm-partition", type=str, default="gpu", help="Slurm partition for training jobs")
-    parser.add_argument("--slurm-collect-partition", type=str, default=None, help="Slurm partition for the collection job (defaults to cluster default)")
-    parser.add_argument("--slurm-gres", type=str, default="gpu:1", help="Slurm GRES for training jobs")
-    parser.add_argument("--slurm-time", type=str, default="12:00:00", help="Slurm time limit for training jobs")
-    parser.add_argument("--slurm-mem", type=str, default="32G", help="Slurm memory limit for training jobs")
-    parser.add_argument("--slurm-cpus", type=int, default=4, help="Slurm CPUs per task for training jobs")
-    
+    parser.add_argument(
+        "--slurm-partition",
+        type=str,
+        default="gpu",
+        help="Slurm partition for training jobs",
+    )
+    parser.add_argument(
+        "--slurm-collect-partition",
+        type=str,
+        default=None,
+        help="Slurm partition for the collection job (defaults to cluster default)",
+    )
+    parser.add_argument(
+        "--slurm-gres", type=str, default="gpu:1", help="Slurm GRES for training jobs"
+    )
+    parser.add_argument(
+        "--slurm-time",
+        type=str,
+        default="12:00:00",
+        help="Slurm time limit for training jobs",
+    )
+    parser.add_argument(
+        "--slurm-mem",
+        type=str,
+        default="32G",
+        help="Slurm memory limit for training jobs",
+    )
+    parser.add_argument(
+        "--slurm-cpus",
+        type=int,
+        default=4,
+        help="Slurm CPUs per task for training jobs",
+    )
+
     # Slurm Environment Setup
-    parser.add_argument("--slurm-conda", type=str, default="SpatialTranscriptFormer", help="Conda environment to activate in Slurm jobs")
-    parser.add_argument("--slurm-setup-cmds", type=str, default=None, 
-                        help="Raw bash commands to run before the python command (e.g. 'module load cuda'). "
-                             "If not specified, defaults to activating the conda environment specified by --slurm-conda.")
+    parser.add_argument(
+        "--slurm-conda",
+        type=str,
+        default="SpatialTranscriptFormer",
+        help="Conda environment to activate in Slurm jobs",
+    )
+    parser.add_argument(
+        "--slurm-setup-cmds",
+        type=str,
+        default=None,
+        help="Raw bash commands to run before the python command (e.g. 'module load cuda'). "
+        "If not specified, defaults to activating the conda environment specified by --slurm-conda.",
+    )
     args = parser.parse_args()
 
     # Determine hyperparameters based on --quick-test
@@ -224,67 +330,103 @@ def main():
     # Configurations for each model
     configs = {
         "HE2RNA": [
-            "--model", "he2rna",
-            "--backbone", "resnet50",
-            "--batch-size", "64",
-            "--epochs", str(epochs_patch),
-            "--warmup-epochs", "0" if args.quick_test else "2",
+            "--model",
+            "he2rna",
+            "--backbone",
+            "resnet50",
+            "--batch-size",
+            "64",
+            "--epochs",
+            str(epochs_patch),
+            "--warmup-epochs",
+            "0" if args.quick_test else "2",
         ],
         "ViT_ST": [
-            "--model", "vit_st",
-            "--backbone", "vit_b_16",
-            "--batch-size", "32",
-            "--epochs", str(epochs_patch),
-            "--warmup-epochs", "0" if args.quick_test else "2",
+            "--model",
+            "vit_st",
+            "--backbone",
+            "vit_b_16",
+            "--batch-size",
+            "32",
+            "--epochs",
+            str(epochs_patch),
+            "--warmup-epochs",
+            "0" if args.quick_test else "2",
         ],
         "AttentionMIL": [
-            "--model", "attention_mil",
-            "--backbone", "ctranspath",
+            "--model",
+            "attention_mil",
+            "--backbone",
+            "ctranspath",
             "--whole-slide",
             "--precomputed",
             "--weak-supervision",
             "--use-amp",
-            "--batch-size", "1",
-            "--epochs", str(epochs_mil),
-            "--warmup-epochs", "0" if args.quick_test else "4",
+            "--batch-size",
+            "1",
+            "--epochs",
+            str(epochs_mil),
+            "--warmup-epochs",
+            "0" if args.quick_test else "4",
         ],
         "TransMIL": [
-            "--model", "transmil",
-            "--backbone", "ctranspath",
+            "--model",
+            "transmil",
+            "--backbone",
+            "ctranspath",
             "--whole-slide",
             "--precomputed",
             "--weak-supervision",
             "--use-amp",
-            "--batch-size", "1",
-            "--epochs", str(epochs_mil),
-            "--warmup-epochs", "0" if args.quick_test else "4",
+            "--batch-size",
+            "1",
+            "--epochs",
+            str(epochs_mil),
+            "--warmup-epochs",
+            "0" if args.quick_test else "4",
         ],
         "SpatialTranscriptFormer": [
-            "--model", "interaction",
-            "--backbone", "ctranspath",
+            "--model",
+            "interaction",
+            "--backbone",
+            "ctranspath",
             "--whole-slide",
             "--precomputed",
             "--use-amp",
-            "--batch-size", "8",
-            "--token-dim", "512",
-            "--n-heads", "8",
-            "--n-layers", "6",
-            "--loss", "mse_ccc",
-            "--epochs", str(epochs_mil),
-            "--warmup-epochs", "0" if args.quick_test else "4",
-        ]
+            "--batch-size",
+            "8",
+            "--token-dim",
+            "512",
+            "--n-heads",
+            "8",
+            "--n-layers",
+            "6",
+            "--loss",
+            "mse_ccc",
+            "--epochs",
+            str(epochs_mil),
+            "--warmup-epochs",
+            "0" if args.quick_test else "4",
+        ],
     }
 
     # Add shared flags to all configs
     for name, cmd in configs.items():
-        cmd.extend([
-            "--data-dir", args.data_dir,
-            "--organ", "Bowel",
-            "--seed", str(args.seed),
-            "--output-dir", os.path.join(args.output_dir, name.lower()),
-            "--pathways"
-        ] + CRC_PATHWAYS)
-        
+        cmd.extend(
+            [
+                "--data-dir",
+                args.data_dir,
+                "--organ",
+                "Bowel",
+                "--seed",
+                str(args.seed),
+                "--output-dir",
+                os.path.join(args.output_dir, name.lower()),
+                "--pathways",
+            ]
+            + CRC_PATHWAYS
+        )
+
         if max_samples:
             cmd.extend(["--max-samples", str(max_samples)])
 
@@ -320,16 +462,24 @@ def main():
             posix_cmd_args = []
             for arg in cmd_args:
                 # Convert backslashes to forward slashes for Unix compatibility
-                if isinstance(arg, str) and ('\\' in arg or '/' in arg) and not arg.startswith('--'):
+                if (
+                    isinstance(arg, str)
+                    and ("\\" in arg or "/" in arg)
+                    and not arg.startswith("--")
+                ):
                     posix_cmd_args.append(pathlib.Path(arg).as_posix())
                 else:
                     posix_cmd_args.append(str(arg))
 
-            model_out_dir = pathlib.Path(os.path.join(args.output_dir, model_name.lower())).as_posix()
+            model_out_dir = pathlib.Path(
+                os.path.join(args.output_dir, model_name.lower())
+            ).as_posix()
             log_path = f"{model_out_dir}/{model_name.lower()}_slurm.log"
-            
+
             # Ensure model output directory exists
-            os.makedirs(os.path.join(args.output_dir, model_name.lower()), exist_ok=True)
+            os.makedirs(
+                os.path.join(args.output_dir, model_name.lower()), exist_ok=True
+            )
 
             script_content = f"""#!/bin/bash
 #SBATCH --job-name=stf_compare_{model_name.lower()}
@@ -358,7 +508,11 @@ python -m spatial_transcript_former.train {" ".join(posix_cmd_args)}
         # Generate collection slurm script
         posix_output_dir = pathlib.Path(args.output_dir).as_posix()
         collect_log_path = f"{posix_output_dir}/collect_slurm.log"
-        collect_partition_line = f"#SBATCH --partition={args.slurm_collect_partition}\n" if args.slurm_collect_partition else ""
+        collect_partition_line = (
+            f"#SBATCH --partition={args.slurm_collect_partition}\n"
+            if args.slurm_collect_partition
+            else ""
+        )
         collect_script_content = f"""#!/bin/bash
 #SBATCH --job-name=stf_compare_collect
 #SBATCH --output={collect_log_path}
@@ -384,25 +538,35 @@ python scripts/compare_models.py --collect-only --output-dir {posix_output_dir}
             for model_name, path in slurm_script_paths.items():
                 try:
                     cmd = ["sbatch", path]
-                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    result = subprocess.run(
+                        cmd, capture_output=True, text=True, check=True
+                    )
                     output = result.stdout.strip()
                     print(f"  Submitted {model_name} job: {output}")
                     job_id = output.split()[-1]
                     job_ids.append(job_id)
                 except (subprocess.CalledProcessError, FileNotFoundError) as e:
                     print(f"  Error submitting job for {model_name}: {e}")
-                    print("  Make sure 'sbatch' is installed and available in your PATH.")
-            
+                    print(
+                        "  Make sure 'sbatch' is installed and available in your PATH."
+                    )
+
             if job_ids:
                 dependency_str = f"--dependency=afterany:{':'.join(job_ids)}"
                 try:
                     cmd = ["sbatch", dependency_str, collect_script_path]
-                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                    print(f"  Submitted collection job with dependency: {result.stdout.strip()}")
+                    result = subprocess.run(
+                        cmd, capture_output=True, text=True, check=True
+                    )
+                    print(
+                        f"  Submitted collection job with dependency: {result.stdout.strip()}"
+                    )
                 except (subprocess.CalledProcessError, FileNotFoundError) as e:
                     print(f"  Error submitting collection job: {e}")
             else:
-                print("  No jobs were submitted successfully, skipping collection job submission.")
+                print(
+                    "  No jobs were submitted successfully, skipping collection job submission."
+                )
         else:
             print("\nTo run the comparison on Slurm, submit the generated scripts:")
             for model_name, path in slurm_script_paths.items():
@@ -412,7 +576,9 @@ python scripts/compare_models.py --collect-only --output-dir {posix_output_dir}
             print(f"\nAfter all jobs complete, run the collection script manually:")
             print(f"  sbatch {posix_collect_path}")
             print(f"Or run the comparison script directly in collection mode:")
-            print(f"  python scripts/compare_models.py --collect-only --output-dir {posix_output_dir}")
+            print(
+                f"  python scripts/compare_models.py --collect-only --output-dir {posix_output_dir}"
+            )
 
         return
     else:
@@ -427,12 +593,12 @@ python scripts/compare_models.py --collect-only --output-dir {posix_output_dir}
 
     # Print results summary
     if results:
-        print("\n\n" + "="*60)
+        print("\n\n" + "=" * 60)
         print("EXPERIMENTAL COMPARISON RESULTS")
-        print("="*60)
+        print("=" * 60)
         table_md = build_markdown_table(results)
         print(table_md)
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")
 
         # Save markdown report
         report_path = os.path.join(args.output_dir, "comparison_report.md")
@@ -440,29 +606,47 @@ python scripts/compare_models.py --collect-only --output-dir {posix_output_dir}
         with open(report_path, "w") as f:
             f.write("# Comparative Model Performance Evaluation (Bowel/CRC subset)\n\n")
             f.write(table_md)
-            f.write("\n\n*Note: Metrics correspond to the epoch that achieved the best Concordance Correlation Coefficient (CCC) or lowest Validation Loss.*")
+            f.write(
+                "\n\n*Note: Metrics correspond to the epoch that achieved the best Concordance Correlation Coefficient (CCC) or lowest Validation Loss.*"
+            )
         print(f"Saved report summary to: {report_path}")
 
         # Save CSV results
         csv_path = os.path.join(args.output_dir, "comparison_results.csv")
         import csv
+
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
             # Headers
-            writer.writerow(["Model", "BestEpoch", "ValLoss", "ValMAE", "ValPCC", "ValCCC", "PredVar", "SpatialCoherence", "RuntimeSeconds", "PeakGPUMemMB"])
+            writer.writerow(
+                [
+                    "Model",
+                    "BestEpoch",
+                    "ValLoss",
+                    "ValMAE",
+                    "ValPCC",
+                    "ValCCC",
+                    "PredVar",
+                    "SpatialCoherence",
+                    "RuntimeSeconds",
+                    "PeakGPUMemMB",
+                ]
+            )
             for m_name, m in results.items():
-                writer.writerow([
-                    m_name,
-                    m.get("best_epoch"),
-                    m.get("val_loss"),
-                    m.get("val_mae"),
-                    m.get("val_pcc"),
-                    m.get("val_ccc"),
-                    m.get("pred_variance"),
-                    m.get("spatial_coherence"),
-                    m.get("runtime_seconds"),
-                    m.get("sys_gpu_mem_mb")
-                ])
+                writer.writerow(
+                    [
+                        m_name,
+                        m.get("best_epoch"),
+                        m.get("val_loss"),
+                        m.get("val_mae"),
+                        m.get("val_pcc"),
+                        m.get("val_ccc"),
+                        m.get("pred_variance"),
+                        m.get("spatial_coherence"),
+                        m.get("runtime_seconds"),
+                        m.get("sys_gpu_mem_mb"),
+                    ]
+                )
         print(f"Saved CSV results to: {csv_path}")
 
         # Generate comparative charts

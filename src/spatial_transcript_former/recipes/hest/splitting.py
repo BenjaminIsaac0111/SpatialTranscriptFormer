@@ -14,7 +14,9 @@ def split_hest_patients(
     Samples with missing patient IDs are treated as unique patients (safe fallback).
     """
     df = pd.read_csv(metadata_path)
-    df["patient_filled"] = df["patient"].apply(lambda x: None if pd.isna(x) or str(x).strip() == "" else x)
+    df["patient_filled"] = df["patient"].apply(
+        lambda x: None if pd.isna(x) or str(x).strip() == "" else x
+    )
     df["patient_filled"] = df["patient_filled"].fillna(df["id"])
 
     splitter = GroupShuffleSplit(
