@@ -1,6 +1,6 @@
 # Python API Reference
 
-The SpatialTranscriptFormer package exposes a clean API for training, inference, and integration with the Scanpy/AnnData ecosystem.
+The SpatialTranscriptFormer package exposes a clean API for training, inference, and integration with the Scanpy/AnnData ecosystem. The model predicts spatially-resolved **biological pathway activity scores** (not gene expression) from histology features.
 
 ```python
 from spatial_transcript_former import (
@@ -8,8 +8,8 @@ from spatial_transcript_former import (
     Trainer,                   # High-level training orchestrator
     Predictor,                 # Inference wrapper
     FeatureExtractor,          # Backbone feature extraction
-    save_pretrained,           # Save checkpoint directory
-    load_pretrained,           # Load checkpoint directory
+    save_pretrained,           # Save a checkpoint directory
+    load_pretrained,           # Load a checkpoint directory
     inject_predictions,        # AnnData integration
 )
 ```
@@ -21,26 +21,27 @@ from spatial_transcript_former import (
 ### End-to-End Inference (New Data)
 
 ```python
+import pandas as pd
+import scanpy as sc
 from spatial_transcript_former import SpatialTranscriptFormer, Predictor, FeatureExtractor
 from spatial_transcript_former.predict import inject_predictions
-import scanpy as sc
 
-# 1. Load model from checkpoint directory
+# 1. Load a model from a checkpoint directory (config.json + model.pth)
 model = SpatialTranscriptFormer.from_pretrained("./checkpoints/my_run/")
-print(model.gene_names[:3])  # ['TP53', 'EGFR', 'MYC']
+print(model.pathway_names[:3])  # e.g. ['HALLMARK_HYPOXIA', ...] or None
 
 # 2. Extract features from raw patches
 extractor = FeatureExtractor(backbone="phikon", device="cuda")
 features = extractor.extract_batch(image_tensor, batch_size=64)  # (N, 768)
 
-# 3. Predict gene expression
+# 3. Predict per-spot pathway activity from the features
 predictor = Predictor(model, device="cuda")
-predictions = predictor.predict_wsi(features, coords)  # (1, G)
+preds = predictor.predict_wsi(features, coords, return_dense=True)  # (1, N, P)
 
-# 4. Inject into AnnData for Scanpy analysis
-adata = sc.AnnData(obs=pd.DataFrame(index=[f"spot_{i}" for i in range(N)]))
-inject_predictions(adata, coords, predictions[0], gene_names=model.gene_names)
-sc.pl.spatial(adata, color="TP53")
+# 4. Inject into AnnData for Scanpy analysis (one activity vector per spot)
+adata = sc.AnnData(obs=pd.DataFrame(index=[f"spot_{i}" for i in range(len(coords))]))
+inject_predictions(adata, coords, preds[0], pathway_names=model.pathway_names)
+sc.pl.spatial(adata, color="HALLMARK_HYPOXIA")
 ```
 
 ### Saving a Trained Model
@@ -49,16 +50,16 @@ sc.pl.spatial(adata, color="TP53")
 from spatial_transcript_former import save_pretrained
 
 # After training, export a self-contained checkpoint
-save_pretrained(model, "./release/v1/", gene_names=gene_list)
+save_pretrained(model, "./release/v1/", pathway_names=pathway_list)
 ```
 
 This creates:
 
 ```
 release/v1/
-├── config.json        # Architecture parameters
-├── model.pth          # Model weights (state_dict)
-└── gene_names.json    # Ordered gene symbols
+├── config.json          # Architecture parameters (+ pathway_format_version)
+├── model.pth            # Model weights (state_dict)
+└── pathway_names.json   # Ordered pathway names (optional)
 ```
 
 ---
@@ -67,24 +68,35 @@ release/v1/
 
 ### `SpatialTranscriptFormer`
 
-The core transformer model. Predicts gene expression from histology patch features and spatial coordinates.
+The core transformer. Predicts pathway activity scores from histology patch features and spatial coordinates.
 
-#### `SpatialTranscriptFormer.__init__(...)`
+#### `SpatialTranscriptFormer(...)`
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `num_genes` | `int` | *required* | Number of output genes |
-| `num_pathways` | `int` | `50` | Number of pathway bottleneck tokens |
-| `backbone_name` | `str` | `"resnet50"` | Backbone identifier (`resnet50`, `phikon`, `ctranspath`, etc.) |
+| `num_pathways` | `int` | `50` | Number of pathway tokens **and** the output dimension |
+| `backbone_name` | `str` | `"resnet50"` | Backbone identifier (`resnet50`, `phikon`, `ctranspath`, `gigapath`, `hibou-b`, …) |
 | `pretrained` | `bool` | `True` | Load pretrained backbone weights |
-| `token_dim` | `int` | `256` | Common embedding dimension |
+| `token_dim` | `int` | `256` | Transformer embedding dimension |
 | `n_heads` | `int` | `4` | Number of attention heads |
-| `n_layers` | `int` | `2` | Number of transformer layers |
+| `n_layers` | `int` | `2` | Transformer layers (minimum 2 when `h2h` is disabled) |
 | `dropout` | `float` | `0.1` | Dropout probability |
-| `pathway_init` | `Tensor` | `None` | `(P, G)` biological pathway membership matrix |
-| `use_spatial_pe` | `bool` | `True` | Enable learned spatial positional encodings |
-| `output_mode` | `str` | `"counts"` | Output head: `"counts"` (Softplus) or `"zinb"` (Zero-Inflated NB) |
-| `interactions` | `list[str]` | all | Attention interactions: `p2p`, `p2h`, `h2p`, `h2h` |
+| `use_spatial_pe` | `bool` | `True` | Enable learned 2-D spatial positional encodings (requires `rel_coords` at call time) |
+| `interactions` | `list[str]` | all four | Attention quadrants to enable: `p2p`, `p2h`, `h2p`, `h2h` |
+
+> The model predicts pathway activity **directly** via a scaled dot-product + Softplus head — there is no `num_genes`, gene-reconstruction head, or `output_mode`. See [MODELS.md](MODELS.md).
+
+#### `forward(x, rel_coords=None, mask=None, return_dense=False, return_attention=False)`
+
+| Arg | Description |
+|---|---|
+| `x` | `(B, 3, H, W)` image patch, **or** `(B, S, D)` pre-computed features |
+| `rel_coords` | `(B, S, 2)` slide-stationary coordinates (required when `use_spatial_pe=True`) |
+| `mask` | `(B, S)` bool padding mask (`True` = padded/ignore) |
+| `return_dense` | If `True`, return per-patch predictions instead of a pooled slide vector |
+| `return_attention` | If `True`, also return a list of per-layer attention maps |
+
+**Returns:** `(B, num_pathways)`, or `(B, S, num_pathways)` if `return_dense=True`. If `return_attention=True`, returns `(scores, attentions)`.
 
 #### `SpatialTranscriptFormer.from_pretrained(checkpoint_dir, device="cpu", **kwargs)`
 
@@ -92,16 +104,16 @@ Load a model from a checkpoint directory created by `save_pretrained`.
 
 ```python
 model = SpatialTranscriptFormer.from_pretrained("./checkpoint/", device="cuda")
-model.gene_names  # List[str] or None
+model.pathway_names  # list[str] or None
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
-| `checkpoint_dir` | `str` | Path to directory with `config.json` + `model.pth` |
+| `checkpoint_dir` | `str` | Directory with `config.json` + `model.pth` |
 | `device` | `str` | Torch device (`"cpu"`, `"cuda"`) |
 | `**kwargs` | | Override any `config.json` value (e.g. `dropout=0.0`) |
 
-**Returns:** `SpatialTranscriptFormer` in eval mode with `.gene_names` attribute.
+**Returns:** `SpatialTranscriptFormer` in eval mode with a `.pathway_names` attribute.
 
 ---
 
@@ -109,50 +121,44 @@ model.gene_names  # List[str] or None
 
 Stateful inference wrapper. Manages device placement, eval mode, and optional AMP.
 
-#### `Predictor.__init__(model, device="cpu", use_amp=False)`
+#### `Predictor(model, device="cpu", use_amp=False)`
 
 ```python
 predictor = Predictor(model, device="cuda", use_amp=True)
+predictor.pathway_names  # forwarded from the model, or None
 ```
 
-#### `Predictor.predict_patch(image, return_pathways=False)`
+#### `Predictor.predict_patch(image)`
 
 Single-patch inference from a raw image tensor.
 
 ```python
 result = predictor.predict_patch(image)   # image: (1, 3, 224, 224) or (3, 224, 224)
-# result: (1, num_genes)
+# result: (1, num_pathways)
 ```
 
-> **Note:** When the model uses spatial PE, a zero-coordinate is automatically injected — no need to provide coordinates for single patches.
+> When the model uses spatial PE, a zero coordinate is injected automatically — no coordinates are needed for single patches.
 
-#### `Predictor.predict_wsi(features, coords, return_pathways=False, return_dense=False)`
+#### `Predictor.predict_wsi(features, coords, return_dense=False)`
 
-Whole-slide inference from pre-extracted feature embeddings.
+Whole-slide inference from pre-extracted feature embeddings. Coordinates are re-centred/standardised internally to match the training-time slide-stationary scaling.
 
 ```python
-# Global prediction (one vector per slide)
-result = predictor.predict_wsi(features, coords)           # (1, G)
-
-# Dense prediction (one vector per patch)
-result = predictor.predict_wsi(features, coords, return_dense=True)  # (1, N, G)
+result = predictor.predict_wsi(features, coords)                    # (1, P)  — pooled slide vector
+result = predictor.predict_wsi(features, coords, return_dense=True) # (1, N, P) — per-spot
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
 | `features` | `Tensor` | `(N, D)` or `(1, N, D)` embeddings |
 | `coords` | `Tensor` | `(N, 2)` or `(1, N, 2)` spatial coordinates |
-| `return_pathways` | `bool` | Also return pathway scores |
-| `return_dense` | `bool` | Per-patch predictions instead of global |
+| `return_dense` | `bool` | Per-patch predictions instead of a pooled slide vector |
 
-> **Validation:** Raises `ValueError` with a clear message if the feature dimension doesn't match the model's expected backbone dimension.
+> Raises `ValueError` with a clear message if the feature dimension doesn't match the model's expected backbone dimension.
 
 #### `Predictor.predict(features, coords=None, **kwargs)`
 
-Unified entry point — auto-dispatches:
-
-- 4D tensor `(B, 3, H, W)` → `predict_patch`
-- 2D tensor `(N, D)` → `predict_wsi` (requires `coords`)
+Unified entry point — dispatches a `(B, 3, H, W)` image to `predict_patch`, otherwise to `predict_wsi` (requires `coords`).
 
 ---
 
@@ -160,50 +166,56 @@ Unified entry point — auto-dispatches:
 
 Wraps a backbone model and its normalization transform for one-line feature extraction.
 
-#### `FeatureExtractor.__init__(backbone="resnet50", device="cpu", pretrained=True, transform=None)`
+#### `FeatureExtractor(backbone="resnet50", device="cpu", pretrained=True, transform=None)`
 
 ```python
 extractor = FeatureExtractor(backbone="phikon", device="cuda")
-extractor.feature_dim   # 768
-extractor.backbone_name # "phikon"
+extractor.feature_dim    # 768
+extractor.backbone_name  # "phikon"
 ```
 
 | Backbone | `feature_dim` | Source |
 |---|---|---|
 | `resnet50` | 2048 | torchvision |
-| `ctranspath` | 768 | HuggingFace (CTransPath) |
-| `phikon` | 768 | Owkin Phikon (HuggingFace) |
+| `ctranspath` | 768 | CTransPath |
+| `phikon` | 768 | Owkin Phikon |
 | `vit_b_16` | 768 | torchvision |
-| `gigapath` | 1536 | ProvGigaPath *(gated)* |
+| `gigapath` | 1536 | Prov-GigaPath *(gated)* |
 | `hibou-b` | 768 | Hibou-B *(gated)* |
 | `hibou-l` | 1024 | Hibou-L *(gated)* |
 
 #### `extractor(images)` / `extractor.extract_batch(images, batch_size=64)`
 
 ```python
-features = extractor(images)                           # (N, D) — all at once
-features = extractor.extract_batch(images, batch_size=64)  # batched, returns on CPU
+features = extractor(images)                              # (N, D) — all at once, on device
+features = extractor.extract_batch(images, batch_size=64) # (N, D) — batched, returned on CPU
 ```
 
-Images should be float tensors in `[0, 1]` range, shape `(N, 3, H, W)`.
+Images should be float tensors in `[0, 1]`, shape `(N, 3, H, W)`.
 
 ---
 
-### `save_pretrained(model, save_dir, gene_names=None)`
+### `save_pretrained(model, save_dir, pathway_names=None)`
 
 Save a self-contained checkpoint directory.
 
 ```python
-save_pretrained(model, "./release/v1/", gene_names=["TP53", "EGFR", ...])
+save_pretrained(model, "./release/v1/", pathway_names=["HALLMARK_HYPOXIA", ...])
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
 | `model` | `SpatialTranscriptFormer` | Trained model instance |
 | `save_dir` | `str` | Output directory (created if needed) |
-| `gene_names` | `list[str]` | Optional ordered gene symbols (must match `num_genes`) |
+| `pathway_names` | `list[str]` | Optional ordered pathway names (must match `num_pathways`) |
 
-**Raises:** `ValueError` if `gene_names` length doesn't match `num_genes`.
+**Raises:** `ValueError` if `pathway_names` length doesn't match `num_pathways`.
+
+### `load_pretrained(checkpoint_dir, device="cpu", **override_kwargs)`
+
+Reconstruct a model from `config.json` + `model.pth` (and optional `pathway_names.json`). `**override_kwargs` override config values. **Raises** `ValueError` if the checkpoint's `pathway_format_version` doesn't match the current preprocessing format (re-train against current targets).
+
+> `SpatialTranscriptFormer.from_pretrained(...)` is a thin wrapper around `load_pretrained`.
 
 ### AnnData & Scanpy — A Primer
 
@@ -214,78 +226,61 @@ If you're coming from a pure deep-learning background, AnnData and Scanpy may be
 An `AnnData` object is a structured container for observations × variables matrices, designed for genomics. Think of it as a spreadsheet with labelled sidecars:
 
 ```
-                     var (genes)
-                ┌──────────────────┐
-                │  TP53  EGFR  MYC │
-           ┌────┼──────────────────┤
- obs       │ s0 │  0.3   1.2  0.8 │  ← adata.X  (the main data matrix)
- (spots/   │ s1 │  0.1   0.5  1.1 │
-  cells)   │ s2 │  0.9   0.2  0.4 │
-           └────┴──────────────────┘
+                  var (pathways)
+             ┌──────────────────────┐
+             │  HYPOXIA  EMT  MYC   │
+        ┌────┼──────────────────────┤
+ obs    │ s0 │   0.3    1.2   0.8   │  ← adata.X  (the main data matrix)
+ (spots)│ s1 │   0.1    0.5   1.1   │
+        │ s2 │   0.9    0.2   0.4   │
+        └────┴──────────────────────┘
 ```
 
 | Slot | What it stores | Our usage |
 |---|---|---|
-| `adata.X` | Main matrix `(N, G)` | Predicted gene expression |
+| `adata.X` | Main matrix `(N, P)` | Predicted pathway activity |
 | `adata.obs` | Per-observation metadata | Spot/cell barcodes, cluster labels |
-| `adata.var` | Per-variable metadata | Gene symbols as the index |
+| `adata.var` | Per-variable metadata | Pathway names as the index |
 | `adata.obsm["spatial"]` | Observation-level embeddings | `(N, 2)` spatial coordinates |
-| `adata.obsm["spatial_pathways"]` | Additional embeddings | `(N, P)` pathway scores |
-| `adata.uns` | Unstructured metadata | Pathway names, model config |
+| `adata.uns` | Unstructured metadata | Model config, run info |
 
 #### What is Scanpy?
 
-[Scanpy](https://scanpy.readthedocs.io/) (`sc`) is the analysis library that operates on AnnData objects. Once predictions are inside an `adata`, you instantly get access to:
+[Scanpy](https://scanpy.readthedocs.io/) (`sc`) is the analysis library that operates on AnnData objects. Once predictions are inside an `adata`, you get clustering, differential testing, spatial plotting, and trajectory analysis for free:
 
 ```python
 import scanpy as sc
 
-# Spatial plotting — visualise gene expression on tissue coordinates
-sc.pl.spatial(adata, color="TP53")
-
-# Clustering — find groups of spots with similar expression
-sc.tl.leiden(adata)
-
-# Differential expression — find marker genes per cluster
-sc.tl.rank_genes_groups(adata, groupby="leiden")
-
-# Dimensionality reduction
-sc.tl.pca(adata)
-sc.tl.umap(adata)
-sc.pl.umap(adata, color="leiden")
+sc.pl.spatial(adata, color="HALLMARK_HYPOXIA")  # spatial pathway-activity map
+sc.tl.leiden(adata)                              # cluster spots by activity profile
+sc.tl.rank_genes_groups(adata, groupby="leiden")  # marker pathways per cluster
 ```
 
-#### Why does this matter?
-
-By injecting predictions into AnnData, our model's output becomes **instantly compatible** with the entire Scanpy ecosystem — clustering, differential testing, spatial plotting, trajectory analysis — without any custom code. Biologists can take our predictions and run their standard workflows immediately.
+By injecting predictions into AnnData, the model's output becomes instantly compatible with the entire Scanpy ecosystem.
 
 ---
 
-### `inject_predictions(adata, coords, predictions, ...)`
+### `inject_predictions(adata, coords, pathway_scores, pathway_names=None)`
 
-Inject predictions into an AnnData object for Scanpy integration.
+Inject pathway-activity predictions into an AnnData object for Scanpy integration.
 
 ```python
 inject_predictions(
     adata,
-    coords,                              # → adata.obsm["spatial"]
-    predictions,                         # → adata.X
-    gene_names=["TP53", "EGFR", ...],    # → adata.var_names
-    pathway_scores=pathway_activations,  # → adata.obsm["spatial_pathways"]
-    pathway_names=["APOPTOSIS", ...],    # → adata.uns["pathway_names"]
+    coords,                                  # → adata.obsm["spatial"]
+    pathway_scores,                          # → adata.X   (N, P)
+    pathway_names=["HALLMARK_HYPOXIA", ...], # → adata.var_names
 )
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
-| `adata` | `AnnData` | Target AnnData object |
+| `adata` | `AnnData` | Target object (must have `N` observations matching `coords`) |
 | `coords` | `ndarray` | `(N, 2)` spatial coordinates |
-| `predictions` | `ndarray` | `(N, G)` gene predictions |
-| `gene_names` | `list[str]` | Optional gene symbols |
-| `pathway_scores` | `ndarray` | Optional `(N, P)` pathway scores |
-| `pathway_names` | `list[str]` | Optional pathway names |
+| `pathway_scores` | `ndarray` | `(N, P)` predicted pathway activity |
+| `pathway_names` | `list[str]` | Optional `P` pathway names (set as `adata.var_names`) |
 
-> **Lazy loading:** `anndata` is only imported when this function is called, so it's not required for basic inference.
+> **Lazy loading:** `anndata` is imported only when this function is called, so it isn't required for basic inference.
 
 ---
 
@@ -293,16 +288,15 @@ inject_predictions(
 
 ```
 checkpoint/
-├── config.json         # Architecture (JSON)
-├── model.pth           # Weights (PyTorch state_dict)
-└── gene_names.json     # Gene symbols (JSON array, optional)
+├── config.json          # Architecture (JSON)
+├── model.pth            # Weights (PyTorch state_dict)
+└── pathway_names.json   # Pathway names (JSON array, optional)
 ```
 
 **`config.json` example:**
 
 ```json
 {
-  "num_genes": 460,
   "num_pathways": 50,
   "backbone_name": "phikon",
   "token_dim": 256,
@@ -310,29 +304,24 @@ checkpoint/
   "n_layers": 2,
   "dropout": 0.1,
   "use_spatial_pe": true,
-  "output_mode": "counts",
-  "interactions": ["h2h", "h2p", "p2h", "p2p"]
+  "interactions": ["h2h", "h2p", "p2h", "p2p"],
+  "pathway_format_version": 2
 }
 ```
 
-**`gene_names.json` example:**
-
-```json
-["TP53", "EGFR", "MYC", "BRCA1", ...]
-```
+`pathway_format_version` records the preprocessing/target schema the model was trained against; `load_pretrained` refuses checkpoints whose version doesn't match the current pipeline.
 
 ---
 
 ## Training API
 
-The training pipeline lives in the `spatial_transcript_former.training` subpackage. You can use it via the **CLI** or **programmatically** in your own scripts.
+The training pipeline lives in the `spatial_transcript_former.training` subpackage. Use it via the **CLI** or **programmatically**.
 
 ### CLI Quick Start
 
 Training is launched via the `stf-train` entry point (or `python -m spatial_transcript_former.train`):
 
 ```bash
-# Minimal: train on precomputed features with whole-slide mode
 stf-train \
     --model interaction \
     --backbone phikon \
@@ -340,116 +329,67 @@ stf-train \
     --precomputed \
     --whole-slide \
     --use-spatial-pe \
-    --pathway-init \
-    --loss mse_pcc \
+    --loss mse_ccc \
     --epochs 100 \
     --lr 1e-4 \
     --warmup-epochs 10
-
-# Resume from checkpoint
-stf-train --model interaction --resume --output-dir ./checkpoints
 ```
 
-### CLI Arguments
-
-#### Data
-
-| Flag | Default | Description |
-| --- | --- | --- |
-| `--data-dir` | from config | Root HEST data directory |
-| `--feature-dir` | auto | Explicit pre-extracted feature directory |
-| `--num-genes` | 1000 | Number of output genes |
-| `--precomputed` | off | Use pre-extracted backbone features |
-| `--whole-slide` | off | Dense whole-slide prediction mode |
-| `--organ` | all | Filter samples by organ type |
-| `--max-samples` | all | Limit samples (for debugging) |
-
-#### Model
-
-| Flag | Default | Description |
-| --- | --- | --- |
-| `--model` | `he2rna` | Architecture: `interaction`, `he2rna`, `vit_st`, `attention_mil`, `transmil` |
-| `--backbone` | `resnet50` | Backbone: `resnet50`, `phikon`, `ctranspath`, `vit_b_16`, etc. |
-| `--num-pathways` | 50 | Pathway bottleneck tokens |
-| `--token-dim` | 256 | Embedding dimension |
-| `--n-heads` | 4 | Attention heads |
-| `--n-layers` | 2 | Transformer layers |
-| `--use-spatial-pe` | off | Learned spatial positional encoding |
-| `--interactions` | all | Attention mask: `p2p p2h h2p h2h` |
-| `--pathway-init` | off | Initialize gene head from MSigDB Hallmarks |
-
-#### Training
-
-| Flag | Default | Description |
-| --- | --- | --- |
-| `--epochs` | 10 | Total training epochs |
-| `--batch-size` | 32 | Batch size |
-| `--lr` | 1e-4 | Learning rate |
-| `--warmup-epochs` | 10 | Linear warmup before cosine annealing |
-| `--weight-decay` | 0.0 | AdamW weight decay |
-| `--grad-accum-steps` | 1 | Gradient accumulation steps |
-| `--use-amp` | off | Mixed precision (FP16) |
-| `--compile` | off | `torch.compile` the model |
-| `--resume` | off | Resume from latest checkpoint |
-
-#### Loss
-
-| Flag | Default | Description |
-| --- | --- | --- |
-| `--loss` | `mse_pcc` | Loss function: `mse`, `pcc`, `mse_pcc`, `zinb`, `poisson`, `logcosh` |
-| `--pcc-weight` | 1.0 | PCC term weight in `mse_pcc` |
-| `--pathway-loss-weight` | 0.0 | Auxiliary pathway PCC loss weight (0 = disabled) |
-
----
+See the **[Training Guide](TRAINING_GUIDE.md)** for the full, authoritative flag reference and HEST recipes. Pathway targets must be pre-computed first with `stf-compute-pathways` (see [PATHWAY_MAPPING.md](PATHWAY_MAPPING.md)).
 
 ### Trainer (High-Level)
 
-The `Trainer` class handles LR scheduling, AMP, checkpointing, logging, and early stopping:
+`Trainer` handles LR scheduling (linear warmup → cosine), AMP, checkpointing, SQLite logging, and early stopping. All arguments after `criterion` are **keyword-only**.
 
 ```python
 from spatial_transcript_former import SpatialTranscriptFormer, Trainer
 from spatial_transcript_former.training import CompositeLoss, EarlyStoppingCallback
 
-model = SpatialTranscriptFormer(num_genes=460, backbone_name="phikon", ...)
+model = SpatialTranscriptFormer(num_pathways=50, backbone_name="phikon")
 
 trainer = Trainer(
     model=model,
     train_loader=train_dl,
     val_loader=val_dl,
-    criterion=CompositeLoss(alpha=1.0),
+    criterion=CompositeLoss(alpha=1.0, pcc_type="ccc"),
     epochs=100,
     warmup_epochs=10,
     device="cuda",
     output_dir="./checkpoints",
+    model_name="interaction",
     use_amp=True,
+    whole_slide=True,
     callbacks=[EarlyStoppingCallback(patience=15)],
 )
-results = trainer.fit()                 # returns {"best_val_loss", "history", ...}
-trainer.save_pretrained("./release/v1/") # inference-ready export
+results = trainer.fit()                    # {"best_val_loss", "epochs_completed", "history"}
+trainer.save_pretrained("./release/v1/", pathway_names=pathway_list)
 ```
 
 #### Trainer Parameters
 
 | Parameter | Default | Description |
-| --- | --- | --- |
+|---|---|---|
 | `model` | *required* | Any `nn.Module` |
-| `train_loader` | *required* | Training `DataLoader` |
-| `val_loader` | *required* | Validation `DataLoader` |
+| `train_loader` / `val_loader` | *required* | Training / validation `DataLoader` |
 | `criterion` | *required* | Loss function |
-| `optimizer` | `None` | Custom optimizer (default: `AdamW`) |
-| `lr` | `1e-4` | Learning rate (if no custom optimizer) |
-| `epochs` | `100` | Total training epochs |
+| `optimizer` | `None` | Custom optimizer (default: `AdamW` from `lr` / `weight_decay`) |
+| `lr` | `1e-4` | Learning rate (when no custom optimizer) |
+| `weight_decay` | `0.0` | Weight decay (when no custom optimizer) |
+| `epochs` | `100` | Total epochs |
 | `warmup_epochs` | `10` | Linear warmup before cosine annealing |
+| `device` | `"cuda"` | Torch device |
+| `output_dir` | `"./checkpoints"` | Directory for checkpoints/logs |
+| `model_name` | `"model"` | Used in checkpoint filenames (`best_model_<name>.pth`) |
 | `use_amp` | `False` | Mixed precision (FP16) |
 | `grad_accum_steps` | `1` | Gradient accumulation |
-| `whole_slide` | `False` | Dense whole-slide mode |
-| `output_dir` | `./checkpoints` | Directory for checkpoints/logs |
-| `callbacks` | `[]` | List of `TrainerCallback` instances |
-| `resume` | `False` | Resume from checkpoint |
+| `whole_slide` | `False` | Dense whole-slide training mode |
+| `val_whole_slide` | `None` | Whole-slide mode for validation (defaults to `whole_slide`) |
+| `callbacks` | `None` | List of `TrainerCallback` instances |
+| `resume` | `False` | Resume from a checkpoint in `output_dir` |
 
 #### Callbacks
 
-Subclass `TrainerCallback` to hook into the training loop:
+Subclass `TrainerCallback` to hook into the loop:
 
 ```python
 from spatial_transcript_former.training import TrainerCallback
@@ -457,32 +397,25 @@ from spatial_transcript_former.training import TrainerCallback
 class WandbCallback(TrainerCallback):
     def on_epoch_end(self, trainer, epoch, metrics):
         wandb.log(metrics, step=epoch)
-
-    def should_stop(self, trainer, epoch, metrics):
-        return False  # never stop early
 ```
 
 | Hook | When |
-| --- | --- |
+|---|---|
 | `on_train_begin(trainer)` | Start of `fit()` |
 | `on_epoch_begin(trainer, epoch)` | Before each epoch |
 | `on_epoch_end(trainer, epoch, metrics)` | After validation |
 | `on_train_end(trainer, results)` | End of `fit()` |
-| `should_stop(trainer, epoch, metrics)` | Return `True` to stop |
+| `should_stop(trainer, epoch, metrics)` | Return `True` to stop early |
 
-Built-in: `EarlyStoppingCallback(patience=15, min_delta=0.0)`
-
----
+Built-in: `EarlyStoppingCallback(patience=15, min_delta=0.0)` (monitors `val_loss`).
 
 ### Programmatic Training (Low-Level)
-
-For full control, use the engine functions directly:
 
 ```python
 from spatial_transcript_former.training import train_one_epoch, validate, CompositeLoss
 
-criterion = CompositeLoss(alpha=1.0)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+criterion = CompositeLoss(alpha=1.0, pcc_type="ccc")
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
 for epoch in range(100):
     train_loss = train_one_epoch(
@@ -496,95 +429,86 @@ for epoch in range(100):
     print(f"Epoch {epoch}: train={train_loss:.4f}, val={val_metrics['val_loss']:.4f}")
 ```
 
----
+`validate(...)` returns a dict: `val_loss`, `val_mae`, `val_baseline_mae`, `val_pcc`, `val_ccc`, `val_pcc_per_pathway`, `val_ccc_per_pathway`, `pred_variance`, `spatial_coherence`, `attn_correlation` (entries are `None` when not applicable).
 
 ### Loss Functions (`training.losses`)
 
-All losses accept `(B, G)` patch-level or `(B, N, G)` dense inputs, with optional `mask` for padded positions.
+All accept `(B, P)` patch-level or `(B, N, P)` dense inputs, with optional `mask` (padded positions) and `pathway_mask` (invalid/zero-variance pathways). `CLIPAlignmentLoss` takes `mask` only.
 
 | Class | Formula / Description |
-| --- | --- |
-| `MaskedMSELoss` | Standard MSE with optional padding mask |
-| `PCCLoss` | `1 - mean(PCC)` — gene-wise spatial Pearson correlation |
-| `CompositeLoss` | `MSE + α · (1 - PCC)` — balances magnitude and spatial pattern |
-| `ZINBLoss` | Zero-Inflated Negative Binomial NLL — for raw count data |
-| `MaskedHuberLoss` | Huber (SmoothL1) — robust to outlier spots |
-| `AuxiliaryPathwayLoss` | Wraps any base loss + PCC on pathway bottleneck scores |
+|---|---|
+| `MaskedMSELoss` | MSE over valid positions |
+| `MaskedHuberLoss` | Huber / Smooth-L1 — robust to outlier spots (`delta=1.0`) |
+| `PCCLoss` | `1 − mean(PCC)` — per-pathway spatial Pearson correlation (scale-invariant) |
+| `CCCLoss` | `1 − mean(CCC)` — concordance correlation; penalises mean/variance offsets too |
+| `CLIPAlignmentLoss` | Batch-discriminative anti-collapse regulariser in pathway space (opt-in) |
+| `CompositeLoss` | `MSE/Huber + α·(1 − PCC/CCC) [+ clip_weight·L_CLIP]` |
 
-### Training Engine (`training.engine`)
-
-| Function | Description |
-| --- | --- |
-| `train_one_epoch(model, loader, criterion, optimizer, device, ...)` | One epoch of training. Handles gradient accumulation, AMP, and both patch/WSI modes. Returns average loss. |
-| `validate(model, loader, criterion, device, ...)` | Validation pass. Returns `dict` with `val_loss`, `val_mae`, `val_pcc`, `pred_variance`, and optional `attn_correlation`. |
+`CompositeLoss(alpha=1.0, eps=1e-8, mse_type="mse"|"huber", pcc_type="pcc"|"ccc", clip_weight=0.0, clip_temperature=0.07)`. The CLI `--loss` values map onto these: `mse`, `pcc`, `ccc`, `mse_pcc`, `mse_ccc`, `mse_ccc_clip`, `mse_huber`.
 
 ### Experiment Logger (`training.experiment_logger`)
 
-Offline-friendly logger (no W&B dependency). Writes metrics to SQLite and a JSON summary.
+Offline-friendly logger (no W&B dependency). Writes per-epoch metrics to SQLite and a JSON summary.
 
 ```python
+from spatial_transcript_former.training import ExperimentLogger
+
 logger = ExperimentLogger(output_dir, config_dict)
-logger.log_epoch(epoch, {"train_loss": 0.1, "val_loss": 0.2, "val_pcc": 0.65})
+logger.log_epoch(epoch, {"train_loss": 0.1, "val_loss": 0.2, "val_ccc": 0.65})
 logger.finalize(best_val_loss=0.15)
 ```
 
 | Output File | Contents |
-| --- | --- |
-| `training_logs.sqlite` | Per-epoch metrics table |
-| `results_summary.json` | Config + final metrics + runtime |
+|---|---|
+| `training_logs.sqlite` | Per-epoch metrics (table `metrics`, columns added dynamically) |
+| `results_summary.json` | `config` + final metrics + runtime |
 
 ### Checkpoint Lifecycle
 
-During training, checkpoints are managed by `training.checkpoint` (the *internal* module — distinct from the public `save_pretrained`):
+During training, full training state (for `--resume`) is managed by `training.checkpoint` — the *internal* module, distinct from the public `save_pretrained`:
 
 | Function | Purpose |
-| --- | --- |
-| `save_checkpoint(model, optimizer, scaler, schedulers, ...)` | Saves full training state for `--resume` |
-| `load_checkpoint(model, optimizer, scaler, schedulers, ...)` | Restores training state |
+|---|---|
+| `save_checkpoint(model, optimizer, scaler, schedulers, epoch, best_val_metric, output_dir, model_name)` | Writes `latest_model_<name>.pth` (full training state) |
+| `load_checkpoint(model, optimizer, scaler, schedulers, output_dir, model_name, device)` | Restores it → `(start_epoch, best_val_metric, loaded_schedulers)` |
 
-After training is complete, use the public `save_pretrained` to export a clean, inference-ready checkpoint:
-
-```python
-from spatial_transcript_former import save_pretrained
-
-# Export for inference (strips optimizer/scheduler state)
-save_pretrained(model, "./release/v1/", gene_names=gene_list)
-```
+After training, use the public `save_pretrained` to export a clean, inference-ready checkpoint directory.
 
 ---
 
 ## Bring Your Own Data
 
-All datasets implement the `SpatialDataset` contract (in `data.base`). The contract requires `__getitem__` to return:
+All datasets implement the `SpatialDataset` contract (in `data.base`). `__getitem__` must return a **5-tuple**:
 
 ```python
-(features, gene_counts, rel_coords)
-# features:    (S, D) tensor — patch embeddings (S = 1 + neighbours)
-# gene_counts: (G,)   tensor — expression targets
-# rel_coords:  (S, 2) tensor — relative spatial coordinates
+(features, gene_counts, pathway_targets, rel_coords, mask)
+# features:        (S, D) tensor — patch embeddings (S = 1 + neighbours), or an image tensor
+# gene_counts:     legacy slot — pass None (the model is pathway-exclusive)
+# pathway_targets: (P,) tensor — the supervised target (or None for inference-only)
+# rel_coords:      (S, 2) tensor — coordinates relative to the centre patch
+# mask:            (S,) bool tensor — True = padded, or None
 ```
 
 ### Minimal Implementation
 
 ```python
-from spatial_transcript_former.data.base import SpatialDataset
 import torch
+from spatial_transcript_former.data.base import SpatialDataset
 
 class MyVisiumDataset(SpatialDataset):
-    def __init__(self, features, gene_matrix, coords):
+    def __init__(self, features, pathways, coords):
         self._features = torch.as_tensor(features, dtype=torch.float32)
-        self._genes = torch.as_tensor(gene_matrix, dtype=torch.float32)
+        self._pathways = torch.as_tensor(pathways, dtype=torch.float32)
         self._coords = torch.as_tensor(coords, dtype=torch.float32)
-        self.num_genes = self._genes.shape[1]
+        self.num_pathways = self._pathways.shape[1]
 
     def __len__(self):
         return len(self._features)
 
     def __getitem__(self, idx):
-        feat = self._features[idx].unsqueeze(0)  # (1, D)
-        genes = self._genes[idx]                   # (G,)
-        rel_coord = torch.zeros(1, 2)              # centre = [0,0]
-        return feat, genes, rel_coord
+        feat = self._features[idx].unsqueeze(0)   # (1, D)
+        rel = torch.zeros(1, 2)                    # centre = [0, 0]
+        return feat, None, self._pathways[idx], rel, None
 ```
 
 ### Training Your Custom Dataset
@@ -593,16 +517,17 @@ class MyVisiumDataset(SpatialDataset):
 from torch.utils.data import DataLoader, random_split
 from spatial_transcript_former import SpatialTranscriptFormer, Trainer
 from spatial_transcript_former.training import CompositeLoss, EarlyStoppingCallback
+from spatial_transcript_former.recipes.hest.dataset import collate_fn_patch
 
-dataset = MyVisiumDataset(features, gene_matrix, coords)
+dataset = MyVisiumDataset(features, pathways, coords)
 train_ds, val_ds = random_split(dataset, [0.8, 0.2])
 
-model = SpatialTranscriptFormer(num_genes=dataset.num_genes, backbone_name="phikon")
+model = SpatialTranscriptFormer(num_pathways=dataset.num_pathways, backbone_name="phikon")
 
 trainer = Trainer(
     model=model,
-    train_loader=DataLoader(train_ds, batch_size=32, shuffle=True),
-    val_loader=DataLoader(val_ds, batch_size=64),
+    train_loader=DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=collate_fn_patch),
+    val_loader=DataLoader(val_ds, batch_size=64, collate_fn=collate_fn_patch),
     criterion=CompositeLoss(),
     epochs=100,
     callbacks=[EarlyStoppingCallback(patience=15)],
@@ -611,4 +536,4 @@ results = trainer.fit()
 trainer.save_pretrained("./my_model/")
 ```
 
-See `recipes/custom/README.md` for the full guide.
+See [`recipes/custom/README.md`](../src/spatial_transcript_former/recipes/custom/README.md) for the full guide.

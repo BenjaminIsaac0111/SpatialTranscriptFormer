@@ -20,50 +20,63 @@ class SpatialDataset(Dataset, ABC):
     Any dataset used with SpatialTranscriptFormer must subclass this and
     implement :meth:`__getitem__` and :meth:`__len__`.
 
-    ``__getitem__`` must return a 3-tuple::
+    ``__getitem__`` must return a 5-tuple::
 
-        (features, gene_counts, rel_coords)
+        (features, gene_counts, pathway_targets, rel_coords, mask)
 
     where:
 
     * **features** — ``(S, D)`` float tensor of patch embeddings
       (``S`` = 1 + K neighbours, ``D`` = backbone feature dim), or
       ``(3, H, W)`` / ``(S, 3, H, W)`` image tensor in raw-patch mode.
-    * **gene_counts** — ``(G,)`` float tensor of gene expression targets.
+    * **gene_counts** — legacy slot kept for tuple compatibility. Set to
+      ``None`` in the current pathway-exclusive pipeline (the model no longer
+      reconstructs gene expression).
+    * **pathway_targets** — ``(P,)`` float tensor of pre-computed pathway
+      activity targets — the supervised signal (see
+      :mod:`spatial_transcript_former.recipes.hest.compute_pathway_activities`).
+      May be ``None`` for inference-only datasets with no targets.
     * **rel_coords** — ``(S, 2)`` float tensor of spatial coordinates
       relative to the centre patch (centre is always ``[0, 0]``).
+    * **mask** — ``(S,)`` boolean padding mask (``True`` = padded/ignore), or
+      ``None`` when no padding is required.
 
-    Subclasses SHOULD also expose :attr:`num_genes` and (optionally)
-    :attr:`gene_names` as properties.
+    The matching collate function
+    (:func:`spatial_transcript_former.recipes.hest.dataset.collate_fn_patch`)
+    stacks each slot into a batch, passing ``None`` through for absent slots —
+    exactly what :func:`spatial_transcript_former.training.engine.train_one_epoch`
+    and :class:`~spatial_transcript_former.training.trainer.Trainer` consume.
+
+    Subclasses SHOULD also expose :attr:`num_pathways` and (optionally)
+    :attr:`pathway_names`.
 
     Example::
 
         class MyVisiumDataset(SpatialDataset):
-            def __init__(self, slide_path, genes, coords, features):
+            def __init__(self, features, pathways, coords):
                 self._features = features   # (N, D)
-                self._genes = genes         # (N, G)
+                self._pathways = pathways   # (N, P)
                 self._coords = coords       # (N, 2)
+                self.num_pathways = pathways.shape[1]
 
             def __len__(self):
                 return len(self._features)
 
             def __getitem__(self, idx):
-                center = self._coords[idx]
-                rel = self._coords - center   # simplest: no neighbour selection
-                return self._features[idx:idx+1], self._genes[idx], rel[idx:idx+1]
-
-            @property
-            def num_genes(self):
-                return self._genes.shape[1]
-
-            @property
-            def gene_names(self):
-                return None  # or a list of gene symbols
+                feat = self._features[idx].unsqueeze(0)   # (1, D)
+                rel = torch.zeros(1, 2)                    # centre = [0, 0]
+                return feat, None, self._pathways[idx], rel, None
     """
 
     @abstractmethod
-    def __getitem__(self, idx) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return ``(features, gene_counts, rel_coords)`` for index ``idx``."""
+    def __getitem__(self, idx) -> Tuple[
+        torch.Tensor,
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        torch.Tensor,
+        Optional[torch.Tensor],
+    ]:
+        """Return ``(features, gene_counts, pathway_targets, rel_coords, mask)``."""
         ...
 
     @abstractmethod
@@ -73,12 +86,12 @@ class SpatialDataset(Dataset, ABC):
 
     # ------------------------------------------------------------------
     # Optional attributes — subclasses can set these as instance
-    # attributes (self.num_genes = ...) or override as properties.
+    # attributes (self.num_pathways = ...) or override as properties.
     # ------------------------------------------------------------------
-    #: Number of gene expression targets.  Set in __init__ or override.
-    num_genes: int = 0
-    #: Ordered list of gene symbols, or None if unavailable.
-    gene_names: Optional[List[str]] = None
+    #: Number of pathway activity targets.  Set in __init__ or override.
+    num_pathways: int = 0
+    #: Ordered list of pathway names, or None if unavailable.
+    pathway_names: Optional[List[str]] = None
 
 
 # ---------------------------------------------------------------------------

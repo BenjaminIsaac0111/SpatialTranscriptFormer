@@ -1,8 +1,8 @@
 """
-Multiple-Instance Learning (MIL) baselines for slide-level gene expression.
+Multiple-Instance Learning (MIL) baselines for slide-level pathway activity.
 
 Models here aggregate an arbitrary number of patch features into a single
-slide-level prediction, trained with bag-level (mean-expression) supervision.
+slide-level prediction, trained with bag-level (mean-activity) supervision.
 
 * ``AttentionMIL``  — gated attention pooling (Ilse et al., 2018)
 * ``TransMIL``      — Nyström Transformer with PPEG positional encoding
@@ -20,7 +20,7 @@ from nystrom_attention import NystromAttention
 class AttentionMIL(nn.Module):
     """
     Gated Attention Multiple Instance Learning (MIL) for regression.
-    Aggregates patch features to predict a global slide-level gene expression vector.
+    Aggregates patch features to predict a global slide-level pathway activity vector.
 
     Reference:
         Ilse et al. (2018). "Attention-based Deep Multiple Instance Learning." ICML.

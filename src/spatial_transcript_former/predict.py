@@ -6,7 +6,7 @@ Provides three user-facing components:
 * :class:`FeatureExtractor` — wraps a backbone (ResNet, Phikon, …) to turn
   raw image patches into feature embeddings.
 * :class:`Predictor` — wraps a trained :class:`SpatialTranscriptFormer` model
-  to predict gene expression from features + spatial coordinates.
+  to predict pathway activity from features + spatial coordinates.
 * :func:`inject_predictions` — injects predictions into an AnnData object
   for seamless Scanpy integration.
 
@@ -14,6 +14,7 @@ Additionally retains the :func:`plot_training_summary` helper used during
 training validation.
 """
 
+import json
 import os
 from typing import Dict, List, Optional, Union
 
@@ -126,10 +127,10 @@ class Predictor:
         predictor = Predictor(model, device="cuda")
 
         # Single patch
-        genes = predictor.predict_patch(image_tensor)
+        pathways = predictor.predict_patch(image_tensor)
 
         # Whole slide (pre-extracted features)
-        genes = predictor.predict_wsi(features, coords)
+        pathways = predictor.predict_wsi(features, coords)
     """
 
     def __init__(
@@ -149,7 +150,7 @@ class Predictor:
         self.model.eval()
         self.use_amp = use_amp
 
-        # Expose gene names if the model has them (set by from_pretrained)
+        # Expose pathway names if the model has them (set by from_pretrained)
         self.pathway_names: Optional[List[str]] = getattr(model, "pathway_names", None)
 
     @torch.no_grad()
@@ -533,3 +534,119 @@ def plot_training_summary(
     plt.savefig(save_path, dpi=200, bbox_inches="tight", facecolor="#0f172a")
     plt.close(fig)
     print(f"Saved pathway summary to {save_path}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CLI entry point (stf-predict)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _load_run_config(run_dir: str) -> dict:
+    """Read the training run's saved config from ``results_summary.json``."""
+    summary_path = os.path.join(run_dir, "results_summary.json")
+    if not os.path.isfile(summary_path):
+        raise FileNotFoundError(
+            f"results_summary.json not found in {run_dir!r}. "
+            "Point --run-dir at a directory produced by stf-train."
+        )
+    with open(summary_path, "r") as f:
+        summary = json.load(f)
+    # The trainer nests the run configuration under "config".
+    return summary.get("config", summary)
+
+
+def _load_weights_into(model, run_dir: str, model_type: str, device: str) -> None:
+    """Load best (else latest) checkpoint weights into ``model`` in place."""
+    candidates = [
+        os.path.join(run_dir, f"best_model_{model_type}.pth"),
+        os.path.join(run_dir, f"latest_model_{model_type}.pth"),
+    ]
+    ckpt_path = next((p for p in candidates if os.path.isfile(p)), None)
+    if ckpt_path is None:
+        raise FileNotFoundError(
+            f"No checkpoint found in {run_dir!r} (looked for "
+            f"best_model_{model_type}.pth / latest_model_{model_type}.pth)."
+        )
+    print(f"Loading checkpoint: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
+    state_dict = ckpt.get("model_state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
+    # Strip the torch.compile wrapper prefix if the checkpoint was compiled.
+    if any(k.startswith("_orig_mod.") for k in state_dict):
+        state_dict = {k.replace("_orig_mod.", "", 1): v for k, v in state_dict.items()}
+    model.load_state_dict(state_dict, strict=False)
+
+
+def main():
+    """CLI entry point for ``stf-predict``.
+
+    Rebuilds a trained model from a run directory (``results_summary.json`` +
+    ``best_model_<type>.pth``, as written by ``stf-train``), runs inference on
+    one HEST sample, and writes a spatial pathway-activity plot (prediction vs.
+    ground truth) to ``--output-dir``.
+    """
+    import argparse
+    from types import SimpleNamespace
+
+    from spatial_transcript_former.training.builder import setup_model
+    from spatial_transcript_former.visualization import run_inference_plot
+
+    parser = argparse.ArgumentParser(
+        prog="stf-predict",
+        description="Run pathway-activity inference for a HEST sample and save "
+        "a spatial prediction-vs-truth plot.",
+    )
+    parser.add_argument(
+        "--run-dir",
+        required=True,
+        help="Training run directory containing results_summary.json and "
+        "best_model_<type>.pth (as written by stf-train).",
+    )
+    parser.add_argument(
+        "--sample-id", required=True, help="HEST sample ID to run on (e.g. TENX156)."
+    )
+    parser.add_argument(
+        "--output-dir", default="./results", help="Where to save the output plot."
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Override the data directory stored in the run config "
+        "(useful when predicting on a different machine).",
+    )
+    parser.add_argument(
+        "--epoch", type=int, default=0, help="Epoch label for the output filename."
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Torch device (default: cuda if available, else cpu).",
+    )
+    cli = parser.parse_args()
+
+    config = _load_run_config(cli.run_dir)
+    run_args = SimpleNamespace(**config)
+
+    # Inference-time overrides: never compile or re-download backbone weights
+    # (the checkpoint already carries them), and route outputs as requested.
+    run_args.compile = False
+    run_args.pretrained = False
+    run_args.output_dir = cli.output_dir
+    if cli.data_dir is not None:
+        run_args.data_dir = cli.data_dir
+    if not getattr(run_args, "pathway_targets_dir", None):
+        run_args.pathway_targets_dir = os.path.join(
+            run_args.data_dir, "pathway_activities"
+        )
+
+    device = cli.device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = setup_model(run_args, device)
+    _load_weights_into(model, cli.run_dir, run_args.model, device)
+    model.eval()
+
+    print(f"Running inference for sample {cli.sample_id!r} on {device}...")
+    run_inference_plot(model, run_args, cli.sample_id, cli.epoch, device)
+
+
+if __name__ == "__main__":
+    main()

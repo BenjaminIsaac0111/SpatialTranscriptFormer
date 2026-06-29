@@ -1,45 +1,60 @@
-# Intellectual Property Statement
+# Attribution, Provenance & Design Notes
 
-This document identifies the core technological and methodological contributions of Benjamin Isaac Wilson within the **SpatialTranscriptFormer** project. The Author retains all intellectual property rights to these components.
+> **Licensing note:** SpatialTranscriptFormer is released under the Apache
+> License 2.0 (see [LICENSE](../LICENSE) and [NOTICE](../NOTICE)). This document
+> is *descriptive* — it records design provenance and attributions for readers
+> and reviewers. It does not itself grant or reserve any rights.
 
-## Scientific Context & Attribution
+## Provenance
 
-While this implementation introduces novel spatial constraints and transcriptomics-specific bottlenecks, the core multimodal interaction logic is inspired by and derived from the **SURVPATH** architecture ([Jaume et al., 2024](https://arxiv.org/abs/2303.15545)). This work focuses on the **adaptation and extension** of those concepts to the domain of high-dimensional spatial gene expression regression.
+This implementation is original work. The multimodal interaction framing —
+treating learnable biological-pathway tokens as a bottleneck that cross-attends
+to histology patch tokens — was **conceptually inspired by** SURVPATH
+([Jaume et al., 2024](https://arxiv.org/abs/2303.15545)). **No SURVPATH source
+code is used, copied, or adapted here**; the model, losses, data pipeline, and
+training code were written from scratch for the spatial-transcriptomics
+pathway-activity task.
 
-## 1. Model Architecture (SpatialTranscriptFormer)
+## Design contributions
 
-The primary innovation is the **multimodal bottleneck transformer** designed for spatial transcriptomics regression. Key IP components include:
+The notable design choices of this project (described for readers/reviewers, not
+as legal claims):
 
-- **Pathway-Histology Interaction Layer**: The specific implementation of Cross-Attention where learnable pathway tokens (queries) interact with high-resolution histology tokens (keys/values).
-- **Quadrant-Based Interaction Masking**: The logic used to zero out specific attention quadrants (e.g., $A_{H \to H}$) to optimize memory while maintaining multimodal context.
-- **Biologically-Informed Reconstruction Bottleneck**: The specific matrix decomposition approach where gene expression is reconstructed from a linear combination of pathway activations.
+- **Pathway-exclusive prediction.** The model predicts pre-computed spatial
+  pathway-activity targets directly, with no intermediate gene-reconstruction
+  step. Targets are computed offline (QC → CP10k normalisation → mean pathway
+  aggregation; see [PATHWAY_MAPPING.md](PATHWAY_MAPPING.md)), decoupling
+  biological-knowledge integration from training and removing the circular
+  auxiliary-loss dependency used in earlier prototypes.
 
-### Proposed Auxiliary Pathway Loss
+- **Dot-product + Softplus scoring head.** Per-spot pathway scores are
+  `softplus(scale · (patch · pathwayᵀ / √d) + bias)`, with learnable per-pathway
+  scale and bias. Softplus yields non-negative scores matching the
+  mean-log1p-CP10k targets; the √d scaling keeps affinities well-conditioned (as
+  in scaled dot-product attention). This is *not* cosine similarity.
 
-To prevent bottleneck collapse and provide a direct gradient signal to the pathway tokens, we use the `AuxiliaryPathwayLoss`. This loss compares the model's internal pathway scores against "ground truth" pathway activations computed from the gene expression targets via MSigDB membership.
+- **Configurable quad-flow interaction masking.** Attention between pathway (P)
+  and histology (H) tokens is selectable per quadrant (`p2p`, `p2h`, `h2p`,
+  `h2h`), enabling ablations and the "pathway bottleneck" variant (block `h2h`
+  so all inter-patch information must flow through named pathways).
 
-The total objective becomes:
-$$\mathcal{L} = \mathcal{L}_{gene} + \lambda_{aux} (1 - \text{PCC}(\text{pathway\_scores}, \text{target\_pathways}))$$
+- **Slide-stationary spatial positional encoding.** Patch tokens receive a
+  learned 2-D encoding of centred/standardised coordinates, so the model learns
+  spatially-varying pathway maps rather than slide-level averages.
 
-The `--log-transform` flag applies `log1p` to targets, mitigating the heavy-tailed gene expression distribution where housekeeping genes dominate MSE.
+- **Moran's I as diagnostic + collapse detector.** Spatial autocorrelation is
+  used to curate targets and to detect representation collapse during validation
+  (correlation of predicted vs. ground-truth per-pathway Moran's I), rather than
+  as a loss term. See [spatial_stats.py](../src/spatial_transcript_former/data/spatial_stats.py).
 
-The full training objective with pathway sparsity regularisation:
-$$\mathcal{L} = \mathcal{L}_{task} + \lambda \|W_{recon}\|_1$$
+## Third-party attributions
 
-## 2. Spatial Context Methodologies
+See [NOTICE](../NOTICE) for the licenses and attribution requirements of the
+datasets, gene sets, and foundation-model backbones this framework uses at
+runtime (HEST-1k, MSigDB Hallmarks, CTransPath / Phikon / GigaPath / Hibou, …).
 
-- **Euclidean-Gated Attention**: The implementation of spatial distance-based masking ($M_{spatial}$) to constrain model focus to local morphological regions.
-- **Coordinate-Aware Augmentation**: Specific strategies for utilizing relative patch coordinates as inputs/constraints in the transformer pipeline.
+## Citing
 
-## 3. Data Integration & Alignment
-
-- **Gene-Lock Alignment Logic**: The specific implementation of automated gene set alignment across heterogeneous spatial transcriptomics technologies (Visium, Xenium, etc.).
-- **Multi-Resolution Patch Loading**: Specialized dataloader logic for handling whole-slide histology integration with localized gene expression matrices.
-
-## 4. Visualization & Interpretability
-
-- **Histology-Gene Overlay Heatmaps**: The specific implementation of scaling and aligning predicted gene expression distributions onto full-resolution WSIs for clinical interpretation.
-
----
-
-For technical inquiries or discussion regarding these methodologies, please contact the Author.
+If you use this work in academic research, please cite this repository and its
+author, Benjamin Isaac Wilson, alongside the relevant third-party works listed
+in [NOTICE](../NOTICE).

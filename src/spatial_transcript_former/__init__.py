@@ -1,5 +1,5 @@
 """
-SpatialTranscriptFormer — predict gene expression from histology.
+SpatialTranscriptFormer — predict biological pathway activity from histology.
 
 Core public API::
 

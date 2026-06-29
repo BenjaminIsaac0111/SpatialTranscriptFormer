@@ -1,0 +1,38 @@
+SpatialTranscriptFormer
+Copyright 2026 Benjamin Isaac Wilson
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. A copy of the License is
+provided in the LICENSE file and at http://www.apache.org/licenses/LICENSE-2.0
+
+================================================================================
+Third-party components and data
+================================================================================
+
+This framework integrates with, and/or interoperates with, third-party
+software, model weights, and datasets that are governed by their own licenses.
+These are NOT redistributed in this repository: they are downloaded or supplied
+by the user at runtime and remain subject to their original terms. The Apache
+2.0 license over this source code does not grant any rights to them.
+
+- HEST-1k dataset (Mahmood Lab) — CC BY-NC-SA 4.0 (non-commercial, share-alike).
+  Used here for research/benchmarking only. Users must obtain independent rights
+  for any commercial or non-research use.
+
+- MSigDB Hallmark gene sets (Broad Institute) — copyright (c) 2004-2025 Broad
+  Institute, Inc., MIT, and the Regents of the University of California; provided
+  under CC BY 4.0 (attribution required). Individual gene sets may carry
+  additional third-party terms (e.g. KEGG, BioCarta).
+
+- Pathology foundation-model backbones (e.g. CTransPath, Phikon, GigaPath,
+  Hibou) — each subject to its own license. Some are gated or restricted and may
+  prohibit commercial use. Select a backbone whose license fits your use case.
+
+================================================================================
+Conceptual attribution
+================================================================================
+
+The multimodal pathway-histology interaction framing was conceptually inspired
+by SURVPATH (Jaume et al., 2024; https://arxiv.org/abs/2303.15545). No SURVPATH
+source code is used, copied, or adapted in this project; the implementation here
+is original.

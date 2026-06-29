@@ -140,9 +140,7 @@ This makes the pipeline applicable to any disease of interest without changing t
 After training, the `stf-predict` CLI and the `Predictor` Python API produce spatial heatmaps of pathway activation across the tissue. Each pathway gets its own overlay plot, allowing direct visual comparison between, e.g., hypoxia activation and VEGF signalling.
 
 ```bash
-stf-predict --data-dir hest_data --sample-id MEND29 \
-    --model-path checkpoints/best_model.pth \
-    --model-type interaction
+stf-predict --run-dir checkpoints --sample-id MEND29 --output-dir results
 ```
 
 Plots are saved to `./results/` by default.

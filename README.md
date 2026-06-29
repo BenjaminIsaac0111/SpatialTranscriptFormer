@@ -28,10 +28,10 @@ predictor = Predictor(model, device="cuda")
 #    coords:        (N, 2) tensor of spatial coordinates (from your WSI tiling)
 features = extractor.extract_batch(image_patches, batch_size=64)  # → (N, 768)
 
-# 3. Predict pathway activity scores from extracted features
-predictions = predictor.predict_wsi(features, coords)  # → (1, P)
+# 3. Predict per-spot pathway activity from extracted features
+predictions = predictor.predict_wsi(features, coords, return_dense=True)  # → (1, N, P)
 
-# 4. Integrate with Scanpy
+# 4. Integrate with Scanpy (one pathway-activity vector per spot)
 inject_predictions(adata, coords, predictions[0], pathway_names=model.pathway_names)
 ```
 
@@ -50,18 +50,18 @@ For more details, see the **[Python API Reference](docs/API.md)**.
 
 ## License
 
-This project is protected by a **Proprietary Source Code License**. See the [LICENSE](LICENSE) file for full details.
+SpatialTranscriptFormer is released under the **[Apache License 2.0](LICENSE)** — you are free to use, modify, and redistribute it (including commercially), provided you retain the copyright/license notices and state significant changes. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-- ✅ **Permitted**: Evaluation for employment, Academic Research, and Non-Profit use.
-- 🤝 **For-Profit Use**: Permitted only under a **negotiated agreement** with the author.
-  - **Note on Foundation Models**: This architecture is backbone-agnostic. Any negotiated commercial agreement covers *only* the SpatialTranscriptFormer source code and IP. It does **not** grant commercial rights to use restricted third-party weights (e.g., CTransPath, Phikon). To use this system commercially, you must select a foundation model with a compatible open or commercial license (e.g., Hibou, Virchow, or H-Optimus-0).
-  - **Note on HEST-1k Dataset**: The benchmark data used in this project is sourced from the **HEST-1k** dataset (Mahmood Lab), which is licensed under **CC BY-NC-SA 4.0**. This data is strictly for non-commercial research and cannot be used for commercial training or clinical deployment without explicit permission from the original authors.
-  - **Note on MSigDB**: This project uses data from the **Molecular Signatures Database (MSigDB)** (versions v6.0–v7.5.1, and v2022.1+). The contents are protected by copyright © 2004–2025 Broad Institute, Inc., MIT, and Regents of the University of California, and are distributed under the **CC BY 4.0** license. While this allows for commercial use, users must provide appropriate attribution. Note that individual gene sets within MSigDB may be subject to additional terms from third-party sources (e.g., KEGG).
-- ❌ **Prohibited**: Redistribution and unauthorized commercial exploitation.
+> [!IMPORTANT]
+> Apache-2.0 covers **this repository's source code only**. It does **not** grant rights to the third-party components this framework relies on at runtime, which keep their own licenses and are not redistributed here:
+>
+> - **Foundation-model backbones** (e.g. CTransPath, Phikon, GigaPath, Hibou) — each has its own license; some are gated or prohibit commercial use. Choose one whose license fits your use case (e.g. Apache-2.0 models such as Hibou, Virchow, or H-Optimus-0 for commercial use).
+> - **HEST-1k dataset** (Mahmood Lab) — **CC BY-NC-SA 4.0** (non-commercial, share-alike): research/benchmarking only; obtain independent rights for commercial or clinical use.
+> - **MSigDB Hallmark gene sets** (Broad Institute, v6.0–v7.5.1 / v2022.1+) — **CC BY 4.0**, attribution required; some subsets carry extra terms (e.g. KEGG). © 2004–2025 Broad Institute, Inc., MIT, and the Regents of the University of California.
 
-## Intellectual Property
+## Attribution & Provenance
 
-The core architectural innovations, including the **SpatialTranscriptFormer** interaction logic and spatial masking strategies, are the unique Intellectual Property of the author. For a detailed breakdown, see the [IP Statement](docs/IP_STATEMENT.md).
+This is original work by Benjamin Isaac Wilson. The pathway↔histology interaction framing was **conceptually inspired by** SURVPATH (Jaume et al., 2024) — no SURVPATH source code is used or adapted. For the design contributions and third-party attributions, see the [Attribution & Design Notes](docs/IP_STATEMENT.md) and [NOTICE](NOTICE). If you use this work in academic research, please cite this repository and its author.
 
 ---
 
@@ -105,7 +105,7 @@ python scripts/run_preset.py --preset stf_small
 ### 4. Inference & Visualization
 
 ```bash
-stf-predict --data-dir A:\hest_data --sample-id MEND29 --model-path checkpoints/best_model.pth --model-type interaction
+stf-predict --run-dir checkpoints --sample-id MEND29 --output-dir results
 ```
 
 Visualization plots and spatial pathway activation maps will be saved to the `./results` directory. For the full guide, see the **[HEST Recipe Docs](src/spatial_transcript_former/recipes/hest/README.md)**.
@@ -168,4 +168,4 @@ Active research and development is tracked in the **[Research & Improvement Road
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on our coding standards and the process for submitting pull requests. Note that this project is under a proprietary license; contributions involve an assignment of rights for non-academic use.
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on our coding standards and the process for submitting pull requests. Contributions are accepted under the project's Apache-2.0 license (inbound = outbound).
