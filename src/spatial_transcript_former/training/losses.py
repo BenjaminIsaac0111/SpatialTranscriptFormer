@@ -11,6 +11,45 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def get_combined_mask(preds, mask, pathway_mask):
+    """Combine spatial padding mask and pathway validity mask.
+
+    Args:
+        preds: (B, N, G) or (B, G)
+        mask (spatial padding): (B, N) boolean where True = padding/ignore.
+        pathway_mask (pathway validity): (B, G) or (G,) boolean where True = valid.
+
+    Returns:
+        torch.Tensor (boolean): Same shape as preds, True = valid.
+    """
+    if preds.dim() == 3:
+        B, N, G = preds.shape
+        if mask is not None:
+            valid_spatial = ~mask.unsqueeze(-1)  # (B, N, 1)
+        else:
+            valid_spatial = torch.ones(B, N, 1, dtype=torch.bool, device=preds.device)
+
+        if pathway_mask is not None:
+            if pathway_mask.dim() == 1:
+                valid_pathway = pathway_mask.view(1, 1, G).expand(B, N, G)
+            else:
+                valid_pathway = pathway_mask.unsqueeze(1)  # (B, 1, G)
+        else:
+            valid_pathway = torch.ones(B, 1, G, dtype=torch.bool, device=preds.device)
+
+        return valid_spatial & valid_pathway
+    else:
+        B, G = preds.shape
+        if pathway_mask is not None:
+            if pathway_mask.dim() == 1:
+                valid_pathway = pathway_mask.view(1, G).expand(B, G)
+            else:
+                valid_pathway = pathway_mask
+        else:
+            valid_pathway = torch.ones(B, G, dtype=torch.bool, device=preds.device)
+        return valid_pathway
+
+
 class PCCLoss(nn.Module):
     """
     Pearson Correlation Coefficient Loss.
@@ -28,12 +67,13 @@ class PCCLoss(nn.Module):
         super().__init__()
         self.eps = eps
 
-    def forward(self, preds, target, mask=None):
+    def forward(self, preds, target, mask=None, pathway_mask=None):
         """
         Args:
             preds:  (B, G) or (B, N, G)
             target: (B, G) or (B, N, G)
             mask:   (B, N) boolean, True = padded (ignore). Optional.
+            pathway_mask: (B, G) or (G,) boolean, True = valid. Optional.
 
         Returns:
             Scalar loss = 1 - mean(PCC).
@@ -53,7 +93,7 @@ class PCCLoss(nn.Module):
             preds = preds.squeeze(1)  # (B, G)
             target = target.squeeze(1)  # (B, G)
             if mask is not None:
-                valid = ~mask.squeeze(1)  # (B)
+                valid = ~mask.view(-1)  # (B)
                 preds = preds[valid]
                 target = target[valid]
 
@@ -66,6 +106,15 @@ class PCCLoss(nn.Module):
                 torch.sqrt(torch.sum(vx**2, dim=0) + self.eps)
                 * torch.sqrt(torch.sum(vy**2, dim=0) + self.eps)
             )
+            if pathway_mask is not None:
+                if pathway_mask.dim() == 2:
+                    p_mask = pathway_mask.any(dim=0)
+                else:
+                    p_mask = pathway_mask
+                cost = cost[p_mask]
+                if cost.numel() > 0:
+                    return 1 - cost.mean()
+                return torch.tensor(0.0, device=preds.device, requires_grad=True)
             return 1 - cost.mean()
 
         # 1. Masking: Zero out padded positions so they don't contribute to sums
@@ -101,6 +150,13 @@ class PCCLoss(nn.Module):
         )  # (B, G)
 
         # Average across genes, then average across batch
+        if pathway_mask is not None:
+            if pathway_mask.dim() == 1:
+                pathway_mask = pathway_mask.unsqueeze(0).expand(B, -1)
+            valid_cost = cost[pathway_mask]
+            if valid_cost.numel() > 0:
+                return 1 - valid_cost.mean()
+            return torch.tensor(0.0, device=preds.device, requires_grad=True)
         return 1 - cost.mean()
 
 
@@ -115,12 +171,13 @@ class CCCLoss(PCCLoss):
     but systematically offset (wrong mean or variance) will have CCC < PCC.
     """
 
-    def forward(self, preds, target, mask=None):
+    def forward(self, preds, target, mask=None, pathway_mask=None):
         """
         Args:
             preds:  (B, G) or (B, N, G)
             target: (B, G) or (B, N, G)
             mask:   (B, N) boolean, True = padded (ignore). Optional.
+            pathway_mask: (B, G) or (G,) boolean, True = valid. Optional.
 
         Returns:
             Scalar loss = 1 - mean(CCC).
@@ -137,22 +194,33 @@ class CCCLoss(PCCLoss):
             preds = preds.squeeze(1)
             target = target.squeeze(1)
             if mask is not None:
-                valid = ~mask.squeeze(1)
+                valid = ~mask.view(-1)
                 preds = preds[valid]
                 target = target[valid]
 
-            if preds.shape[0] < 2:
+            B_size = preds.shape[0]
+            if B_size < 2:
                 return torch.tensor(0.0, device=preds.device, requires_grad=True)
 
             pred_mean = preds.mean(dim=0)
             target_mean = target.mean(dim=0)
             vx = preds - pred_mean
             vy = target - target_mean
-            cov = (vx * vy).sum(dim=0)
-            var_x = (vx**2).sum(dim=0)
-            var_y = (vy**2).sum(dim=0)
+            cov = (vx * vy).sum(dim=0) / B_size
+            var_x = (vx**2).sum(dim=0) / B_size
+            var_y = (vy**2).sum(dim=0) / B_size
             mean_diff_sq = (pred_mean - target_mean) ** 2
             ccc = (2 * cov) / (var_x + var_y + mean_diff_sq + self.eps)
+
+            if pathway_mask is not None:
+                if pathway_mask.dim() == 2:
+                    p_mask = pathway_mask.any(dim=0)
+                else:
+                    p_mask = pathway_mask
+                ccc = ccc[p_mask]
+                if ccc.numel() > 0:
+                    return 1 - ccc.mean()
+                return torch.tensor(0.0, device=preds.device, requires_grad=True)
             return 1 - ccc.mean()
 
         if mask is not None:
@@ -173,45 +241,53 @@ class CCCLoss(PCCLoss):
             vx = vx * valid.float()
             vy = vy * valid.float()
 
-        cov = (vx * vy).sum(dim=1)  # (B, G)
-        var_x = (vx**2).sum(dim=1)  # (B, G)
-        var_y = (vy**2).sum(dim=1)  # (B, G)
+        # Mean-based covariance and variance calculations (stable under varying N)
+        counts = valid_counts.squeeze(-1)
+        cov = (vx * vy).sum(dim=1) / counts  # (B, G)
+        var_x = (vx**2).sum(dim=1) / counts  # (B, G)
+        var_y = (vy**2).sum(dim=1) / counts  # (B, G)
 
         mean_diff_sq = (pred_means.squeeze(1) - target_means.squeeze(1)) ** 2  # (B, G)
         ccc = (2 * cov) / (var_x + var_y + mean_diff_sq + self.eps)  # (B, G)
 
+        if pathway_mask is not None:
+            if pathway_mask.dim() == 1:
+                pathway_mask = pathway_mask.unsqueeze(0).expand(B, -1)
+            valid_ccc = ccc[pathway_mask]
+            if valid_ccc.numel() > 0:
+                return 1 - valid_ccc.mean()
+            return torch.tensor(0.0, device=preds.device, requires_grad=True)
         return 1 - ccc.mean()
 
 
 class MaskedMSELoss(nn.Module):
     """
-    MSE loss with optional masking for padded positions.
+    MSE loss with optional masking for padded positions and invalid pathways.
 
     When no mask is provided, behaves identically to nn.MSELoss().
     """
 
-    def forward(self, preds, target, mask=None):
+    def forward(self, preds, target, mask=None, pathway_mask=None):
         """
         Args:
             preds:  (B, G) or (B, N, G)
             target: (B, G) or (B, N, G)
             mask:   (B, N) boolean, True = padded (ignore). Optional.
+            pathway_mask: (B, G) or (G,) boolean, True = valid. Optional.
 
         Returns:
             Scalar MSE loss over valid positions.
         """
         diff = (preds - target) ** 2
-
-        if mask is not None and preds.dim() == 3:
-            valid = ~mask.unsqueeze(-1).expand_as(diff)
+        valid = get_combined_mask(preds, mask, pathway_mask)
+        if valid.any():
             return (diff * valid.float()).sum() / valid.sum()
-
-        return diff.mean()
+        return torch.tensor(0.0, device=preds.device, requires_grad=True)
 
 
 class MaskedHuberLoss(nn.Module):
     """
-    Huber (smooth L1) loss with optional masking for padded positions.
+    Huber (smooth L1) loss with optional masking for padded positions and invalid pathways.
 
     More robust to outlier pathway activity values than MSE: quadratic near
     zero, linear beyond delta.
@@ -224,23 +300,22 @@ class MaskedHuberLoss(nn.Module):
         super().__init__()
         self.delta = delta
 
-    def forward(self, preds, target, mask=None):
+    def forward(self, preds, target, mask=None, pathway_mask=None):
         """
         Args:
             preds:  (B, G) or (B, N, G)
             target: (B, G) or (B, N, G)
             mask:   (B, N) boolean, True = padded (ignore). Optional.
+            pathway_mask: (B, G) or (G,) boolean, True = valid. Optional.
 
         Returns:
             Scalar Huber loss over valid positions.
         """
         diff = F.huber_loss(preds, target, reduction="none", delta=self.delta)
-
-        if mask is not None and preds.dim() == 3:
-            valid = ~mask.unsqueeze(-1).expand_as(diff)
+        valid = get_combined_mask(preds, mask, pathway_mask)
+        if valid.any():
             return (diff * valid.float()).sum() / valid.sum()
-
-        return diff.mean()
+        return torch.tensor(0.0, device=preds.device, requires_grad=True)
 
 
 class CLIPAlignmentLoss(nn.Module):
@@ -339,18 +414,19 @@ class CompositeLoss(nn.Module):
         self.clip = CLIPAlignmentLoss(clip_temperature) if clip_weight > 0 else None
         self.clip_weight = clip_weight
 
-    def forward(self, preds, target, mask=None):
+    def forward(self, preds, target, mask=None, pathway_mask=None):
         """
         Args:
             preds:  (B, G) or (B, N, G)
             target: (B, G) or (B, N, G)
             mask:   (B, N) boolean, True = padded (ignore). Optional.
+            pathway_mask: (B, G) or (G,) boolean, True = valid. Optional.
 
         Returns:
             Scalar composite loss.
         """
-        loss = self.mse(preds, target, mask)
-        loss = loss + self.alpha * self.pcc(preds, target, mask)
+        loss = self.mse(preds, target, mask, pathway_mask)
+        loss = loss + self.alpha * self.pcc(preds, target, mask, pathway_mask)
         if self.clip is not None:
             loss = loss + self.clip_weight * self.clip(preds, target, mask)
         return loss

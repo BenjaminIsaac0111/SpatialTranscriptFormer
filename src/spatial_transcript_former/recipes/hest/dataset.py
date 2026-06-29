@@ -40,6 +40,17 @@ from typing import List, Optional, Tuple, Union
 from scipy.spatial import KDTree
 import torch.nn.functional as F
 
+
+def worker_init_fn(worker_id):
+    """Set random seeds for dataloader worker processes to prevent duplicate data streams."""
+    worker_seed = torch.initial_seed() % 2**32
+    import numpy as np
+    import random
+
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 # Augmentation helpers and normalize_coordinates are now in data.base
 # and imported above. Kept here for backward compatibility:
 # from spatial_transcript_former.recipes.hest.dataset import apply_dihedral_augmentation
@@ -162,13 +173,21 @@ class HEST_Dataset(SpatialDataset):
             data = patch  # (3, H, W)
             rel_coords = torch.zeros((1, 2))
 
+        # mask construction for raw patches neighborhood
+        if self.neighborhood_indices is not None:
+            mask = torch.zeros(data.shape[0], dtype=torch.bool)
+            if len(self.coords) < data.shape[0]:
+                mask[len(self.coords) :] = True
+        else:
+            mask = torch.zeros(1, dtype=torch.bool)
+
         # gene_counts removed (pathway-only)
         pathway_act = (
             self.pathway_activities[idx]
             if self.pathway_activities is not None
             else None
         )
-        return data, None, pathway_act, rel_coords
+        return data, None, pathway_act, rel_coords, mask
 
     def __del__(self):
         if self.h5_file:
@@ -334,13 +353,15 @@ def get_hest_dataloader(
                             if name in pw_names:
                                 p_indices.append(pw_names.index(name))
                             else:
-                                p_indices.append(-1)
+                                raise ValueError(
+                                    f"Pathway '{name}' not found in pathway target file {pw_h5_path}. "
+                                    f"Available pathway names: {pw_names}"
+                                )
 
                         p = len(pathway_names)
                         subset_acts = np.zeros((acts.shape[0], p), dtype=np.float32)
                         for i, idx in enumerate(p_indices):
-                            if idx != -1:
-                                subset_acts[:, i] = acts[:, idx]
+                            subset_acts[:, i] = acts[:, idx]
 
                         pathway_activities = torch.tensor(
                             subset_acts[mask_bool], dtype=torch.float32
@@ -378,6 +399,7 @@ def get_hest_dataloader(
         collate_fn=collate_fn_patch,
         pin_memory=True,
         persistent_workers=(num_workers > 0),
+        worker_init_fn=worker_init_fn,
     )
 
 
@@ -487,14 +509,15 @@ class HEST_FeatureDataset(SpatialDataset):
                         if name in pw_names:
                             indices.append(pw_names.index(name))
                         else:
-                            # If a requested pathway is missing, we'll use a zero column
-                            indices.append(-1)
+                            raise ValueError(
+                                f"Pathway '{name}' not found in pathway target file {h5_path}. "
+                                f"Available pathway names: {pw_names}"
+                            )
 
                     p = len(self.target_pathway_names)
                     subset_acts = np.zeros((acts.shape[0], p), dtype=np.float32)
                     for i, idx in enumerate(indices):
-                        if idx != -1:
-                            subset_acts[:, i] = acts[:, idx]
+                        subset_acts[:, i] = acts[:, idx]
 
                     self.pathway_activities = torch.tensor(
                         subset_acts[mask_bool], dtype=torch.float32
@@ -564,7 +587,12 @@ class HEST_FeatureDataset(SpatialDataset):
         else:
             combined_idxs = neighbor_idxs
 
-        feats = self.features[combined_idxs]
+        feats = self.features[combined_idxs].clone()
+
+        # --- Mask construction for padding and dropped neighbours ---
+        mask = torch.zeros(len(combined_idxs), dtype=torch.bool)
+        if len(self.coords) < self.n_neighbors + 1:
+            mask[len(self.coords) : self.n_neighbors + 1] = True
 
         # --- Neighbourhood dropout augmentation ---
         # Randomly zero out 0–2 neighbour feature vectors (never the centre).
@@ -575,10 +603,11 @@ class HEST_FeatureDataset(SpatialDataset):
                     range(1, self.n_neighbors + 1), size=n_to_drop, replace=False
                 )
                 feats[drop_idxs] = 0.0
+                mask[drop_idxs] = True
 
-        # --- Relative coordinates ---
-        center_coord = self.coords[idx]
-        rel_coords = self.coords[combined_idxs] - center_coord  # (S, 2)
+        # --- Slide-stationary coordinates ---
+        # Aligned with whole-slide mode coordinates to ensure consistency
+        rel_coords = self.coords[combined_idxs].clone()
 
         if self.augment:
             # Dihedral rotation / flip
@@ -590,7 +619,7 @@ class HEST_FeatureDataset(SpatialDataset):
             if self.pathway_activities is not None
             else None
         )
-        return feats, target_genes, pathway_acts, rel_coords
+        return feats, target_genes, pathway_acts, rel_coords, mask
 
 
 # ---------------------------------------------------------------------------
@@ -599,16 +628,16 @@ class HEST_FeatureDataset(SpatialDataset):
 
 
 def collate_fn_patch(batch):
-    """Collate ``(feats, genes, pathway_acts, coords)`` tuples.
+    """Collate ``(feats, genes, pathway_acts, coords, mask)`` tuples.
 
     Handles ``pathway_acts=None`` (when no pathway targets dir is configured)
     by passing ``None`` through.
 
     Args:
-        batch: List of ``(feats, genes, pathway_acts, coords)`` tuples.
+        batch: List of ``(feats, genes, pathway_acts, coords, mask)`` tuples.
 
     Returns:
-        tuple: ``(feats, genes, pathway_acts, coords)`` where ``pathway_acts``
+        tuple: ``(feats, genes, pathway_acts, coords, mask)`` where ``pathway_acts``
         is a stacked tensor or ``None``.
     """
     feats = torch.stack([item[0] for item in batch])
@@ -618,7 +647,9 @@ def collate_fn_patch(batch):
     has_pathways = batch[0][2] is not None
     pathways = torch.stack([item[2] for item in batch]) if has_pathways else None
     coords = torch.stack([item[3] for item in batch])
-    return feats, genes, pathways, coords
+    has_mask = len(batch[0]) > 4 and batch[0][4] is not None
+    mask = torch.stack([item[4] for item in batch]) if has_mask else None
+    return feats, genes, pathways, coords, mask
 
 
 # ---------------------------------------------------------------------------
@@ -768,6 +799,7 @@ def get_hest_feature_dataloader(
             collate_fn=collate_fn_ws,
             pin_memory=True,
             persistent_workers=(num_workers > 0),
+            worker_init_fn=worker_init_fn,
         )
 
     return DataLoader(
@@ -778,4 +810,5 @@ def get_hest_feature_dataloader(
         collate_fn=collate_fn_patch,
         pin_memory=True,
         persistent_workers=(num_workers > 0),
+        worker_init_fn=worker_init_fn,
     )

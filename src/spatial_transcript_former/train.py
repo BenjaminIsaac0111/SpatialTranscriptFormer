@@ -132,7 +132,7 @@ def main():
     print(
         f"Targets: pathway_format_version={PATHWAY_FILE_VERSION} "
         "(mean log1p CP10k of pathway members). "
-        "Validation MAE/loss are in those units; best-model selection uses CCC."
+        "Validation MAE/loss are in those units; best-model selection uses CCC (concordance)."
     )
 
     # 3. Output & Logger
@@ -142,8 +142,8 @@ def main():
 
     # 4. Resume
     # ``best_val_metric`` tracks the highest val_ccc seen so far (CCC is
-    # higher-is-better and pathway-scale-invariant; preferable to MSE-based
-    # selection now that targets live in raw log1p CP10k units).
+    # higher-is-better and offset-sensitive (concordance-measuring); preferable to
+    # MSE-based selection now that targets live in raw log1p CP10k units).
     start_epoch, best_val_metric = 0, -float("inf")
     schedulers = {"main": main_scheduler}
     if args.resume:
@@ -159,6 +159,7 @@ def main():
             for _ in range(start_epoch):
                 main_scheduler.step()
 
+    epochs_no_improve = 0
     # 5. Training Loop
     for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch + 1}/{args.epochs}")
@@ -230,6 +231,7 @@ def main():
         val_ccc = val_metrics.get("val_ccc")
         if val_ccc is not None and val_ccc > best_val_metric:
             best_val_metric = val_ccc
+            epochs_no_improve = 0
 
             # Legacy state_dict path (kept for tools that still load .pth directly)
             best_path = os.path.join(args.output_dir, f"best_model_{args.model}.pth")
@@ -248,6 +250,9 @@ def main():
             except Exception as e:
                 print(f"  (skipped save_pretrained bundle: {e})")
             print(f"Saved best model (val_ccc={val_ccc:.4f}) -> {best_path}")
+        else:
+            if val_ccc is not None:
+                epochs_no_improve += 1
 
         # Save latest
         save_checkpoint(
@@ -261,11 +266,21 @@ def main():
             args.model,
         )
 
+        if (
+            args.early_stopping_patience is not None
+            and epochs_no_improve >= args.early_stopping_patience
+        ):
+            print(
+                f"Early stopping triggered: val_ccc has not improved for {args.early_stopping_patience} epochs."
+            )
+            break
+
         # Periodic visualization
         if val_ids and (epoch + 1) % args.vis_interval == 0:
-            vis_id = args.vis_sample if args.vis_sample else val_ids[0]
-            print(f"Generating visualization for sample {vis_id}...")
-            run_inference_plot(model, args, vis_id, epoch + 1, device)
+            if not getattr(model, "weak_supervision", False):
+                vis_id = args.vis_sample if args.vis_sample else val_ids[0]
+                print(f"Generating visualization for sample {vis_id}...")
+                run_inference_plot(model, args, vis_id, epoch + 1, device)
 
     # 6. Finalize
     logger.finalize(best_val_metric)

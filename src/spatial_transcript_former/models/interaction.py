@@ -78,7 +78,7 @@ class SpatialTranscriptFormer(nn.Module):
             n_heads (int): Number of attention heads.
             n_layers (int): Number of transformer/interaction layers.
             dropout (float): Dropout probability.
-            use_spatial_pe (bool): Incorporate relative gradients into attention.
+            use_spatial_pe (bool): Incorporate slide-stationary spatial coordinates into attention.
             interactions (list[str], optional): Which attention interactions to
                 enable.  Valid keys are ``p2p``, ``p2h``, ``h2p``, ``h2h``.
                 Defaults to all four (full self-attention).
@@ -119,6 +119,10 @@ class SpatialTranscriptFormer(nn.Module):
 
         # 3. Learnable pathway tokens (one per pathway, shared across batch)
         self.pathway_tokens = nn.Parameter(torch.randn(1, num_pathways, token_dim))
+
+        # Learnable scale and bias for dot-product Softplus head (Option 1)
+        self.scale = nn.Parameter(torch.ones(1, 1, num_pathways))
+        self.bias = nn.Parameter(torch.zeros(1, 1, num_pathways))
 
         # 4. Spatial Positional Encoder (optional)
         self.spatial_encoder = None
@@ -207,7 +211,7 @@ class SpatialTranscriptFormer(nn.Module):
             x (torch.Tensor): Image data or pre-computed features.
                 - (B, 3, H, W): Single image patch.
                 - (B, S, D): Pre-computed features.
-            rel_coords (torch.Tensor, optional): Spatial relative coordinates.
+            rel_coords (torch.Tensor, optional): Slide-stationary spatial coordinates.
             mask (torch.Tensor, optional): Boolean padding mask for patches (B, S) where True = Padding.
             return_dense (bool): If True, returns per-patch pathway predictions instead of global predictions.
             return_attention (bool): If True, returns attention maps from all layers.
@@ -300,20 +304,35 @@ class SpatialTranscriptFormer(nn.Module):
 
         # 5. Compute pathway scores via cosine similarity
         # L2-normalize both sets of tokens to produce cosine similarities in [-1, 1]
-        norm_pathway = F.normalize(processed_pathway_tokens, dim=-1)  # (B, P, D)
+        # 5. Compute pathway scores via scaled dot product + softplus with learnable scale/bias
+        d_dim = processed_patch_tokens.shape[-1]
 
         if return_dense:
-            # Dense prediction: per-patch cosine similarity with pathway tokens
-            norm_patch = F.normalize(processed_patch_tokens, dim=-1)  # (B, S, D)
-            # (B, S, D) @ (B, D, P) -> (B, S, P)
-            pathway_scores = torch.matmul(norm_patch, norm_pathway.transpose(1, 2))
+            # Dense prediction: scaled dot-product between patch and pathway tokens
+            raw_scores = torch.matmul(
+                processed_patch_tokens, processed_pathway_tokens.transpose(1, 2)
+            ) / (
+                d_dim**0.5
+            )  # (B, S, P)
+            pathway_scores = F.softplus(self.scale * raw_scores + self.bias)
         else:
-            # Global prediction: pool patches first, then compute scores
-            global_patch_token = processed_patch_tokens.mean(
-                dim=1, keepdim=True
-            )  # (B, 1, D)
-            norm_global = F.normalize(global_patch_token, dim=-1)  # (B, 1, D)
-            pathway_scores = torch.matmul(norm_global, norm_pathway.transpose(1, 2))
+            # Global prediction: pool patches first (using mask if provided), then compute scores
+            if mask is not None:
+                valid_mask = (~mask).unsqueeze(-1).float()  # (B, S, 1)
+                global_patch_token = (processed_patch_tokens * valid_mask).sum(
+                    dim=1, keepdim=True
+                ) / valid_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+            else:
+                global_patch_token = processed_patch_tokens.mean(
+                    dim=1, keepdim=True
+                )  # (B, 1, D)
+
+            raw_scores = torch.matmul(
+                global_patch_token, processed_pathway_tokens.transpose(1, 2)
+            ) / (
+                d_dim**0.5
+            )  # (B, 1, P)
+            pathway_scores = F.softplus(self.scale * raw_scores + self.bias)
             pathway_scores = pathway_scores.squeeze(1)  # (B, P)
 
         results = [pathway_scores]

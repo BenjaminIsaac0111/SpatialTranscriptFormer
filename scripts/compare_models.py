@@ -244,21 +244,32 @@ def main():
     parser.add_argument(
         "--epochs-patch",
         type=int,
-        default=5,
+        default=30,
         help="Number of training epochs for patch baselines",
     )
     parser.add_argument(
         "--epochs-mil",
         type=int,
-        default=20,
+        default=30,
         help="Number of training epochs for MIL/STF models",
+    )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=10,
+        help="Patience epochs of no val_ccc improvement before stopping",
     )
 
     # Slurm & Execution Options
     parser.add_argument(
+        "--no-mil",
+        action="store_true",
+        help="Exclude Multiple-Instance Learning (MIL) models from the comparison",
+    )
+    parser.add_argument(
         "--slurm",
         action="store_true",
-        help="Generate Slurm scripts instead of running locally",
+        help="Generate Slurm scripts instead of running locally. Note: relative paths assume sbatch is run from the project root.",
     )
     parser.add_argument(
         "--submit",
@@ -322,6 +333,15 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.slurm:
+        import re
+
+        if re.match(r"^[a-zA-Z]:", args.data_dir) or "\\" in args.data_dir:
+            parser.error(
+                f"Data directory '{args.data_dir}' appears to be a Windows path (starts with drive letter or contains backslashes). "
+                "For Slurm execution, please provide a valid Linux/POSIX path to the data directory using --data-dir."
+            )
+
     # Determine hyperparameters based on --quick-test
     max_samples = 5 if args.quick_test else None
     epochs_patch = 1 if args.quick_test else args.epochs_patch
@@ -333,7 +353,10 @@ def main():
             "--model",
             "he2rna",
             "--backbone",
-            "resnet50",
+            "ctranspath",
+            "--precomputed",
+            "--loss",
+            "mse_ccc",
             "--batch-size",
             "64",
             "--epochs",
@@ -345,7 +368,10 @@ def main():
             "--model",
             "vit_st",
             "--backbone",
-            "vit_b_16",
+            "ctranspath",
+            "--precomputed",
+            "--loss",
+            "mse_ccc",
             "--batch-size",
             "32",
             "--epochs",
@@ -361,6 +387,8 @@ def main():
             "--whole-slide",
             "--precomputed",
             "--weak-supervision",
+            "--loss",
+            "mse_ccc",
             "--use-amp",
             "--batch-size",
             "1",
@@ -377,6 +405,8 @@ def main():
             "--whole-slide",
             "--precomputed",
             "--weak-supervision",
+            "--loss",
+            "mse_ccc",
             "--use-amp",
             "--batch-size",
             "1",
@@ -410,6 +440,10 @@ def main():
         ],
     }
 
+    if args.no_mil:
+        configs.pop("AttentionMIL", None)
+        configs.pop("TransMIL", None)
+
     # Add shared flags to all configs
     for name, cmd in configs.items():
         cmd.extend(
@@ -429,6 +463,8 @@ def main():
 
         if max_samples:
             cmd.extend(["--max-samples", str(max_samples)])
+        if args.early_stopping_patience is not None:
+            cmd.extend(["--early-stopping-patience", str(args.early_stopping_patience)])
 
     results = {}
 
@@ -454,7 +490,6 @@ def main():
 
         job_ids = []
         slurm_script_paths = {}
-        working_dir = pathlib.Path(os.getcwd()).as_posix()
 
         print(f"\nGenerating Slurm scripts in: {slurm_scripts_dir}")
 
@@ -491,6 +526,8 @@ def main():
 #SBATCH --cpus-per-task={args.slurm_cpus}
 #SBATCH --mem={args.slurm_mem}
 
+set -e
+
 {setup_cmds}
 
 # Change to submit directory (project root)
@@ -520,6 +557,8 @@ python -m spatial_transcript_former.train {" ".join(posix_cmd_args)}
 {collect_partition_line}#SBATCH --time=00:30:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8G
+
+set -e
 
 {setup_cmds}
 

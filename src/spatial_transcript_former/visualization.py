@@ -83,7 +83,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
     from spatial_transcript_former.predict import plot_training_summary
 
     # 1. Setup Data
-    _, val_loader, _ = setup_dataloaders(args, [], [sample_id])
+    _, val_loader, val_whole_slide = setup_dataloaders(args, [], [sample_id])
     if val_loader is None:
         return
 
@@ -96,49 +96,59 @@ def run_inference_plot(model, args, sample_id, epoch, device):
     # 2. Run Inference
     with torch.no_grad():
         for batch in val_loader:
-            if args.whole_slide:
+            if val_whole_slide:
                 image_features, _, target, coords, mask = batch
                 image_features = image_features.to(device)
                 coords = coords.to(device)
                 mask = mask.to(device)
                 target = target.to(device)
+                mask_to_store = mask
             else:
-                image_features, _, target, coords = batch
+                image_features, _, target, coords, mask = batch
                 image_features = image_features.to(device)
                 coords = coords.to(device)
-                mask = torch.ones(target.shape[0], device=device)
                 target = target.to(device)
+                if mask is not None:
+                    mask = mask.to(device)
+                    mask_to_store = mask[:, 0]
+                else:
+                    mask_to_store = torch.zeros(
+                        target.shape[0], dtype=torch.bool, device=device
+                    )
 
             # Forward pass
-            if args.whole_slide:
-                outputs = model(
-                    image_features,
-                    rel_coords=coords,
-                    mask=mask,
-                    return_dense=True,
-                )
+            if val_whole_slide:
+                if isinstance(model, SpatialTranscriptFormer):
+                    outputs = model(
+                        image_features,
+                        rel_coords=coords,
+                        mask=mask,
+                        return_dense=True,
+                    )
+                else:
+                    outputs = model(image_features)
             else:
                 if isinstance(model, SpatialTranscriptFormer):
-                    outputs = model(image_features, rel_coords=coords)
+                    outputs = model(image_features, rel_coords=coords, mask=mask)
                 else:
                     outputs = model(image_features)
 
             preds_list.append(outputs.cpu())
             targets_list.append(target.cpu())
             coords_list.append(coords.cpu())
-            masks_list.append(mask.cpu())
+            masks_list.append(mask_to_store.cpu())
 
-            if args.whole_slide:
+            if val_whole_slide:
                 break  # Whole slide is one batch
 
     # Concatenate results (for patch-based)
-    all_preds = torch.cat(preds_list, dim=1 if args.whole_slide else 0)
-    all_targets = torch.cat(targets_list, dim=1 if args.whole_slide else 0)
-    all_coords = torch.cat(coords_list, dim=1 if args.whole_slide else 0)
-    all_masks = torch.cat(masks_list, dim=1 if args.whole_slide else 0)
+    all_preds = torch.cat(preds_list, dim=1 if val_whole_slide else 0)
+    all_targets = torch.cat(targets_list, dim=1 if val_whole_slide else 0)
+    all_coords = torch.cat(coords_list, dim=1 if val_whole_slide else 0)
+    all_masks = torch.cat(masks_list, dim=1 if val_whole_slide else 0)
 
     # Squeeze batch dim for processing
-    if args.whole_slide:
+    if val_whole_slide:
         pathway_preds = all_preds.numpy()[0]
         pathway_truth = all_targets.numpy()[0]
         coords = all_coords.numpy()[0]
@@ -148,31 +158,44 @@ def run_inference_plot(model, args, sample_id, epoch, device):
         pathway_preds = all_preds.numpy()
         pathway_truth = all_targets.numpy()
         if all_coords.ndim == 3:
-            coords = all_coords.squeeze(1).numpy()
+            coords = all_coords[:, 0].numpy()
         else:
             coords = all_coords.numpy()
         mask = all_masks.numpy()
-        valid_idx = mask.astype(bool)
+        valid_idx = ~mask.astype(bool)
 
     coords = coords[valid_idx]
     pathway_preds = pathway_preds[valid_idx]
     pathway_truth = pathway_truth[valid_idx]
 
     # The dataloader applies normalize_coordinates which breaks alignment with the full-res histology
-    # image. Let's fetch the raw coordinates directly from the .pt file.
+    # image. Let's fetch the raw coordinates directly from the .pt or .h5 file.
     try:
         from spatial_transcript_former.data.paths import resolve_feature_dir
         from spatial_transcript_former.recipes.hest.dataset import get_h5ad_valid_mask
 
-        feat_dir = resolve_feature_dir(
-            args.data_dir,
-            getattr(args, "backbone", "resnet50"),
-            getattr(args, "feature_dir", None),
-        )
-        pt_path = os.path.join(feat_dir, f"{sample_id}.pt")
-        saved_data = torch.load(pt_path, map_location="cpu", weights_only=True)
-        raw_coords = saved_data["coords"].numpy()
-        barcodes = saved_data["barcodes"]
+        # Try to load from precomputed features .pt file
+        try:
+            feat_dir = resolve_feature_dir(
+                args.data_dir,
+                getattr(args, "backbone", "resnet50"),
+                getattr(args, "feature_dir", None),
+            )
+            pt_path = os.path.join(feat_dir, f"{sample_id}.pt")
+            saved_data = torch.load(pt_path, map_location="cpu", weights_only=True)
+            raw_coords = saved_data["coords"].numpy()
+            barcodes = saved_data["barcodes"]
+        except Exception:
+            # Fall back to raw patches .h5 file if precomputed is not available
+            h5_path = os.path.join(args.data_dir, "patches", f"{sample_id}.h5")
+            if os.path.exists(h5_path):
+                with h5py.File(h5_path, "r") as f:
+                    raw_coords = f["coords"][:]
+                    barcodes = f["barcode"][:].flatten()
+            else:
+                raise FileNotFoundError(
+                    f"Neither .pt features nor patches .h5 found for {sample_id}"
+                )
 
         st_dir = os.path.join(args.data_dir, "st")
         h5ad_path = os.path.join(st_dir, f"{sample_id}.h5ad")

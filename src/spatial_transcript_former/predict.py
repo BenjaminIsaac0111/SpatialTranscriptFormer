@@ -369,6 +369,9 @@ def inject_predictions(
 # ═══════════════════════════════════════════════════════════════════════
 # Kept here for backwards compatibility with training scripts.
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
@@ -407,8 +410,18 @@ def plot_training_summary(
     if plot_pathways_list is not None and len(plot_pathways_list) > 0:
         target_pathways = [p.replace("HALLMARK_", "") for p in plot_pathways_list]
     else:
-        # Default to the first 6 pathways available if none specified
-        target_pathways = short_names[:6]
+        # Spatially and biologically prominent Hallmark pathways to monitor by default
+        default_interesting = [
+            "WNT_BETA_CATENIN_SIGNALING",
+            "E2F_TARGETS",
+            "MYC_TARGETS_V1",
+            "EPITHELIAL_MESENCHYMAL_TRANSITION",
+            "GLYCOLYSIS",
+            "OXIDATIVE_PHOSPHORYLATION",
+        ]
+        target_pathways = [p for p in default_interesting if p in short_names]
+        if not target_pathways:
+            target_pathways = short_names[:6]
 
     for target_pw in target_pathways:
         if target_pw in short_names:
