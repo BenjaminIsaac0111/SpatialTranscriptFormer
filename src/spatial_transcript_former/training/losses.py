@@ -54,13 +54,14 @@ class PCCLoss(nn.Module):
     """
     Pearson Correlation Coefficient Loss.
 
-    Computes **gene-wise** spatial correlation, then averages across genes.
-    This measures whether the predicted spatial pattern (map) for each gene
+    Computes **per-pathway** spatial correlation, then averages across pathways.
+    This measures whether the predicted spatial pattern (map) for each pathway
     matches the pattern of the ground truth map, regardless of overall intensity.
 
-    PCC is scale-invariant: highly expressed genes and lowly expressed
-    genes contribute equally, making this objective robust to typical
-    spatial transcriptomics expression imbalances.
+    PCC is scale-invariant: high-activity and low-activity pathways contribute
+    equally, making this objective robust to the wide range of activity
+    magnitudes across pathways. (The ``G`` dimension in the shapes below is the
+    number of pathways; the loss is generic over any per-channel target.)
     """
 
     def __init__(self, eps=1e-8):

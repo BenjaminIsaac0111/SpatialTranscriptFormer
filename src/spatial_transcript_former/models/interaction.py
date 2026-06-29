@@ -46,11 +46,12 @@ VALID_INTERACTIONS = {"p2p", "p2h", "h2p", "h2h"}
 
 
 class SpatialTranscriptFormer(nn.Module):
-    """Transformer for predicting gene expression from histology and spatial context.
+    """Transformer for predicting pathway activity from histology and spatial context.
 
     Integrates histology feature extraction with pathway-based bottleneck
-    attention to predict gene transcript counts. Follows a standard Vision
-    Transformer architecture where pathway tokens act as [CLS]-like bottlenecks.
+    attention to predict per-spot pathway activity scores. Follows a standard
+    Vision Transformer architecture where pathway tokens act as [CLS]-like
+    bottlenecks.
 
     Attributes:
         num_pathways (int): Number of pathway bottlenecks.
@@ -120,7 +121,9 @@ class SpatialTranscriptFormer(nn.Module):
         # 3. Learnable pathway tokens (one per pathway, shared across batch)
         self.pathway_tokens = nn.Parameter(torch.randn(1, num_pathways, token_dim))
 
-        # Learnable scale and bias for dot-product Softplus head (Option 1)
+        # Learnable per-pathway scale and bias for the dot-product + Softplus
+        # scoring head (see forward()): they shift the raw patch·pathway
+        # affinity before Softplus maps it to a non-negative activity score.
         self.scale = nn.Parameter(torch.ones(1, 1, num_pathways))
         self.bias = nn.Parameter(torch.zeros(1, 1, num_pathways))
 
@@ -183,7 +186,7 @@ class SpatialTranscriptFormer(nn.Module):
 
         The directory should contain ``config.json`` and ``model.pth``
         (created by :func:`~spatial_transcript_former.checkpoint.save_pretrained`).
-        An optional ``gene_names.json`` will be loaded as ``model.gene_names``.
+        An optional ``pathway_names.json`` will be loaded as ``model.pathway_names``.
 
         Args:
             checkpoint_dir (str): Path to checkpoint directory.
@@ -302,9 +305,11 @@ class SpatialTranscriptFormer(nn.Module):
         # Extract processed patch tokens
         processed_patch_tokens = out[:, p:, :]  # (B, S, D)
 
-        # 5. Compute pathway scores via cosine similarity
-        # L2-normalize both sets of tokens to produce cosine similarities in [-1, 1]
-        # 5. Compute pathway scores via scaled dot product + softplus with learnable scale/bias
+        # 5. Compute pathway scores via a scaled dot-product + Softplus head.
+        # The raw affinity (patch · pathway) / sqrt(d) is shifted by a learnable
+        # per-pathway scale and bias, then Softplus maps it to a non-negative
+        # activity score (matching the mean-log1p-CP10k targets). This is *not*
+        # cosine similarity — the tokens are deliberately not L2-normalised.
         d_dim = processed_patch_tokens.shape[-1]
 
         if return_dense:

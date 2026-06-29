@@ -57,7 +57,7 @@ python -m spatial_transcript_former.train \
 
 ## 2. Whole-Slide MIL (Multiple Instance Learning)
 
-Aggregates all patches from a slide to predict the average pathway activities. Recommended to use **precomputed features** from the `stf-compute-features` CLI tool for speed. Foundation models like ctranspath can be used as backbones.
+Aggregates all patches from a slide to predict the average pathway activities. Recommended to use **precomputed features** from the `stf-extract` CLI tool for speed. Foundation models like ctranspath can be used as backbones.
 
 ### Attention MIL (Weak Supervision)
 
@@ -72,7 +72,6 @@ python -m spatial_transcript_former.train \
     --precomputed \
     --weak-supervision \
     --use-amp \
-    --log-transform \
     --epochs 50
 ```
 
@@ -89,7 +88,6 @@ python -m spatial_transcript_former.train \
     --precomputed \
     --weak-supervision \
     --use-amp \
-    --log-transform \
     --epochs 50
 ```
 
@@ -108,7 +106,6 @@ python -m spatial_transcript_former.train \
     --data-dir A:\hest_data \
     --model interaction \
     --backbone ctranspath \
-    --use-nystrom \
     --num-pathways 50 \
     --precomputed \
     --whole-slide \
@@ -116,7 +113,7 @@ python -m spatial_transcript_former.train \
     --epochs 100
 ```
 
-### Using PROGENy-Style Priors (14 Pathways) - Currently Not Implemented
+### Using PROGENy-Style Priors (14 Pathways)
 
 Use `--pathway-prior progeny` to set the number of pathway tokens to 14, matching the dimensionality of PROGENy-style signalling pathway databases. This is useful when your pre-computed targets were derived from a 14-pathway database rather than the 50 MSigDB Hallmarks.
 
@@ -132,7 +129,7 @@ python -m spatial_transcript_former.train \
     --epochs 100
 ```
 
-> **Note**: `--pathway-prior progeny` sets `--num-pathways` to 14 automatically. Ensure your pre-computed pathway targets match this dimensionality.
+> **Note**: `--pathway-prior progeny` only sets `--num-pathways` to 14 (the output dimensionality). Generating PROGENy *targets* is not yet built into `stf-compute-pathways` (which defaults to MSigDB Hallmarks) — supply matching 14-pathway targets via `--custom-gmt`.
 
 ### Recommended: Using Presets
 
@@ -250,13 +247,12 @@ python -m spatial_transcript_former.train --resume --output-dir runs/my_experime
 | `--weak-supervision` | Bag-level training for MIL models. | Use with `attention_mil` or `transmil`. |
 | `--pathway-targets-dir` | Directory of pre-computed `.h5` pathway activity files. | Defaults to `<data-dir>/pathway_activities`. |
 | `--feature-dir` | Explicit path to precomputed features directory. | Overrides auto-detection. |
-| `--loss` | Loss function: `mse`, `pcc`, `mse_pcc`. | `mse_pcc` recommended. |
+| `--loss` | Loss function: `mse`, `pcc`, `ccc`, `mse_pcc`, `mse_ccc`, `mse_ccc_clip`, `mse_huber`. | `mse_pcc` / `mse_ccc` recommended. |
 | `--pcc-weight` | Weight ($\alpha$) for PCC term in composite loss. | Default 1.0. |
 | `--pathway-prior` | Pathway prior for token count (`hallmarks`=50). | Use `hallmarks` for MSigDB Hallmarks. |
 | `--interactions` | Enabled attention quadrants: `p2p`, `p2h`, `h2p`, `h2h`. | Default: `all` (Full Interaction). |
 | `--plot-pathways-list` | Names of pathways to visualize as heatmaps during validation. | e.g. `HYPOXIA ANGIOGENESIS` |
 | `--num-pathways` | Number of pathway bottleneck tokens (overridden by `--pathway-prior`). | Match your pre-computed targets. |
-| `--mask-radius` | Euclidean distance for spatial attention gating. | Usually between 200 and 800. |
 | `--n-neighbors` | Number of context neighbors to load. | Set `> 0` for hybrid/GNN models. |
 | `--use-amp` | Mixed precision training. | Recommended on modern GPUs. |
 | `--grad-accum-steps` | Gradient accumulation steps. | Use when memory is limited. |
@@ -268,7 +264,7 @@ python -m spatial_transcript_former.train --resume --output-dir runs/my_experime
 ## Tips for Success
 
 1. **Pathway Pre-Computation**: Always run `stf-compute-pathways --data-dir hest_data` before training. The trainer will error if pathway targets are missing.
-2. **Feature Extraction**: Run `hpc/prepare_data.slurm` or `scripts/extract_features.py` before training with `--precomputed`.
+2. **Feature Extraction**: Run `stf-extract --data-dir hest_data --backbone <backbone>` before training with `--precomputed` (see [PRECOMPUTED_WORKFLOW.md](PRECOMPUTED_WORKFLOW.md)).
 3. **Output**: Checkpoints, logs, and JSON summaries are saved to `--output-dir` (default: `./checkpoints`).
 4. **Debug Mode**: Use `--max-samples 3 --epochs 1` to verify your setup before a full run.
-5. **Results Aggregation**: Use `hpc/collect_results.py` to compare experiments across multiple runs.
+5. **Results Aggregation**: Use `scripts/compare_models.py --collect-only` to compare experiments across multiple runs (see §4).

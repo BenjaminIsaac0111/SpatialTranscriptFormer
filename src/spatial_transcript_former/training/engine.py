@@ -53,7 +53,7 @@ def _compute_masked_mse(preds, targets, mask):
 
 
 def _compute_bag_target(genes, mask):
-    """Average gene expression over valid spots (bag-level target for MIL)."""
+    """Average pathway targets over valid spots (bag-level target for MIL)."""
     mask_float = (~mask).float().unsqueeze(-1)  # (B, N, 1)
     return (genes * mask_float).sum(dim=1) / mask_float.sum(dim=1)  # (B, G)
 

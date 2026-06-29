@@ -7,13 +7,11 @@ Thank you for your interest in contributing! As a project at the intersection of
 > [!IMPORTANT]
 > This project is a **Work in Progress**. We are actively refining the core interaction logic and scaling behaviors. Expect breaking changes in the CLI and data schemas.
 
-## Intellectual Property & Licensing
+## Licensing of Contributions
 
-SpatialTranscriptFormer is protected under a **Proprietary Source Code License**.
+SpatialTranscriptFormer is released under the **[Apache License 2.0](LICENSE)**.
 
-- **Academic/Non-Profit**: We encourage contributions from the research community. Contributions made under an academic affiliation are generally welcome.
-- **Commercial/For-Profit**: Contributions from commercial entities or individuals intended for profit-seeking use require a separate agreement.
-- **Assignment**: By submitting a Pull Request, you agree that your contributions will be licensed under the project's existing license, granting the author the right to include them in both the open-access and proprietary versions of the software.
+By submitting a contribution (e.g. a Pull Request), you agree that your contribution is licensed to the project and its users under the same Apache-2.0 license ("inbound = outbound"), and you confirm you have the right to submit it under that license. Please don't include third-party code or data whose license is incompatible with Apache-2.0.
 
 ## Development Workflow
 

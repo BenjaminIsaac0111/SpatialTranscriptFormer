@@ -89,9 +89,9 @@ Together, these ensure the model learns *spatially-varying* pathway activation m
 │                              └──────────┬───────────────────┘                 │
 │                                         │                                     │
 │                              ┌──────────▼──────────────────┐                  │
-│                              │  Cosine Similarity Scoring   │                  │
-│                              │                              │                  │
-│                              │  norm_patch @ norm_pathway.T │                  │
+│                              │  Dot-Product + Softplus Head │                  │
+│                              │  raw=(patch@path.T)/sqrt(d)  │                  │
+│                              │  -> softplus(scale*raw+bias) │                  │
 │                              │  → Pathway Scores (S, P)     │                  │
 │                              └──────────┬───────────────────┘                 │
 │                                         │                                     │
@@ -141,17 +141,15 @@ The transformer uses a custom attention mask that controls information flow betw
 > [!NOTE]
 > Disabling `h2h` creates the **Pathway Bottleneck** variant, where all inter-patch communication must flow through the pathway tokens. This requires **minimum 2 transformer layers**: Layer 1 lets pathways gather information from patches, and Layer 2 lets patches read the contextualised pathway tokens.
 
-#### Cosine Similarity Scoring
+#### Dot-Product + Softplus Scoring Head
 
-Pathway scores are computed via L2-normalized cosine similarity with a learnable temperature parameter $\tau$ (following CLIP):
-$$s_{ij} = \cos(\hat{h}_i, \hat{p}_j) \times \tau$$
-where $\hat{h}_i$ and $\hat{p}_j$ are the L2-normalized processed patch and pathway tokens respectively. This produces scores in $[-\tau, +\tau]$ with meaningful relative differences, avoiding the saturation that occurs with raw dot-products.
+Pathway scores are computed from a **scaled dot-product** between the processed patch and pathway tokens, shifted by a learnable per-pathway scale and bias, then passed through a Softplus non-linearity:
+$$\hat{s}_{i,k} = \text{softplus}\!\left(\gamma_k \cdot \frac{h_i \cdot p_k}{\sqrt{d}} + \beta_k\right)$$
+where $h_i$ and $p_k$ are the processed patch and pathway tokens, $d$ is the token dimension, and $\gamma_k, \beta_k$ are learnable per-pathway scale and bias parameters. The $\sqrt{d}$ scaling keeps the affinities well-conditioned (as in scaled dot-product attention), and Softplus maps them to **non-negative** activity scores in $[0, \infty)$ that match the targets (mean log1p CP10k pathway aggregates). Note this is **not** cosine similarity — the tokens are deliberately *not* L2-normalised, so the head can represent the unbounded, non-negative magnitudes the targets require.
 
 #### Direct Pathway Prediction
 
-The model's output *is* the pathway activity score vector. There is no intermediate gene reconstruction layer. The cosine similarity scores between (processed) patch tokens and pathway tokens directly serve as the prediction:
-$$\hat{s}_{i,k} = \cos(\hat{h}_i, \hat{p}_k)$$
-where $\hat{h}_i$ and $\hat{p}_k$ are the L2-normalised patch and pathway tokens, respectively. These are supervised against pre-computed pathway activities (see [PATHWAY_MAPPING.md](PATHWAY_MAPPING.md)).
+The model's output *is* the pathway activity score vector. There is no intermediate gene reconstruction layer. The scaled dot-product + Softplus scores $\hat{s}_{i,k}$ defined above directly serve as the prediction, supervised against the pre-computed pathway activities (see [PATHWAY_MAPPING.md](PATHWAY_MAPPING.md)).
 
 ### 2.4 Training Modes
 

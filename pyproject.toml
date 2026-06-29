@@ -8,6 +8,11 @@ version = "0.1.0"
 description = "A transformer-based model for spatial transcriptomics"
 readme = "README.md"
 requires-python = ">=3.9"
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "pandas",
     "h5py",

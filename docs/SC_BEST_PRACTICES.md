@@ -52,8 +52,8 @@ evaluation.
 | **GHIST** | Nat. Methods 2025 | Single-cell resolution via Xenium |
 
 STF's differentiators in this landscape are **pathway-level interpretability** and
-**auxiliary biological supervision** — both under-represented in the 2025 benchmark's
-*translational potential* category, where competing methods score poorly.
+**direct biological (pathway) supervision** — both under-represented in the 2025
+benchmark's *translational potential* category, where competing methods score poorly.
 
 ### Prior Knowledge: Saezlab Ecosystem (EMBL Heidelberg)
 
@@ -69,8 +69,8 @@ pathways (EGFR, MAPK, PI3K, TGFb, TNFa, Hypoxia, VEGF, WNT, p53, NFkB, JAK-STAT,
 Androgen, Estrogen, Trail) derived empirically from a large compendium of perturbation
 experiments. Each gene carries a **continuous signed weight** (direction and magnitude
 of pathway response). This is fundamentally different from MSigDB Hallmarks, which
-use binary unweighted membership. PROGENy weights can be used directly as the
-initialisation matrix for the linear gene reconstructor (`--pathway-init`). Holland
+use binary unweighted membership. PROGENy weights are a natural warm-start for the
+learnable pathway tokens (see item 9). Holland
 et al. (Genome Biology, 2020) benchmarked PROGENy on scRNA-seq and Visium data,
 confirming it performs well in the spot-level transcriptome regime.
 
@@ -79,9 +79,8 @@ package that applies a family of statistical estimators (MLM, ULM, GSEA, AUCell,
 consensus) to any (resource, method) combination. `get_progeny()` and `run_mlm()`
 provide PROGENy activity scores out of the box. The official documentation includes
 a Visium spatial transcriptomics notebook. This is the practical bridge for computing
-weighted pathway activity scores from HEST-1k expression matrices — directly
-applicable as `AuxiliaryPathwayLoss` targets instead of the current binary MSigDB
-membership scores.
+weighted pathway activity scores from HEST-1k expression matrices — a richer
+alternative to the current Hallmark mean-aggregation targets (see item 7).
 
 **CollecTRI** (Müller-Dott et al., Nucleic Acids Research, 2023) — The recommended
 successor to DoRothEA for transcription factor regulons. Integrates 12 resources for
@@ -168,28 +167,34 @@ Explicit QC thresholds (minimum UMI count, minimum detected genes, maximum mitoc
 
 ### Training & Supervision
 
-**Architectural direction: pathway activity as the primary task.** The current model is
-trained to predict 1000 individual gene expression values, with pathway scores as an
-auxiliary, interpretability-oriented output. This framing has two compounding problems:
+**Architectural direction: pathway activity as the primary task.** ✅ **Implemented.**
+This was the central reframing of the project and is now the shipped architecture: the
+model predicts pathway activity directly via a dot-product + Softplus head, with no
+gene-reconstruction step. The rationale is kept here as a record of *why* the change
+was made.
+
+Earlier prototypes predicted ~1000 individual gene expression values with pathway
+scores as an auxiliary output. That framing had two compounding problems:
 
 1. **Noisy learning signal.** Even after log-normalisation and SVG-based vocabulary
    selection, MSE over 1000 genes is dominated by high-expression genes — not
    necessarily the spatially informative ones. Moran's I weighting fixes gene
    *selection* but not the *gradient* during training.
 
-2. **The `AuxiliaryPathwayLoss` is circular.** Its ground-truth targets are computed
-   from the same gene expression being predicted (binary MSigDB membership sums). It
-   constrains the intermediate representation to match a re-parameterisation of the
+2. **The (former) `AuxiliaryPathwayLoss` was circular.** Its targets were computed
+   from the same gene expression being predicted (MSigDB membership sums), so it
+   constrained the intermediate representation to match a re-parameterisation of the
    output, adding no independent biological information.
 
-**The cleaner framing** is to invert the task hierarchy:
+**The fix** was to invert the task hierarchy:
 
 ```
 PRIMARY:    H&E  →  pathway activity maps    (spatially coherent, interpretable)
-SECONDARY:  pathway scores  →  gene expression    (optional imputation head)
+SECONDARY:  pathway scores  →  gene expression    (optional; not currently implemented)
 ```
 
-Pathway activity maps pre-computed offline via decoupleR + PROGENy are:
+Pathway activity targets (currently the mean of log1p CP10k expression over each MSigDB
+Hallmark's member genes, pre-computed offline) are:
 - **Spatially cleaner** than individual genes — Moran's I on pathway aggregates is
   typically 3–5× higher than on individual gene expression
 - **Adaptable** — the offline preprocessing step can be swapped for any biologically
@@ -198,18 +203,19 @@ Pathway activity maps pre-computed offline via decoupleR + PROGENy are:
 - **Genuinely supervised** — the pathway scores are first-class outputs, not
   constraints on an intermediate representation
 
-The `AuxiliaryPathwayLoss` in its current form is superseded by this framing. The
-gene reconstructor becomes an optional secondary head rather than the primary loss
-target.
+The remaining open leads below concern *richer target backends* (decoupleR/PROGENy)
+and an *optional* secondary gene head — not the core reframing, which is done.
 
 ---
 
-**7. Pre-compute pathway activity targets (decoupleR + PROGENy)** 💡 — High priority, medium effort
+**7. Richer pathway-activity targets (decoupleR + PROGENy)** 💡 — High priority, medium effort
 
-For each HEST sample, run `decoupler.run_mlm(expression, net=get_progeny())` to
-produce a `(spots × 14)` signed pathway activity matrix. Cache alongside the existing
-feature `.h5` files. These become the primary prediction targets replacing the
-`AuxiliaryPathwayLoss`.
+The offline target pipeline (`stf-compute-pathways`) currently aggregates MSigDB
+Hallmark membership (mean log1p CP10k). A higher-quality alternative: for each HEST
+sample, run `decoupler.run_mlm(expression, net=get_progeny())` to produce a
+`(spots × 14)` *signed, continuous* pathway activity matrix and cache it as an
+alternative target set. Because targets are decoupled from the model, this is a
+preprocessing-only change — no model edits required.
 
 The decoupleR MLM estimator fits: `expression[:, g] = a_p · W[g, p] + b_p + ε` and
 solves for `a_p` — the pathway activity at each spot — via OLS. The result is
@@ -217,32 +223,30 @@ continuous, signed, and validated against known pathway perturbation experiments
 prior knowledge source (PROGENy, Hallmarks, LIANA+ LR pairs, CollecTRI TF regulons)
 can be swapped at the preprocessing step without touching the model.
 
-**8. Moran's I weighted gene loss** 🔧 — High priority, low effort
+**8. Moran's I weighted gene loss** 🚫 — Superseded (pathway-exclusive)
 
-If gene prediction is retained as a secondary head, weight each gene's contribution
-to the loss by its Moran's I score so that spatially coherent genes drive the
-gradient:
+Only relevant if an optional secondary gene-reconstruction head is ever added. In that
+case each gene's loss contribution could be weighted by its Moran's I so spatially
+coherent genes drive the gradient:
 
 ```python
-L_gene = sum(w_g * MSE(pred_g, target_g) for g in genes) / sum(w_g)
-# where w_g = MoranI_g  (pre-computed during stf-build-vocab --svg-weight > 0)
+L_gene = sum(w_g * MSE(pred_g, target_g) for g in genes) / sum(w_g)  # w_g = MoranI_g
 ```
 
-This is the training-time counterpart to SVG-based vocabulary selection — both
-ensure spatially informative genes dominate, one at selection time and one at
-training time.
+For the current pathway-exclusive model this does not apply — there is no gene head.
 
-**9. PROGENy pathway token initialisation** 💡 — High priority, medium effort
+**9. PROGENy pathway-token initialisation** 💡 — Medium priority, medium effort
 
-Replace or supplement the binary MSigDB Hallmark membership matrix used in
-`--pathway-init` with PROGENy's continuous signed footprint weights. Each gene
-carries a directional weight reflecting its perturbation-validated response
-magnitude, rather than binary membership.
+The learnable pathway tokens are currently randomly initialised. A lead: warm-start
+them from PROGENy's continuous signed footprint weights (each gene carries a
+directional, perturbation-validated weight) instead of from scratch.
 
-Hybrid strategy: initialise the first 14 pathway tokens from PROGENy weights
-(signalling), the remaining 36 from Hallmarks membership (metabolic, immune,
-proliferation). Requires additions to `data/pathways.py` and a new
-`--pathway-init progeny` option in `training/builder.py`.
+Hybrid strategy: initialise the first 14 tokens from PROGENy weights (signalling) and
+the rest from Hallmark membership (metabolic, immune, proliferation). `get_pathway_init`
+in `data/pathways.py` already builds a membership matrix; this would re-introduce a
+token-initialisation pathway into the model and a corresponding option in
+`training/builder.py` (the earlier `--pathway-init` flag was removed in the
+pathway-exclusive cleanup and would need re-adding).
 
 **10. Cell–cell interaction pathway tokens (LIANA+)** 💡 — Low priority, high effort
 
@@ -277,13 +281,15 @@ The architecture is platform-agnostic. Scaling to sub-cellular resolution platfo
 preprocessing pipelines, not the model itself. GHIST demonstrates that Xenium-derived
 training labels substantially improve resolution.
 
-**14. Preprocessing data contract** 🔧 — Low priority, low effort
+**14. Preprocessing data contract** ✅ — Largely implemented
 
-Explicitly documenting which normalisation is applied at which stage (per-spot QC →
-library-size normalisation → log1p → gene selection) and how the vocabulary was built
-(which `--svg-weight`, which `--pathways`, run date) prevents silent mismatches between
-training and inference. A short header in each output folder (`vocab_config.json`)
-would suffice.
+Each `stf-compute-pathways` output `.h5` records its provenance as attributes
+(`format_version`, QC thresholds, spot counts, scored-pathway count; see
+[PATHWAY_MAPPING.md](PATHWAY_MAPPING.md)), and `save_pretrained` stamps
+`pathway_format_version` into `config.json` so `load_pretrained` / `--resume` refuse
+checkpoints trained against incompatible targets. Remaining nicety: surface the same
+provenance (QC params, `--pathways` subset, run date) in a per-run summary for quick
+human inspection.
 
 ---
 

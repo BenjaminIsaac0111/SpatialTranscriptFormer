@@ -15,7 +15,7 @@ This path is used when training or evaluating directly on pixel-space images.
     *   **Neighbourhood Context**: Can retrieve a patch along with its $K$ nearest neighbours.
     *   **Dihedral Augmentation**: Randomly rotates or flips patch pixels and coordinates in sync.
 *   **`get_hest_dataloader`**: High-level orchestrator that creates a `DataLoader` over raw patches for a list of sample IDs, combining individual datasets using `ConcatDataset`.
-*   **Returned Tuples**: Yields `(patches, None, rel_coords)` where the second element (formerly gene expression counts) is `None`.
+*   **Returned Tuples**: Yields `(patches, None, pathway_acts, rel_coords, mask)`. The second slot is the legacy gene-counts slot (always `None` now); `pathway_acts` holds the pre-computed targets (or `None` when no `pathway_targets_dir` is given).
 
 ### 2. Pre-Computed Feature Loading Path
 
@@ -27,7 +27,7 @@ This is the default path used by the SpatialTranscriptFormer training pipeline (
     *   **Patch Mode**: Returns a single spot feature vector, its local neighbourhood features (optionally with random dropout augmentation), pre-computed pathway targets, and relative coordinates.
     *   **Whole-Slide Mode**: Returns all spots on the slide as a single sequence.
 *   **`get_hest_feature_dataloader`**: Builds a `DataLoader` over the feature datasets.
-    *   In **patch mode**, yields standard batched tensors `(feats, None, pathway_acts, coords)`.
+    *   In **patch mode**, yields standard batched tensors `(feats, None, pathway_acts, coords, mask)`.
     *   In **whole-slide mode**, pads variable-length slides to the longest slide in the batch and appends a boolean padding mask. Yields `(padded_feats, None, padded_pathways, padded_coords, mask)`.
 
 ---
@@ -50,10 +50,11 @@ dataloader = get_hest_feature_dataloader(
     pathway_targets_dir="./hest_data/pathway_activities"
 )
 
-for feats, _, pathway_acts, rel_coords in dataloader:
-    # feats shape: (BS, 1 + n_neighbors, feature_dim)
+for feats, _, pathway_acts, rel_coords, mask in dataloader:
+    # feats shape:        (BS, 1 + n_neighbors, feature_dim)
     # pathway_acts shape: (BS, num_pathways)
-    # rel_coords shape: (BS, 1 + n_neighbors, 2)
+    # rel_coords shape:   (BS, 1 + n_neighbors, 2)
+    # mask shape:         (BS, 1 + n_neighbors) bool, True = padded
     ...
 ```
 
