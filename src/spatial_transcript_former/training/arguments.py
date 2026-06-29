@@ -132,6 +132,12 @@ def parse_args():
     g.add_argument("--compile", action="store_true")
     g.add_argument("--resume", action="store_true")
     g.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=None,
+        help="Number of epochs to wait for val_ccc improvement before early stopping (default: None/disabled)",
+    )
+    g.add_argument(
         "--run-name",
         type=str,
         default=None,

@@ -54,3 +54,33 @@ class ViT_ST(nn.Module):
 
     def forward(self, x):
         return self.backbone(x)
+
+
+class LinearProbe(nn.Module):
+    """Linear probe baseline on precomputed features."""
+
+    def __init__(self, input_dim=1024, num_pathways=50):
+        super().__init__()
+        self.classifier = nn.Linear(input_dim, num_pathways)
+
+    def forward(self, x):
+        # Supports input shape (B, L) or (B, N, L)
+        return self.classifier(x)
+
+
+class MLPProbe(nn.Module):
+    """MLP baseline on precomputed features."""
+
+    def __init__(self, input_dim=1024, num_pathways=50, hidden_dim=512, dropout=0.1):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_pathways),
+        )
+
+    def forward(self, x):
+        # Supports input shape (B, L) or (B, N, L)
+        return self.mlp(x)

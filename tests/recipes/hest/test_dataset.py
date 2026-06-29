@@ -211,8 +211,8 @@ def test_hest_feature_dataset_neighborhood_dropout():
         # Run multiple times to trigger the stochastic dropout
         dropout_occurred = False
         for _ in range(100):
-            # Batch: (feats, genes, pathways, coords)
-            f, g, _, _ = ds[0]
+            # Batch: (feats, genes, pathways, coords, mask)
+            f, g, _, _, mask = ds[0]
             assert g is None, "Genes should be None in pathway-only mode"
             # Center (index 0) should NEVER be zero
             assert not torch.all(f[0] == 0)

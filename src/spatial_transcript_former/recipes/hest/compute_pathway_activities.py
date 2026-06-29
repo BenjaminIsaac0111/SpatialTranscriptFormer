@@ -186,7 +186,15 @@ def _score_pathways(expr_matrix, gene_names, pathway_dict, min_genes=5):
     n_scored : int
         Number of pathways that met the min_genes threshold.
     """
-    gene_to_idx = {g: i for i, g in enumerate(gene_names)}
+
+    def clean_gene_name(g):
+        g_upper = g.upper()
+        for prefix in ["GRCH38_", "MM10_", "GRCM38_", "HS_", "MOUSE_"]:
+            if g_upper.startswith(prefix):
+                return g_upper[len(prefix) :]
+        return g_upper
+
+    gene_to_idx = {clean_gene_name(g): i for i, g in enumerate(gene_names)}
     n_spots = expr_matrix.shape[0]
 
     all_pathways = list(pathway_dict.keys())
@@ -194,7 +202,11 @@ def _score_pathways(expr_matrix, gene_names, pathway_dict, min_genes=5):
     n_scored = 0
 
     for i, (pw_name, pw_genes) in enumerate(pathway_dict.items()):
-        col_indices = [gene_to_idx[g] for g in pw_genes if g in gene_to_idx]
+        col_indices = [
+            gene_to_idx[clean_gene_name(g)]
+            for g in pw_genes
+            if clean_gene_name(g) in gene_to_idx
+        ]
         if len(col_indices) < min_genes:
             continue
         activities[:, i] = expr_matrix[:, col_indices].mean(axis=1)

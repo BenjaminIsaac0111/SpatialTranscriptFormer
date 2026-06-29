@@ -182,31 +182,43 @@ Available interaction tokens: `p2p`, `p2h`, `h2p`, `h2h`. Default is all four (F
 
 ---
 
-## 4. HPC Batch Experiments
+## 4. HPC Batch Experiments (Model Comparison)
 
-The `hpc/array_train.slurm` script runs all three whole-slide experiments as a SLURM array job:
+The `scripts/compare_models.py` script provides a unified mechanism to train all 5 models (SpatialTranscriptFormer, AttentionMIL, TransMIL, HE2RNA, and ViT-ST) under identical conditions (using precomputed features, identical seeds/splits, and the `mse_ccc` loss) and aggregate their results into a comparison table and chart.
 
-| Index | Model | Supervision | Key Flags |
-| :--- | :--- | :--- | :--- |
-| 0 | SpatialTranscriptFormer | Dense | `--whole-slide` |
-| 1 | AttentionMIL | Weak | `--whole-slide --weak-supervision` |
-| 2 | TransMIL | Weak | `--whole-slide --weak-supervision` |
-
-Submit with:
-
+### Running Locally
+To run all experiments sequentially on your local machine:
 ```bash
-sbatch hpc/array_train.slurm
+python scripts/compare_models.py --data-dir hest_data --output-dir runs/comparison
 ```
 
-### Collecting Results (Currently broken!)
-
-After experiments complete, aggregate all `results_summary.json` files into a comparison table:
-
+### Running on Slurm HPC
+To generate Slurm job submission scripts for the cluster:
 ```bash
-python hpc/collect_results.py --results-dir runs/ws_experiments
+python scripts/compare_models.py --data-dir /path/to/linux/hest_data --output-dir runs/comparison --slurm
 ```
 
-This produces a sorted comparison table and `comparison.csv`.
+> [!IMPORTANT]
+> **Windows Path Check**: If `--slurm` is active, the script will validation-check the `--data-dir` and throw an error if a Windows drive letter or backslashes are present, preventing job failures at discovery.
+> **Invoking Directory**: Note that relative log and output paths rely on `sbatch` being run from the project root directory.
+
+To automatically submit these scripts to the Slurm scheduler:
+```bash
+python scripts/compare_models.py --data-dir /path/to/linux/hest_data --output-dir runs/comparison --slurm --submit
+```
+
+This generates and submits 5 training jobs, plus a collection job. The collection job is configured with a Slurm dependency (`afterany`) on all 5 training runs, so it automatically aggregates results as soon as they complete.
+
+### Collecting Results Manually
+If you ran jobs individually or need to rebuild the report/plots from existing runs, run the script in collection-only mode:
+```bash
+python scripts/compare_models.py --collect-only --output-dir runs/comparison
+```
+
+This parses the `training_logs.sqlite` and `results_summary.json` inside each subdirectory and writes:
+1. `comparison_report.md` (Markdown summary table)
+2. `comparison_results.csv` (CSV statistics)
+3. `comparison_chart.png` (PCC vs. CCC and MAE comparison plots)
 
 ---
 

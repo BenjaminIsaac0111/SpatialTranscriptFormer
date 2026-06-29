@@ -1,7 +1,13 @@
 import os
 import torch
 import torch.nn as nn
-from spatial_transcript_former.models import HE2RNA, ViT_ST, SpatialTranscriptFormer
+from spatial_transcript_former.models import (
+    HE2RNA,
+    ViT_ST,
+    SpatialTranscriptFormer,
+    LinearProbe,
+    MLPProbe,
+)
 from spatial_transcript_former.training.losses import (
     CCCLoss,
     CLIPAlignmentLoss,
@@ -26,17 +32,35 @@ def setup_model(args, device):
     args.num_pathways = _resolve_num_pathways(args)
 
     if args.model == "he2rna":
-        model = HE2RNA(
-            num_pathways=args.num_pathways,
-            backbone=args.backbone,
-            pretrained=args.pretrained,
-        )
+        if getattr(args, "precomputed", False):
+            from spatial_transcript_former.models.backbones import get_backbone
+
+            _, feature_dim = get_backbone(args.backbone, pretrained=False)
+            model = LinearProbe(
+                input_dim=feature_dim,
+                num_pathways=args.num_pathways,
+            )
+        else:
+            model = HE2RNA(
+                num_pathways=args.num_pathways,
+                backbone=args.backbone,
+                pretrained=args.pretrained,
+            )
     elif args.model == "vit_st":
-        model = ViT_ST(
-            num_pathways=args.num_pathways,
-            model_name=args.backbone if "vit_" in args.backbone else "vit_b_16",
-            pretrained=args.pretrained,
-        )
+        if getattr(args, "precomputed", False):
+            from spatial_transcript_former.models.backbones import get_backbone
+
+            _, feature_dim = get_backbone(args.backbone, pretrained=False)
+            model = MLPProbe(
+                input_dim=feature_dim,
+                num_pathways=args.num_pathways,
+            )
+        else:
+            model = ViT_ST(
+                num_pathways=args.num_pathways,
+                model_name=args.backbone if "vit_" in args.backbone else "vit_b_16",
+                pretrained=args.pretrained,
+            )
     elif args.model == "interaction":
         print(
             f"Initializing SpatialTranscriptFormer ({args.backbone}, pretrained={args.pretrained}, num_pathways={args.num_pathways})"
