@@ -10,8 +10,16 @@ import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
-from spatial_transcript_former.models import SpatialTranscriptFormer
+from spatial_transcript_former.models import (
+    SpatialTranscriptFormer,
+    SpatialTransformerRegressor,
+)
 from spatial_transcript_former.data.spatial_stats import spatial_coherence_score
+
+# Models driven through the dense, coordinate-aware whole-slide code path
+# (they accept ``forward(feats, return_dense=, mask=, rel_coords=)``). Other
+# models (LinearProbe, MLPProbe, MIL) are called as ``forward(feats)``.
+SPATIAL_MODELS = (SpatialTranscriptFormer, SpatialTransformerRegressor)
 
 
 def _criterion_call(criterion, preds, targets, mask=None, pathway_mask=None):
@@ -105,7 +113,7 @@ def train_one_epoch(
 
             with torch.amp.autocast("cuda", enabled=scaler is not None):
                 if not getattr(model, "weak_supervision", False):
-                    if isinstance(model, SpatialTranscriptFormer):
+                    if isinstance(model, SPATIAL_MODELS):
                         preds = model(
                             feats,
                             return_dense=True,
@@ -162,7 +170,7 @@ def train_one_epoch(
                 )
 
             with torch.amp.autocast("cuda", enabled=scaler is not None):
-                if isinstance(model, SpatialTranscriptFormer):
+                if isinstance(model, SPATIAL_MODELS):
                     outputs = model(images, rel_coords=rel_coords, mask=mask)
                 else:
                     outputs = model(images)
@@ -261,7 +269,7 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
 
                 if whole_slide:
                     if not getattr(model, "weak_supervision", False):
-                        if isinstance(model, SpatialTranscriptFormer):
+                        if isinstance(model, SPATIAL_MODELS):
                             outputs = model(
                                 feats,
                                 return_dense=True,
@@ -283,7 +291,7 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                         targets = _compute_bag_target(pathway_targets, mask)
                 else:
                     targets = pathway_targets
-                    if isinstance(model, SpatialTranscriptFormer):
+                    if isinstance(model, SPATIAL_MODELS):
                         outputs = model(images, rel_coords=rel_coords, mask=mask)
                     else:
                         outputs = model(images)

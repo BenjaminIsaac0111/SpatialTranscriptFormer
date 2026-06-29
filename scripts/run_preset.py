@@ -67,6 +67,25 @@ PRESETS = {
         "precomputed": True,
         "batch-size": 1,
     },
+    # No-pathway-token spatial baseline. Mirrors stf_small dims so the only
+    # difference vs. SpatialTranscriptFormer is the pathway-token interaction.
+    # (compile left off: torch.compile wraps the module so the engine's
+    # dense-dispatch isinstance check would miss it.)
+    "spatial_transformer": {
+        "model": "spatial_transformer",
+        "backbone": "ctranspath",
+        "precomputed": True,
+        "whole-slide": True,
+        "use-amp": True,
+        "use-spatial-pe": True,
+        "loss": "mse_ccc",
+        "resume": True,
+        "n-layers": 4,
+        "token-dim": 384,
+        "n-heads": 8,
+        "batch-size": 8,
+        "vis_sample": "TENX29",
+    },
     # --- SpatialTranscriptFormer Variants ---
     "stf_tiny": make_stf_params(n_layers=2, token_dim=256, n_heads=4, batch_size=8),
     "stf_small": make_stf_params(n_layers=4, token_dim=384, n_heads=8, batch_size=8),

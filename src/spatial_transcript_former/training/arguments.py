@@ -78,7 +78,14 @@ def parse_args():
         "--model",
         type=str,
         default="he2rna",
-        choices=["he2rna", "vit_st", "interaction", "attention_mil", "transmil"],
+        choices=[
+            "he2rna",
+            "vit_st",
+            "interaction",
+            "spatial_transformer",
+            "attention_mil",
+            "transmil",
+        ],
     )
     g.add_argument("--backbone", type=str, default="resnet50")
     g.add_argument("--no-pretrained", action="store_false", dest="pretrained")

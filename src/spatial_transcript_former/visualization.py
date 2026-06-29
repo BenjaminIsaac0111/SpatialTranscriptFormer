@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import h5py
 from spatial_transcript_former.recipes.hest.utils import setup_dataloaders
-from spatial_transcript_former.models import SpatialTranscriptFormer
+from spatial_transcript_former.training.engine import SPATIAL_MODELS
 
 
 def _load_histology(h5ad_path):
@@ -118,7 +118,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
 
             # Forward pass
             if val_whole_slide:
-                if isinstance(model, SpatialTranscriptFormer):
+                if isinstance(model, SPATIAL_MODELS):
                     outputs = model(
                         image_features,
                         rel_coords=coords,
@@ -128,7 +128,7 @@ def run_inference_plot(model, args, sample_id, epoch, device):
                 else:
                     outputs = model(image_features)
             else:
-                if isinstance(model, SpatialTranscriptFormer):
+                if isinstance(model, SPATIAL_MODELS):
                     outputs = model(image_features, rel_coords=coords, mask=mask)
                 else:
                     outputs = model(image_features)

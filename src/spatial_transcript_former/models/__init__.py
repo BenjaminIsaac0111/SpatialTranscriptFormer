@@ -2,3 +2,4 @@
 from .mil import AttentionMIL, TransMIL
 from .regression import HE2RNA, ViT_ST, LinearProbe, MLPProbe
 from .interaction import SpatialTranscriptFormer
+from .spatial_baseline import SpatialTransformerRegressor, KNNRetrievalBaseline

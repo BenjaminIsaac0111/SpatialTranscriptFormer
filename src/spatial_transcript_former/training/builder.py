@@ -5,6 +5,7 @@ from spatial_transcript_former.models import (
     HE2RNA,
     ViT_ST,
     SpatialTranscriptFormer,
+    SpatialTransformerRegressor,
     LinearProbe,
     MLPProbe,
 )
@@ -75,6 +76,24 @@ def setup_model(args, device):
             n_layers=args.n_layers,
             use_spatial_pe=args.use_spatial_pe,
             interactions=getattr(args, "interactions", None),
+        )
+    elif args.model == "spatial_transformer":
+        # No-pathway-token spatial baseline. Precomputed-feature only: it mixes
+        # patch features with a transformer, then regresses pathways per spot.
+        if not getattr(args, "precomputed", False):
+            raise ValueError(
+                "spatial_transformer baseline requires --precomputed features."
+            )
+        from spatial_transcript_former.models.backbones import get_backbone
+
+        _, feature_dim = get_backbone(args.backbone, pretrained=False)
+        model = SpatialTransformerRegressor(
+            input_dim=feature_dim,
+            num_pathways=args.num_pathways,
+            token_dim=args.token_dim,
+            n_heads=args.n_heads,
+            n_layers=args.n_layers,
+            use_spatial_pe=args.use_spatial_pe,
         )
     elif args.model == "attention_mil":
         from spatial_transcript_former.models.mil import AttentionMIL

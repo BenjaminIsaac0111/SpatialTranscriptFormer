@@ -93,7 +93,47 @@ python -m spatial_transcript_former.train \
 
 ---
 
-## 3. Spatial TranscriptFormer (Multimodal Interaction)
+## 3. Spatial Baselines (No Pathway Interaction)
+
+These isolate *which* part of SpatialTranscriptFormer earns its keep. Both use the same precomputed features and pathway targets as the full model, so differences reflect the architecture rather than the feature extractor.
+
+### Spatial Transformer (control)
+
+A plain transformer encoder over patch features with a per-spot MLP head: generic spatial mixing among patches, but **no pathway tokens and no pathway↔histology interaction**. Comparing it to the full model isolates the contribution of the quad-flow interaction (rather than spatial context in general). It is driven through the same dense whole-slide path as the full model.
+
+```bash
+python -m spatial_transcript_former.train \
+    --data-dir A:\hest_data \
+    --model spatial_transformer \
+    --backbone ctranspath \
+    --precomputed \
+    --whole-slide \
+    --use-spatial-pe \
+    --use-amp \
+    --loss mse_ccc \
+    --epochs 100
+```
+
+Or via preset (mirrors `stf_small` dimensions):
+
+```bash
+python scripts/run_preset.py --preset spatial_transformer
+```
+
+### k-NN Retrieval (non-parametric)
+
+A BLEEP-style retrieval baseline: each validation spot is predicted as the mean pathway target of its *k* nearest training spots in backbone-feature space. There is no training — it measures how much the frozen foundation features already encode pathway activity, setting the bar a learned model must clear. Metrics are computed with the same engine `validate`, so they are directly comparable to the trained runs.
+
+```bash
+python scripts/baseline_knn_retrieval.py \
+    --data-dir A:\hest_data \
+    --backbone ctranspath \
+    --k 16 --metric cosine
+```
+
+---
+
+## 4. Spatial TranscriptFormer (Multimodal Interaction)
 
 The core model of this repository. Captures dense interactions between pathways and histology.
 
@@ -179,9 +219,9 @@ Available interaction tokens: `p2p`, `p2h`, `h2p`, `h2h`. Default is all four (F
 
 ---
 
-## 4. HPC Batch Experiments (Model Comparison)
+## 5. HPC Batch Experiments (Model Comparison)
 
-The `scripts/compare_models.py` script provides a unified mechanism to train all 5 models (SpatialTranscriptFormer, AttentionMIL, TransMIL, HE2RNA, and ViT-ST) under identical conditions (using precomputed features, identical seeds/splits, and the `mse_ccc` loss) and aggregate their results into a comparison table and chart.
+The `scripts/compare_models.py` script provides a unified mechanism to train all 6 models (SpatialTranscriptFormer, the no-interaction SpatialTransformer control, AttentionMIL, TransMIL, HE2RNA, and ViT-ST) under identical conditions (using precomputed features, identical seeds/splits, and the `mse_ccc` loss) and aggregate their results into a comparison table and chart. The k-NN retrieval baseline is run separately via `scripts/baseline_knn_retrieval.py`.
 
 ### Running Locally
 To run all experiments sequentially on your local machine:
