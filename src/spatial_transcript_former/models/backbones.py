@@ -202,6 +202,23 @@ def get_backbone(name, pretrained=True, num_classes=None):
             "UNI backbone is currently disabled (requires gated access)."
         )
 
+    elif name == "h_optimus_0":
+        # Bioptimus H-Optimus-0: ViT-giant/14, best model on the HEST-Benchmark
+        # (0.4146 avg vs CTransPath 0.3447). Gated on HF -- accept the licence
+        # at https://huggingface.co/bioptimus/H-optimus-0 first.
+        # NOTE: it expects its own normalisation constants, not ImageNet's;
+        # see extract_features.py.
+        if timm is None:
+            raise ImportError("timm is required for h_optimus_0")
+        model = timm.create_model(
+            "hf-hub:bioptimus/H-optimus-0",
+            pretrained=pretrained,
+            init_values=1e-5,
+            dynamic_img_size=False,
+            num_classes=num_classes if num_classes else 0,
+        )
+        feature_dim = model.num_features
+
     elif name == "gigapath":
         if timm is None:
             raise ImportError("timm is required for GigaPath")
