@@ -33,6 +33,7 @@ dependencies = [
     "nystrom-attention",
     "scipy",
     "PyYAML",
+    "anndata"
 ]
 
 [project.optional-dependencies]
