@@ -34,6 +34,7 @@ Usage::
 import argparse
 import os
 import logging
+import re
 
 import h5py
 import numpy as np
@@ -55,7 +56,7 @@ logger = logging.getLogger(__name__)
 # Bumped whenever the on-disk semantics of `activities` change.
 #   v1: per-slide z-scored pathway-mean (deprecated — slide-relative drift).
 #   v2: plain mean of log1p CP10k expression of pathway members.
-PATHWAY_FILE_VERSION = 2
+PATHWAY_FILE_VERSION = 3
 
 
 def _load_expression(
@@ -133,12 +134,13 @@ def _load_expression(
         counts = counts.toarray()
     counts = counts.astype(np.float32)
     lib_sizes = counts.sum(axis=1, keepdims=True).clip(min=1.0)
+    total_counts = lib_sizes.ravel().astype(np.float32)
     counts = counts / lib_sizes * target_sum
     np.log1p(counts, out=counts)
 
     adata.X = csr_matrix(counts)
 
-    return adata, n_before, n_after
+    return adata, n_before, n_after, total_counts
 
 
 def _load_hallmark_sets(cache_dir: str = ".cache"):
@@ -153,6 +155,82 @@ def _load_hallmark_sets(cache_dir: str = ".cache"):
     filename = url.split("/")[-1]
     gmt_path = download_msigdb_gmt(url, filename, cache_dir)
     return parse_gmt(gmt_path)
+
+
+_ENSEMBL_RE = re.compile(r"^ENS[A-Z]*G\d+")
+
+# Genome prefixes emitted by multi-reference CellRanger runs. The separator is
+# *not* consistent across HEST: real files carry ``GRCh38_``, ``GRCh38__`` and
+# even ``GRCh38______``, so match one-or-more underscores rather than a fixed
+# literal. A generic fallback catches unseen genome names: two-or-more
+# underscores is a reliable prefix marker, since HGNC symbols do not contain
+# them.
+_KNOWN_GENOME_RE = re.compile(
+    r"^(?:GRCH38|GRCH37|HG19|HG38|MM10|GRCM38|WUHCOR1|SARS[-_]?COV[-_]?2|HS|MOUSE|HUMAN)_+"
+)
+_GENERIC_GENOME_RE = re.compile(r"^[A-Z0-9.\-]+__+")
+
+
+def clean_gene_name(g):
+    """Normalise a gene identifier to a bare uppercase HGNC symbol.
+
+    Strips multi-genome CellRanger prefixes so that ``GRCh38______OR4F5``,
+    ``GRCh38__OR4F5`` and ``OR4F5`` all resolve to the same symbol. Getting
+    this wrong is silent: unstripped names simply fail to match any Hallmark
+    member, the sample scores 0/50 pathways, and it is dropped with a warning
+    while the batch summary still reports "0 failed".
+    """
+    g_upper = str(g).upper()
+    stripped = _KNOWN_GENOME_RE.sub("", g_upper, count=1)
+    if stripped == g_upper:
+        stripped = _GENERIC_GENOME_RE.sub("", g_upper, count=1)
+    return stripped or g_upper
+
+
+# Columns HEST samples use to carry HGNC symbols when the index is Ensembl.
+_SYMBOL_COLUMNS = (
+    "SYMBOL",
+    "symbol",
+    "gene_symbol",
+    "gene_name",
+    "gene_symbols",
+    "feature_name",
+    "GeneSymbol",
+)
+
+
+def _resolve_gene_symbols(adata, sample_name=""):
+    """Return HGNC symbols for ``adata``'s genes, whatever the index uses.
+
+    HEST is not internally consistent: most slides index ``var`` by gene
+    symbol, but some index by Ensembl gene ID and keep the symbol in a ``var``
+    column. Hallmark sets are symbol-based, so an Ensembl-indexed slide matches
+    **zero** pathway members, trips the ``min_pathways`` guard, and is dropped
+    with only a warning — the batch summary still reports "0 failed". This
+    silently shrinks the corpus, so resolve the symbols instead.
+    """
+    names = [str(g) for g in adata.var_names]
+    head = names[: min(50, len(names))]
+    if not head or sum(bool(_ENSEMBL_RE.match(g)) for g in head) / len(head) <= 0.5:
+        return names  # already symbol-indexed
+
+    for col in _SYMBOL_COLUMNS:
+        if col in adata.var.columns:
+            resolved = [str(x) for x in adata.var[col]]
+            n_ok = sum(1 for g in resolved if g and g.lower() not in ("nan", "none"))
+            if n_ok >= 0.5 * len(resolved):
+                logger.info(
+                    f"[{sample_name}] var_names are Ensembl IDs; using "
+                    f"var['{col}'] for gene symbols ({n_ok}/{len(resolved)} resolved)."
+                )
+                return resolved
+
+    logger.warning(
+        f"[{sample_name}] var_names look like Ensembl IDs but no usable symbol "
+        f"column was found (looked for {list(_SYMBOL_COLUMNS)}). Pathway "
+        "scoring will match nothing and this sample will be skipped."
+    )
+    return names
 
 
 def _score_pathways(expr_matrix, gene_names, pathway_dict, min_genes=5):
@@ -187,14 +265,13 @@ def _score_pathways(expr_matrix, gene_names, pathway_dict, min_genes=5):
         Number of pathways that met the min_genes threshold.
     """
 
-    def clean_gene_name(g):
-        g_upper = g.upper()
-        for prefix in ["GRCH38_", "MM10_", "GRCM38_", "HS_", "MOUSE_"]:
-            if g_upper.startswith(prefix):
-                return g_upper[len(prefix) :]
-        return g_upper
-
-    gene_to_idx = {clean_gene_name(g): i for i, g in enumerate(gene_names)}
+    # Build the symbol lookup. Where a multi-genome reference maps two entries
+    # onto the same cleaned symbol (e.g. human and mouse orthologs), keep the
+    # first — CellRanger lists the primary genome first, so this prefers it
+    # deterministically instead of silently taking whichever came last.
+    gene_to_idx = {}
+    for i, g in enumerate(gene_names):
+        gene_to_idx.setdefault(clean_gene_name(g), i)
     n_spots = expr_matrix.shape[0]
 
     all_pathways = list(pathway_dict.keys())
@@ -294,7 +371,7 @@ def compute_pathway_activities_for_sample(
 
     sample_name = os.path.basename(h5ad_path).replace(".h5ad", "")
     logger.info(f"[{sample_name}] Loading {h5ad_path}")
-    adata, n_before, n_after = _load_expression(
+    adata, n_before, n_after, total_counts = _load_expression(
         h5ad_path,
         target_sum=target_sum,
         qc_min_umis=qc_min_umis,
@@ -322,7 +399,7 @@ def compute_pathway_activities_for_sample(
     if issparse(expr):
         expr = expr.toarray()
     expr = expr.astype(np.float32)
-    gene_names = list(adata.var_names)
+    gene_names = _resolve_gene_symbols(adata, sample_name)
 
     activities, all_pathways, n_scored = _score_pathways(
         expr, gene_names, pathway_dict, min_genes=min_genes
@@ -393,6 +470,10 @@ def compute_pathway_activities_for_sample(
         f.create_dataset("pathway_names", data=pathway_names)
         if pathway_morans is not None:
             f.create_dataset("pathway_morans_i", data=pathway_morans)
+        # Per-spot library size (total UMIs before CP10k). Stored because the
+        # score correlates with it at |r|~0.93 -- it is the dominant confound,
+        # and downstream consumers need it to regress the confound out.
+        f.create_dataset("total_counts", data=total_counts)
         # File-format version — bumped when the semantics of `activities` change.
         f.attrs["format_version"] = PATHWAY_FILE_VERSION
         # QC metadata for downstream auditing
@@ -480,6 +561,36 @@ def load_pathway_activities(
             valid_mask[j] = True
 
     return activities, pathway_names, valid_mask, pathway_morans_i
+
+
+def load_spot_depth(h5_path: str, barcodes: list) -> np.ndarray:
+    """Load per-spot library size, aligned to ``barcodes``.
+
+    Kept separate from :func:`load_pathway_activities` so that function's
+    4-tuple return stays source-compatible with existing callers.
+
+    Returns
+    -------
+    np.ndarray, shape (len(barcodes),), float32
+        Total UMI counts per spot; ``0.0`` for barcodes absent from the file.
+        Returns all-zeros if the file predates ``total_counts`` storage.
+    """
+    with h5py.File(h5_path, "r") as f:
+        if "total_counts" not in f:
+            return np.zeros(len(barcodes), dtype=np.float32)
+        stored = f["total_counts"][:].astype(np.float32)
+        stored_barcodes = f["barcodes"][:]
+
+    def _decode(b):
+        return b.decode() if isinstance(b, bytes) else b
+
+    row_of = {_decode(b): i for i, b in enumerate(stored_barcodes)}
+    out = np.zeros(len(barcodes), dtype=np.float32)
+    for j, bc in enumerate(barcodes):
+        i = row_of.get(_decode(bc))
+        if i is not None:
+            out[j] = stored[i]
+    return out
 
 
 def main():

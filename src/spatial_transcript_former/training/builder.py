@@ -28,6 +28,21 @@ def _resolve_num_pathways(args):
     return 50  # Default Hallmarks
 
 
+def _resolve_output_activation(args):
+    """Pick the output head to match the sign of the targets.
+
+    Raw pathway targets are means of log1p CP10k expression and so are
+    non-negative, which softplus enforces. Depth-residualised targets are
+    zero-centred with ~50% negative values; a strictly-positive head cannot
+    represent them and the model collapses to a constant. Default "auto"
+    therefore follows --residualize-depth.
+    """
+    choice = getattr(args, "output_activation", "auto") or "auto"
+    if choice != "auto":
+        return choice
+    return "linear" if getattr(args, "residualize_depth", False) else "softplus"
+
+
 def setup_model(args, device):
     """Initialize and optionally compile the model."""
     args.num_pathways = _resolve_num_pathways(args)
@@ -76,6 +91,7 @@ def setup_model(args, device):
             n_layers=args.n_layers,
             use_spatial_pe=args.use_spatial_pe,
             interactions=getattr(args, "interactions", None),
+            output_activation=_resolve_output_activation(args),
         )
     elif args.model == "spatial_transformer":
         # No-pathway-token spatial baseline. Precomputed-feature only: it mixes

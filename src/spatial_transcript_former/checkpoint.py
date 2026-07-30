@@ -25,6 +25,7 @@ _CONFIG_KEYS = [
     "dropout",
     "use_spatial_pe",
     "interactions",
+    "output_activation",
 ]
 
 
@@ -60,6 +61,7 @@ def _model_config(model) -> Dict[str, Any]:
         "dropout": dropout,
         "use_spatial_pe": use_spatial_pe,
         "interactions": interactions,
+        "output_activation": getattr(model, "output_activation", "softplus"),
     }
 
 

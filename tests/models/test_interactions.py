@@ -424,3 +424,67 @@ def test_return_attention_values():
         # In eval mode, attention should sum to 1.0 across the last dimension (softmax)
         sums = layer_attn.sum(dim=-1)
         assert torch.allclose(sums, torch.ones_like(sums), atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Output head must match the sign of the targets
+# ---------------------------------------------------------------------------
+
+
+def test_softplus_head_cannot_represent_signed_targets():
+    """Regression: softplus is strictly positive.
+
+    Depth-residualised targets are zero-centred with ~50% negative values, so
+    a softplus head cannot represent them and training collapses to a constant
+    (pred_variance ~1e-5, val_loss frozen). This pins the mechanism.
+    """
+    model = SpatialTranscriptFormer(
+        num_pathways=5, token_dim=32, n_heads=2, n_layers=2, pretrained=False
+    )
+    feats = torch.randn(1, 12, 2048)
+    coords = torch.randn(1, 12, 2)
+    out = model(feats, rel_coords=coords, return_dense=True)
+    assert (out >= 0).all(), "softplus head should be non-negative"
+
+
+def test_linear_head_can_represent_signed_targets():
+    """A linear head must be able to emit negative values."""
+    model = SpatialTranscriptFormer(
+        num_pathways=5,
+        token_dim=32,
+        n_heads=2,
+        n_layers=2,
+        pretrained=False,
+        output_activation="linear",
+    )
+    with torch.no_grad():
+        model.bias.fill_(-5.0)  # force the head negative
+    feats = torch.randn(1, 12, 2048)
+    coords = torch.randn(1, 12, 2)
+    out = model(feats, rel_coords=coords, return_dense=True)
+    assert (out < 0).any(), "linear head must be able to produce negative scores"
+
+
+def test_invalid_output_activation_raises():
+    with pytest.raises(ValueError, match="output_activation"):
+        SpatialTranscriptFormer(num_pathways=4, output_activation="relu")
+
+
+def test_residualize_depth_selects_linear_head():
+    """--residualize-depth must imply a linear head, or training collapses."""
+    from types import SimpleNamespace
+
+    from spatial_transcript_former.training.builder import _resolve_output_activation
+
+    assert (
+        _resolve_output_activation(
+            SimpleNamespace(output_activation="auto", residualize_depth=True)
+        )
+        == "linear"
+    )
+    assert (
+        _resolve_output_activation(
+            SimpleNamespace(output_activation="auto", residualize_depth=False)
+        )
+        == "softplus"
+    )

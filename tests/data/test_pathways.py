@@ -374,3 +374,123 @@ class TestPathwayScoring:
 
         with pytest.raises(ValueError, match="format_version"):
             load_pathway_activities(h5_path, [f"S{i}" for i in range(n_spots)])
+
+
+# ---------------------------------------------------------------------------
+# Gene-identifier resolution (Ensembl-indexed slides)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_gene_symbols_maps_ensembl_via_symbol_column():
+    """Ensembl-indexed slides must resolve to symbols, not score 0 pathways.
+
+    HEST mixes conventions: some slides index var by Ensembl gene ID and keep
+    the HGNC symbol in a var column. Hallmark sets are symbol-based, so
+    without resolution such a slide matches zero members, trips the
+    min_pathways guard and is dropped -- while the batch summary still reports
+    "0 failed". That is silent corpus loss, so it is guarded here.
+    """
+    import anndata
+    import numpy as np
+    import pandas as pd
+
+    from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+        _resolve_gene_symbols,
+    )
+
+    ens = [f"ENSG{i:011d}" for i in range(6)]
+    syms = ["TP53", "MYC", "EGFR", "VIM", "ACTB", "CD8A"]
+    adata = anndata.AnnData(
+        X=np.ones((3, 6), dtype=np.float32),
+        var=pd.DataFrame({"SYMBOL": syms}, index=ens),
+    )
+    assert _resolve_gene_symbols(adata, "T") == syms
+
+
+def test_resolve_gene_symbols_passes_through_symbol_index():
+    """A slide already indexed by symbol must be returned unchanged."""
+    import anndata
+    import numpy as np
+    import pandas as pd
+
+    from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+        _resolve_gene_symbols,
+    )
+
+    syms = ["TP53", "MYC", "EGFR"]
+    adata = anndata.AnnData(
+        X=np.ones((2, 3), dtype=np.float32),
+        var=pd.DataFrame(index=syms),
+    )
+    assert _resolve_gene_symbols(adata, "T") == syms
+
+
+def test_resolve_gene_symbols_without_symbol_column_is_graceful():
+    """Ensembl index with no symbol column must warn, not raise."""
+    import anndata
+    import numpy as np
+    import pandas as pd
+
+    from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+        _resolve_gene_symbols,
+    )
+
+    ens = [f"ENSG{i:011d}" for i in range(4)]
+    adata = anndata.AnnData(
+        X=np.ones((2, 4), dtype=np.float32),
+        var=pd.DataFrame({"unrelated": list(range(4))}, index=ens),
+    )
+    assert _resolve_gene_symbols(adata, "T") == ens
+
+
+def test_clean_gene_name_strips_multigenome_prefixes():
+    """Multi-genome CellRanger prefixes use inconsistent separators in HEST.
+
+    Real files carry ``GRCh38_``, ``GRCh38__`` and ``GRCh38______``. A cleaner
+    that assumed a single underscore left ``_OR4F5``, which matches no Hallmark
+    member -- so the sample scored 0/50 and was dropped while the batch summary
+    still said "0 failed".
+    """
+    from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+        clean_gene_name,
+    )
+
+    for raw in ("GRCh38_OR4F5", "GRCh38__OR4F5", "GRCh38______OR4F5", "OR4F5"):
+        assert clean_gene_name(raw) == "OR4F5", raw
+    assert clean_gene_name("mm10___Actb") == "ACTB"
+    assert clean_gene_name("wuhCor1__ORF1ab") == "ORF1AB"
+
+
+def test_clean_gene_name_preserves_hyphenated_symbols():
+    """Real HGNC symbols contain hyphens and digits; they must survive intact."""
+    from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+        clean_gene_name,
+    )
+
+    for sym in ("HLA-DRB1", "NKX2-1", "TP53", "MT-CO1"):
+        assert clean_gene_name(sym) == sym.upper()
+
+
+def test_score_pathways_matches_genome_prefixed_genes():
+    """End-to-end: a genome-prefixed matrix must score, not silently yield 0."""
+    import numpy as np
+
+    from spatial_transcript_former.recipes.hest.compute_pathway_activities import (
+        _score_pathways,
+    )
+
+    genes = [
+        "GRCh38______TP53",
+        "GRCh38______MYC",
+        "GRCh38______EGFR",
+        "GRCh38______VIM",
+        "GRCh38______ACTB",
+        "GRCh38______CD8A",
+    ]
+    expr = np.random.default_rng(0).random((10, len(genes))).astype(np.float32)
+    pathways = {"HALLMARK_TEST": ["TP53", "MYC", "EGFR", "VIM", "ACTB"]}
+
+    activities, names, n_scored = _score_pathways(expr, genes, pathways, min_genes=5)
+    assert n_scored == 1, "genome-prefixed genes failed to match the pathway"
+    assert activities.shape == (10, 1)
+    assert np.isfinite(activities).all()

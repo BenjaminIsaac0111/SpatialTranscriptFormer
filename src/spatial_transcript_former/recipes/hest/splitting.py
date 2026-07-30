@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 from sklearn.model_selection import GroupShuffleSplit
-from typing import List, Tuple
+from typing import Iterator, List, Optional, Tuple, Union
 
 import argparse
 
@@ -64,6 +64,134 @@ def split_hest_patients(
         print("  No patient overlap between Train and Val.")
 
     return train_ids, val_ids, test_ids
+
+
+# The dominant Bowel/Visium study (41/73 slides) — see doc §3. Used as the
+# default for the COLON-MAP-vs-rest headline split.
+DEFAULT_COLONMAP_TITLE = "COLON MAP: Colon Molecular Atlas Project"
+
+
+def split_hest_by_dataset(
+    metadata_path: str,
+    held_out: Union[str, List[str]],
+    organ: Optional[str] = None,
+    technology: Optional[str] = None,
+    species: Optional[str] = "Homo sapiens",
+) -> Tuple[List[str], List[str]]:
+    """Splits HEST samples by source study (``dataset_title``) to prevent
+    institutional leakage, holding out one or more named studies as the
+    validation set.
+
+    Unlike ``patient`` (unusable for this corpus — see
+    ``split_hest_patients`` and docs/EXPERIMENT_SPATIAL_ATTRIBUTION.md §3:
+    58/73 Bowel-Visium slides have no real patient label, and where labels do
+    exist they collide across different real people in different studies),
+    ``dataset_title`` is populated and consistent for every row, so grouping
+    on it needs no leakage-prone fallback. The split is a deterministic
+    partition, not a random group-shuffle: every sample not in ``held_out``
+    goes to train.
+
+    Args:
+        metadata_path: Path to the HEST metadata CSV.
+        held_out: One ``dataset_title`` (or a list of them) to hold out as
+            the validation set — pass a single study for a Leave-One-Study-
+            Out fold, or the 9 non-headline studies for the reverse
+            direction of a COLON-MAP-vs-rest-style split.
+        organ: Optional ``organ`` column filter (e.g. ``"Bowel"``).
+        technology: Optional ``st_technology`` column filter (e.g.
+            ``"Visium"``, to exclude Xenium/Visium HD — see doc §2).
+        species: Optional ``species`` column filter, default ``"Homo
+            sapiens"`` (matches ``get_sample_ids``'s unconditional human-only
+            filter elsewhere in the pipeline) — pass ``None`` to disable.
+
+    Returns:
+        Tuple of (train_ids, val_ids).
+    """
+    df = pd.read_csv(metadata_path)
+    if organ:
+        df = df[df["organ"] == organ]
+    if technology:
+        df = df[df["st_technology"] == technology]
+    if species:
+        df = df[df["species"] == species]
+
+    held_out_set = {held_out} if isinstance(held_out, str) else set(held_out)
+    available_studies = set(df["dataset_title"].dropna().unique())
+    unknown = held_out_set - available_studies
+    if unknown:
+        raise ValueError(
+            f"Unknown dataset_title(s) {unknown}. Available studies: "
+            f"{sorted(available_studies)}"
+        )
+
+    val_mask = df["dataset_title"].isin(held_out_set)
+    val_ids = df.loc[val_mask, "id"].tolist()
+    train_ids = df.loc[~val_mask, "id"].tolist()
+
+    n_train_studies = df.loc[~val_mask, "dataset_title"].nunique()
+    print(
+        f"Dataset-grouped split (held out {sorted(held_out_set)}): "
+        f"Train {len(train_ids)} samples / {n_train_studies} studies, "
+        f"Val {len(val_ids)} samples / {len(held_out_set)} studies"
+    )
+    return train_ids, val_ids
+
+
+def iter_loso_folds(
+    metadata_path: str,
+    organ: Optional[str] = None,
+    technology: Optional[str] = None,
+    species: Optional[str] = "Homo sapiens",
+) -> Iterator[Tuple[str, List[str], List[str]]]:
+    """Yields one ``(held_out_study, train_ids, val_ids)`` tuple per distinct
+    ``dataset_title`` — the study-grouped Leave-One-Study-Out protocol (doc
+    §3). Studies are yielded in sorted-name order for reproducible fold
+    ordering across runs.
+    """
+    df = pd.read_csv(metadata_path)
+    if organ:
+        df = df[df["organ"] == organ]
+    if technology:
+        df = df[df["st_technology"] == technology]
+    if species:
+        df = df[df["species"] == species]
+
+    for study in sorted(df["dataset_title"].dropna().unique()):
+        train_ids, val_ids = split_hest_by_dataset(
+            metadata_path,
+            held_out=study,
+            organ=organ,
+            technology=technology,
+            species=species,
+        )
+        yield study, train_ids, val_ids
+
+
+def split_colonmap_vs_rest(
+    metadata_path: str,
+    colonmap_title: str = DEFAULT_COLONMAP_TITLE,
+    reverse: bool = False,
+    organ: Optional[str] = None,
+    technology: Optional[str] = None,
+    species: Optional[str] = "Homo sapiens",
+) -> Tuple[List[str], List[str]]:
+    """COLON-MAP-vs-rest headline split (doc §3): train on the 9 non-
+    COLON-MAP studies, evaluate on COLON MAP — the largest single LOSO fold
+    and the cleanest cross-institution generalisation probe given the
+    corpus's imbalance. ``reverse=True`` swaps the direction (train on
+    COLON MAP, evaluate on the rest).
+
+    Returns:
+        Tuple of (train_ids, val_ids).
+    """
+    train_ids, val_ids = split_hest_by_dataset(
+        metadata_path,
+        held_out=colonmap_title,
+        organ=organ,
+        technology=technology,
+        species=species,
+    )
+    return (val_ids, train_ids) if reverse else (train_ids, val_ids)
 
 
 def main():

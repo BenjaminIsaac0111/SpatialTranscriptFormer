@@ -19,7 +19,7 @@ from spatial_transcript_former.training.engine import train_one_epoch, validate
 from spatial_transcript_former.training.experiment_logger import ExperimentLogger
 from spatial_transcript_former.visualization import run_inference_plot
 from spatial_transcript_former.recipes.hest.utils import (
-    get_train_val_ids,
+    resolve_split_ids,
     setup_dataloaders,
 )
 
@@ -86,15 +86,7 @@ def main():
     set_seed(args.seed)
 
     # 1. Data — discover sample IDs and split (recipe handles splitting strategy)
-    train_ids, val_ids = get_train_val_ids(
-        args.data_dir,
-        precomputed=args.precomputed,
-        backbone=args.backbone,
-        feature_dir=args.feature_dir,
-        max_samples=args.max_samples,
-        organ=args.organ,
-        seed=args.seed,
-    )
+    train_ids, val_ids = resolve_split_ids(args)
     print(f"Split: {len(train_ids)} train, {len(val_ids)} val")
 
     train_loader, val_loader, val_whole_slide = setup_dataloaders(

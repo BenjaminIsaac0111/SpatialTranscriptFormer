@@ -151,6 +151,135 @@ def get_train_val_ids(
     return final_ids[:split_idx], final_ids[split_idx:]
 
 
+def get_dataset_grouped_ids(
+    data_dir,
+    held_out=None,
+    colonmap_vs_rest=None,
+    precomputed=False,
+    backbone="resnet50",
+    feature_dir=None,
+    max_samples=None,
+    organ=None,
+    technology=None,
+):
+    """Discover sample IDs and split them by source study (``dataset_title``)
+    instead of by patient.
+
+    This is the LOSO / COLON-MAP-vs-rest protocol required by
+    docs/EXPERIMENT_SPATIAL_ATTRIBUTION.md §3, since ``patient`` is not a
+    usable grouping key for the Bowel/Visium corpus (most patient labels are
+    blank, and where present they collide across different real people in
+    different studies). Mirrors ``get_train_val_ids``'s
+    discover-then-intersect-with-available-features shape, but swaps in the
+    dataset-grouped splitters from ``splitting.py``.
+
+    Args:
+        data_dir: Root data directory.
+        held_out: One ``dataset_title`` (or list of them) to hold out as the
+            validation set — a single Leave-One-Study-Out fold. Mutually
+            exclusive with ``colonmap_vs_rest``.
+        colonmap_vs_rest: ``"forward"`` (train on the 9 non-COLON-MAP
+            studies, evaluate on COLON MAP) or ``"reverse"`` (swap
+            direction). Mutually exclusive with ``held_out``.
+        precomputed: If True, filter for samples with pre-computed features.
+        backbone: Backbone identifier for feature directory discovery.
+        feature_dir: Explicit feature directory override.
+        max_samples: Optional cap on total sample count (applied before the
+            split, like ``get_train_val_ids``).
+        organ: Optional organ filter (e.g. ``"Bowel"``).
+        technology: Optional ``st_technology`` filter (e.g. ``"Visium"``).
+
+    Returns:
+        Tuple of (train_ids, val_ids).
+    """
+    if (held_out is None) == (colonmap_vs_rest is None):
+        raise ValueError("Exactly one of held_out or colonmap_vs_rest must be given.")
+
+    from .splitting import split_colonmap_vs_rest, split_hest_by_dataset
+
+    final_ids = get_sample_ids(
+        data_dir,
+        precomputed=precomputed,
+        backbone=backbone,
+        feature_dir=feature_dir,
+        max_samples=max_samples,
+        organ=organ,
+    )
+
+    metadata_path = os.path.join(data_dir, "HEST_v1_3_0.csv")
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(
+            f"Dataset-grouped splitting requires HEST metadata at {metadata_path}"
+        )
+
+    if held_out is not None:
+        train_ids, val_ids = split_hest_by_dataset(
+            metadata_path, held_out=held_out, organ=organ, technology=technology
+        )
+    else:
+        train_ids, val_ids = split_colonmap_vs_rest(
+            metadata_path,
+            reverse=(colonmap_vs_rest == "reverse"),
+            organ=organ,
+            technology=technology,
+        )
+
+    # Intersect with available IDs (after feature/organ/precomputed filtering)
+    available = set(final_ids)
+    train_ids = [i for i in train_ids if i in available]
+    val_ids = [i for i in val_ids if i in available]
+    print(
+        f"Dataset-grouped split (post feature-availability filter): "
+        f"{len(train_ids)} train, {len(val_ids)} val"
+    )
+    return train_ids, val_ids
+
+
+def resolve_split_ids(args):
+    """Resolve train/val sample IDs for a run, dispatching to the
+    dataset-grouped (LOSO / COLON-MAP-vs-rest) or patient-aware splitter
+    based on which fields are set on ``args``.
+
+    This is the exact branch ``stf-train`` uses (see
+    docs/EXPERIMENT_SPATIAL_ATTRIBUTION.md §3), factored out so a finished
+    run's own train/val split can be reconstructed later purely from its
+    saved ``results_summary.json`` config (used by
+    ``scripts/evaluate_spatial_attribution.py``).
+
+    Args:
+        args: Namespace-like object with ``data_dir``, ``precomputed``,
+            ``backbone``, ``feature_dir``, ``max_samples``, ``organ``, and
+            optionally ``held_out_study``, ``colonmap_vs_rest``,
+            ``technology``, ``seed``.
+
+    Returns:
+        Tuple of (train_ids, val_ids).
+    """
+    held_out_study = getattr(args, "held_out_study", None)
+    colonmap_vs_rest = getattr(args, "colonmap_vs_rest", None)
+    if held_out_study or colonmap_vs_rest:
+        return get_dataset_grouped_ids(
+            args.data_dir,
+            held_out=held_out_study,
+            colonmap_vs_rest=colonmap_vs_rest,
+            precomputed=args.precomputed,
+            backbone=args.backbone,
+            feature_dir=args.feature_dir,
+            max_samples=args.max_samples,
+            organ=args.organ,
+            technology=getattr(args, "technology", None),
+        )
+    return get_train_val_ids(
+        args.data_dir,
+        precomputed=args.precomputed,
+        backbone=args.backbone,
+        feature_dir=args.feature_dir,
+        max_samples=args.max_samples,
+        organ=args.organ,
+        seed=args.seed,
+    )
+
+
 def setup_dataloaders(args, train_ids, val_ids):
     """
     Create training and validation dataloaders.
@@ -197,6 +326,8 @@ def setup_dataloaders(args, train_ids, val_ids):
                     feature_dir=feat_dir,
                     pathway_targets_dir=pathway_targets_dir,
                     pathway_names=pathway_names,
+                    residualize_depth=getattr(args, "residualize_depth", False),
+                    normalize_features=getattr(args, "normalize_features", False),
                 )
                 if train_ids
                 else None
@@ -214,6 +345,8 @@ def setup_dataloaders(args, train_ids, val_ids):
                     feature_dir=feat_dir,
                     pathway_targets_dir=pathway_targets_dir,
                     pathway_names=pathway_names,
+                    residualize_depth=getattr(args, "residualize_depth", False),
+                    normalize_features=getattr(args, "normalize_features", False),
                 )
                 if val_ids
                 else None
@@ -233,6 +366,8 @@ def setup_dataloaders(args, train_ids, val_ids):
                     feature_dir=feat_dir,
                     pathway_targets_dir=pathway_targets_dir,
                     pathway_names=pathway_names,
+                    residualize_depth=getattr(args, "residualize_depth", False),
+                    normalize_features=getattr(args, "normalize_features", False),
                 )
                 if train_ids
                 else None
@@ -251,6 +386,8 @@ def setup_dataloaders(args, train_ids, val_ids):
                     feature_dir=feat_dir,
                     pathway_targets_dir=pathway_targets_dir,
                     pathway_names=pathway_names,
+                    residualize_depth=getattr(args, "residualize_depth", False),
+                    normalize_features=getattr(args, "normalize_features", False),
                 )
                 if val_ids
                 else None

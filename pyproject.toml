@@ -58,6 +58,11 @@ filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore:FigureCanvasAgg is non-interactive:UserWarning",
     "ignore:os.fork:RuntimeWarning",
+    # torch.compile perf hint on Ampere+. Deliberately not acted on: TF32 gives
+    # ~+23% on fp32 matmuls, but the hot paths (training, feature extraction)
+    # run under --use-amp, which is ~2.3x faster still. Enabling TF32 globally
+    # would trade precision for a speedup we do not benefit from.
+    "ignore:TensorFloat32 tensor cores:UserWarning",
     "ignore:torch.utils._pytree._register_pytree_node is deprecated:UserWarning",
 ]
 

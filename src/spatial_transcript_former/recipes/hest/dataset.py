@@ -449,6 +449,8 @@ class HEST_FeatureDataset(SpatialDataset):
         augment: bool = False,
         pathway_targets_dir: Optional[str] = None,
         pathway_names: Optional[List[str]] = None,
+        residualize_depth: bool = False,
+        normalize_features: bool = False,
     ):
         self.feature_path = feature_path
         self.h5ad_path = h5ad_path
@@ -459,6 +461,8 @@ class HEST_FeatureDataset(SpatialDataset):
         self.augment = augment
         self.pathway_targets_dir = pathway_targets_dir
         self.target_pathway_names = pathway_names
+        self.residualize_depth = residualize_depth
+        self.normalize_features = normalize_features
 
         self._load_data()
 
@@ -500,7 +504,34 @@ class HEST_FeatureDataset(SpatialDataset):
             if os.path.exists(h5_path):
                 from .compute_pathway_activities import load_pathway_activities
 
-                acts, pw_names, _, _ = load_pathway_activities(h5_path, list(barcodes))
+                acts, pw_names, target_valid, _ = load_pathway_activities(
+                    h5_path, list(barcodes)
+                )
+
+                # Spots absent from the pathway file were dropped by its QC and
+                # come back zero-filled. Training on them would treat a
+                # fabricated all-zero row as a real measurement -- and after
+                # residualisation an exact zero across all 50 pathways is a
+                # strong artificial signal, not a neutral one. Drop them.
+                n_dropped = int((mask_bool & ~target_valid).sum())
+                if n_dropped:
+                    frac = n_dropped / max(int(mask_bool.sum()), 1)
+                    if frac > 0.25:
+                        print(
+                            f"Warning: {os.path.basename(h5_path)} has no pathway "
+                            f"target for {frac:.0%} of feature spots; they are "
+                            "excluded (check the QC settings used for scoring)."
+                        )
+                    mask_bool = mask_bool & target_valid
+                    self.features = features[mask_bool]
+                    coords_valid = coords[mask_bool].numpy()
+                    grid_coords = torch.from_numpy(
+                        normalize_coordinates(coords_valid)
+                    ).float()
+                    center = grid_coords.mean(dim=0, keepdim=True)
+                    scale = grid_coords.std(dim=0).max().clamp(min=1.0)
+                    self.coords = (grid_coords - center) / scale
+                    self.kdtree = KDTree(self.coords.numpy())
 
                 if self.target_pathway_names is not None:
                     # Filter pathways to match the requested subset
@@ -526,6 +557,54 @@ class HEST_FeatureDataset(SpatialDataset):
                     self.pathway_activities = torch.tensor(
                         acts[mask_bool], dtype=torch.float32
                     )
+
+                if self.residualize_depth:
+                    self.pathway_activities = self._residualize_depth(
+                        self.pathway_activities, h5_path, list(barcodes), mask_bool
+                    )
+
+        if self.normalize_features:
+            # Per-slide feature standardisation: a cheap batch correction.
+            # Study identity is ~98.5% decodable from these features, so a model
+            # fitted on one study lands in the wrong region of embedding space on
+            # another. On a cross-study PCA+Ridge probe this lifts PCC from
+            # -0.026 to +0.046 (within-study reference +0.122); centring alone
+            # gives only +0.008, so the variance rescaling is what matters.
+            #
+            # Applied LAST: the QC-validity filter above rebuilds self.features,
+            # so normalising earlier would be silently discarded.
+            mu = self.features.mean(dim=0, keepdim=True)
+            sd = self.features.std(dim=0, keepdim=True)
+            self.features = (self.features - mu) / sd.clamp(min=1e-8)
+
+    def _residualize_depth(self, activities, h5_path, barcodes, mask_bool):
+        """Project measured sequencing depth out of the pathway targets.
+
+        The raw score correlates with library size at |r| ~ 0.93 (depth is
+        itself spatially autocorrelated), so without this the model spends
+        most of its capacity predicting depth from H&E. Regressing the
+        measured covariate out beats removing an unsupervised PC1: it zeroes
+        the confound exactly while preserving ~12 percentage points more
+        variance, and it lifts the split-half reliability ceiling from ~0.49
+        to ~0.67.
+
+        Applied per slide, which is the correct scope: the primary metric is
+        within-slide, and the raw targets were never comparable across slides
+        anyway (median depth varies ~83x between studies).
+        """
+        from spatial_transcript_former.attribution import regress_out_covariate
+        from .compute_pathway_activities import load_spot_depth
+
+        depth = load_spot_depth(h5_path, barcodes)[mask_bool]
+        if depth.size == 0 or not np.any(depth > 0):
+            print(
+                f"Warning: {os.path.basename(h5_path)} has no total_counts "
+                "(file predates format_version 3) - skipping depth "
+                "residualisation. Re-run stf-compute-pathways --overwrite."
+            )
+            return activities
+        residual, _ = regress_out_covariate(activities.numpy(), np.log1p(depth))
+        return torch.tensor(residual, dtype=torch.float32)
 
     def __len__(self):
         return 1 if self.whole_slide_mode else len(self.coords)
@@ -671,6 +750,8 @@ def get_hest_feature_dataloader(
     feature_dir: Optional[str] = None,
     pathway_targets_dir: Optional[str] = None,
     pathway_names: Optional[List[str]] = None,
+    residualize_depth: bool = False,
+    normalize_features: bool = False,
 ):
     """Build a DataLoader over pre-computed feature vectors for a list of HEST sample IDs.
 
@@ -732,6 +813,8 @@ def get_hest_feature_dataloader(
                 augment=augment,
                 pathway_targets_dir=pathway_targets_dir,
                 pathway_names=pathway_names,
+                residualize_depth=residualize_depth,
+                normalize_features=normalize_features,
             )
             datasets.append(ds)
             if len(datasets) % 50 == 0:

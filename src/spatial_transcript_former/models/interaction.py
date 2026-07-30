@@ -68,6 +68,7 @@ class SpatialTranscriptFormer(nn.Module):
         dropout=0.1,
         use_spatial_pe=True,
         interactions=None,
+        output_activation="softplus",
     ):
         """Initializes the SpatialTranscriptFormer.
 
@@ -83,6 +84,13 @@ class SpatialTranscriptFormer(nn.Module):
             interactions (list[str], optional): Which attention interactions to
                 enable.  Valid keys are ``p2p``, ``p2h``, ``h2p``, ``h2h``.
                 Defaults to all four (full self-attention).
+            output_activation (str): ``"softplus"`` (default) or ``"linear"``.
+                Softplus matches the raw targets, which are means of log1p
+                CP10k expression and therefore non-negative. It is **wrong for
+                depth-residualised targets**, which are zero-centred with ~50%
+                negative values: a strictly-positive head cannot represent them,
+                so the model collapses to a constant. Use ``"linear"`` whenever
+                targets have been residualised.
         """
         super().__init__()
 
@@ -106,6 +114,12 @@ class SpatialTranscriptFormer(nn.Module):
                 f"Layer 2 lets patches read contextualized pathways."
             )
 
+        if output_activation not in ("softplus", "linear"):
+            raise ValueError(
+                f"output_activation must be 'softplus' or 'linear', "
+                f"got {output_activation!r}"
+            )
+        self.output_activation = output_activation
         self.num_pathways = num_pathways
         self.use_spatial_pe = use_spatial_pe
 
@@ -199,6 +213,17 @@ class SpatialTranscriptFormer(nn.Module):
         from spatial_transcript_former.checkpoint import load_pretrained
 
         return load_pretrained(checkpoint_dir, device=device, **kwargs)
+
+    def _activate(self, raw_scores):
+        """Map raw patch.pathway affinity to a pathway score.
+
+        Softplus enforces non-negativity, which matches the raw targets but
+        makes signed (residualised) targets unrepresentable.
+        """
+        shifted = self.scale * raw_scores + self.bias
+        if self.output_activation == "softplus":
+            return F.softplus(shifted)
+        return shifted
 
     def forward(
         self,
@@ -319,7 +344,7 @@ class SpatialTranscriptFormer(nn.Module):
             ) / (
                 d_dim**0.5
             )  # (B, S, P)
-            pathway_scores = F.softplus(self.scale * raw_scores + self.bias)
+            pathway_scores = self._activate(raw_scores)
         else:
             # Global prediction: pool patches first (using mask if provided), then compute scores
             if mask is not None:
@@ -337,7 +362,7 @@ class SpatialTranscriptFormer(nn.Module):
             ) / (
                 d_dim**0.5
             )  # (B, 1, P)
-            pathway_scores = F.softplus(self.scale * raw_scores + self.bias)
+            pathway_scores = self._activate(raw_scores)
             pathway_scores = pathway_scores.squeeze(1)  # (B, P)
 
         results = [pathway_scores]
