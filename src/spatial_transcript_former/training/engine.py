@@ -130,7 +130,15 @@ def train_one_epoch(
                         pathway_mask=pathway_mask,
                     )
                 else:
-                    preds = model(feats)
+                    # Bag-level supervision. Spatial models still need their
+                    # coords/mask here — without them a spatial model built
+                    # with use_spatial_pe=True raises, so weak supervision
+                    # would be unusable for STF. return_dense stays False so
+                    # the output is the pooled (B, P) bag prediction.
+                    if isinstance(model, SPATIAL_MODELS):
+                        preds = model(feats, mask=mask, rel_coords=coords)
+                    else:
+                        preds = model(feats)
                     bag_target = _compute_bag_target(pathway_targets, mask)
                     loss = _criterion_call(
                         criterion,
@@ -267,6 +275,7 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
             with torch.amp.autocast("cuda", enabled=use_amp):
                 attn = None
 
+                loss_mask = mask
                 if whole_slide:
                     if not getattr(model, "weak_supervision", False):
                         if isinstance(model, SPATIAL_MODELS):
@@ -280,8 +289,15 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                             outputs = model(feats)
                         targets = pathway_targets
                     else:
-                        # MIL models: extract attention if supported
-                        if (
+                        # MIL models: extract attention if supported. Spatial
+                        # models (STF) also expose return_attention, but as a
+                        # list[(B, H, T, T)] per-layer/per-pathway tensor —
+                        # not the single (B, N) shared map this diagnostic
+                        # expects — so they're routed to the plain call and
+                        # keep their coords/mask (mirrors train_one_epoch).
+                        if isinstance(model, SPATIAL_MODELS):
+                            outputs = model(feats, mask=mask, rel_coords=coords)
+                        elif (
                             hasattr(model, "forward")
                             and "return_attention" in model.forward.__code__.co_varnames
                         ):
@@ -289,6 +305,11 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                         else:
                             outputs = model(feats)
                         targets = _compute_bag_target(pathway_targets, mask)
+                        # outputs/targets are already bag-level (B, G) — the
+                        # per-spot padding mask no longer applies (matches
+                        # train_one_epoch's weak-supervision branch, which
+                        # likewise omits mask here).
+                        loss_mask = None
                 else:
                     targets = pathway_targets
                     if isinstance(model, SPATIAL_MODELS):
@@ -301,7 +322,7 @@ def validate(model, loader, criterion, device, whole_slide=False, use_amp=False)
                     criterion,
                     outputs,
                     targets,
-                    mask=mask,
+                    mask=loss_mask,
                     pathway_mask=pathway_mask,
                 )
 
