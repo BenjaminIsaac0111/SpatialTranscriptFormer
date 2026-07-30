@@ -1,12 +1,13 @@
 import os
 import argparse
+import fnmatch
 import json
 import logging
 import zipfile
 from typing import List, Optional
 
 import pandas as pd
-from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from tqdm import tqdm
 
 # Set up logging
@@ -105,6 +106,48 @@ def filter_samples(
     return filtered_df["id"].tolist()
 
 
+def _resolve_and_fetch(repo_id, patterns, local_dir, repo_type="dataset"):
+    """Resolve ``patterns`` against the repo, then fetch each file individually.
+
+    Deliberately avoids ``snapshot_download`` here. HEST is a large repo, so
+    ``huggingface_hub`` skips materialising the file list and hands a *generator*
+    to ``tqdm.thread_map``; newer tqdm versions compute the total via
+    ``_min_map_len``, which discards inputs without a length hint and then calls
+    ``min()`` on an empty sequence:
+
+        ValueError: min() arg is an empty sequence
+
+    Both packages are unpinned, so that combination appears on fresh installs
+    (it broke CI while working locally on tqdm 4.68.3). Resolving the file list
+    ourselves sidesteps the interaction entirely and lets us fail with a useful
+    message when the patterns match nothing, rather than a crash inside tqdm.
+
+    Returns the list of files fetched.
+    """
+    api = HfApi()
+    all_files = api.list_repo_files(repo_id=repo_id, repo_type=repo_type)
+    matched = sorted(
+        f for f in all_files if any(fnmatch.fnmatch(f, pat) for pat in patterns)
+    )
+    if not matched:
+        raise FileNotFoundError(
+            f"No files in {repo_id} matched any of {len(patterns)} patterns "
+            f"(e.g. {patterns[:3]}). Check the sample IDs exist in the metadata."
+        )
+
+    logger.info(f"Resolved {len(matched)} files to download.")
+    for i, filename in enumerate(matched, 1):
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            repo_type=repo_type,
+            local_dir=local_dir,
+        )
+        if i % 25 == 0 or i == len(matched):
+            logger.info(f"  fetched {i}/{len(matched)}")
+    return matched
+
+
 def download_hest_subset(
     sample_ids: List[str],
     local_dir: str,
@@ -138,12 +181,7 @@ def download_hest_subset(
         f"Starting download for {len(sample_ids)} samples (searching for ST data, WSIs, segmentation, etc.)..."
     )
     try:
-        snapshot_download(
-            repo_id=REPO_ID,
-            allow_patterns=patterns,
-            repo_type="dataset",
-            local_dir=local_dir,
-        )
+        _resolve_and_fetch(REPO_ID, patterns, local_dir)
         logger.info("Download completed successfully.")
     except Exception as e:
         if "401" in str(e) or "Unauthorized" in str(e):

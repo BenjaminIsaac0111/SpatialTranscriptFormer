@@ -34,7 +34,12 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
-        python scripts/download_hest.py --id TENX29 --skip-wsis --skip-patches --yes
+        # Explicit --data-dir: the default comes from config.yaml, which holds a
+        # machine-specific Windows path (A:\hest_data). On a Linux runner that is
+        # a legal *filename*, so it silently created a directory literally named
+        # "A:\hest_data". Use "hest_data" -- it is one of the fallbacks that
+        # get_hest_data_dir() searches, so the tests can find the data too.
+        python scripts/download_hest.py --id TENX29 --skip-wsis --skip-patches --yes           --data-dir hest_data
 
     - name: Test with pytest
       env:

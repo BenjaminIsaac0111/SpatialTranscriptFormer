@@ -39,7 +39,33 @@ class ProjectConfig:
             )
             cls._config = {}
 
+        # Overlay an untracked local override, if present. Keeps
+        # machine-specific absolute paths (e.g. a Windows data drive) out of the
+        # tracked config, where they become every contributor's -- and CI's --
+        # default. On Linux a path like "A:\hest_data" is a legal *filename*,
+        # so it fails silently by creating a strangely-named directory rather
+        # than erroring.
+        local_path = os.path.join(os.path.dirname(config_path), "config.local.yaml")
+        if os.path.exists(local_path):
+            try:
+                with open(local_path, "r") as f:
+                    overrides = yaml.safe_load(f) or {}
+                cls._config = cls._deep_merge(cls._config, overrides)
+            except yaml.YAMLError as e:
+                print(f"Warning: Failed to parse config.local.yaml: {e}")
+
         cls._loaded = True
+
+    @staticmethod
+    def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively merge ``override`` into ``base`` (override wins)."""
+        out = dict(base)
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k] = ProjectConfig._deep_merge(out[k], v)
+            else:
+                out[k] = v
+        return out
 
     @classmethod
     def get(cls, key: str, default: Any = None) -> Any:

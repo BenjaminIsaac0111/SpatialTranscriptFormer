@@ -236,3 +236,7 @@ global_genes_stats.csv
 HEST_v1_3_0.csv
 global_genes.json
 test_out.txt
+
+# machine-local config override (see config.yaml)
+config.local.yaml
+.obsidian/

@@ -205,22 +205,23 @@ class TestDownload(unittest.TestCase):
         samples = filter_samples(self.metadata_path, organ="Brain")
         self.assertEqual(samples, [])
 
-    @patch("spatial_transcript_former.recipes.hest.download.snapshot_download")
-    def test_download_hest_subset_calls(self, mock_snapshot):
-        # Test that snapshot_download is called with correct patterns
+    @patch("spatial_transcript_former.recipes.hest.download._resolve_and_fetch")
+    def test_download_hest_subset_calls(self, mock_fetch):
+        # Downloads go through _resolve_and_fetch, not snapshot_download: HEST is
+        # a large repo, so huggingface_hub hands a generator to tqdm.thread_map,
+        # which newer tqdm versions cannot compute a total for.
         sample_ids = ["S1", "S2"]
         additional_patterns = ["extra_file.txt"]
 
         download_hest_subset(sample_ids, self.test_dir, additional_patterns)
 
-        mock_snapshot.assert_called_once()
-        call_args = mock_snapshot.call_args
-        _, kwargs = call_args
+        mock_fetch.assert_called_once()
+        args, kwargs = mock_fetch.call_args
 
-        self.assertEqual(kwargs["repo_id"], "MahmoodLab/hest")
-        self.assertEqual(kwargs["local_dir"], self.test_dir)
+        self.assertEqual(args[0], "MahmoodLab/hest")
+        self.assertEqual(args[2], self.test_dir)
 
-        patterns = kwargs["allow_patterns"]
+        patterns = args[1]
         # Check standard recursive patterns
         self.assertIn("**/S1.*", patterns)
         self.assertIn("**/S1_*", patterns)
@@ -229,7 +230,7 @@ class TestDownload(unittest.TestCase):
         # Check additional patterns
         self.assertIn("extra_file.txt", patterns)
 
-    @patch("spatial_transcript_former.recipes.hest.download.snapshot_download")
+    @patch("spatial_transcript_former.recipes.hest.download._resolve_and_fetch")
     @patch("zipfile.ZipFile")
     @patch("os.listdir")
     @patch("os.path.exists")
@@ -409,3 +410,39 @@ def test_download_all(
 
     args, _ = mock_subset.call_args
     assert len(args[0]) == len(mock_metadata)
+
+
+class TestResolveAndFetch(unittest.TestCase):
+    """Guards on the download path that replaced snapshot_download."""
+
+    @patch("spatial_transcript_former.recipes.hest.download.hf_hub_download")
+    @patch("spatial_transcript_former.recipes.hest.download.HfApi")
+    def test_fetches_only_matching_files(self, mock_api, mock_dl):
+        from spatial_transcript_former.recipes.hest.download import _resolve_and_fetch
+
+        mock_api.return_value.list_repo_files.return_value = [
+            "st/S1.h5ad",
+            "patches/S1.h5",
+            "st/OTHER.h5ad",
+            "README.md",
+        ]
+        got = _resolve_and_fetch("repo", ["**/S1.*", "README.md"], "/tmp/x")
+
+        self.assertEqual(got, ["README.md", "patches/S1.h5", "st/S1.h5ad"])
+        self.assertEqual(mock_dl.call_count, 3)
+
+    @patch("spatial_transcript_former.recipes.hest.download.hf_hub_download")
+    @patch("spatial_transcript_former.recipes.hest.download.HfApi")
+    def test_empty_match_raises_clearly(self, mock_api, mock_dl):
+        """A pattern matching nothing must say so, not crash inside tqdm.
+
+        The previous snapshot_download path surfaced this as
+        'ValueError: min() arg is an empty sequence' from tqdm internals.
+        """
+        from spatial_transcript_former.recipes.hest.download import _resolve_and_fetch
+
+        mock_api.return_value.list_repo_files.return_value = ["st/OTHER.h5ad"]
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _resolve_and_fetch("repo", ["**/MISSING.*"], "/tmp/x")
+        self.assertIn("matched", str(ctx.exception))
+        mock_dl.assert_not_called()

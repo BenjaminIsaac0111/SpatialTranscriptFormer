@@ -20,10 +20,14 @@ dependencies = [
     "torchvision",
     "numpy",
     "scikit-learn",
-    "tqdm",
+    # Capped at the next major. NOTE: this would NOT have caught the CI break,
+    # which was a minor-version tqdm/huggingface-hub interaction inside
+    # snapshot_download. The real protection is _resolve_and_fetch() in
+    # recipes/hest/download.py, which no longer relies on that code path.
+    "tqdm>=4.60,<5",
     "datasets",
     "pyarrow",
-    "huggingface-hub",
+    "huggingface-hub>=0.20,<2",
     "matplotlib",
     "seaborn",
     "nystrom-attention",
